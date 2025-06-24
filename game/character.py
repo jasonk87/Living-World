@@ -271,7 +271,9 @@ class Character:
                 self.add_memory(f"Generated WO for {qty_to_order} {item_name}."); print(f"{self.name} (MC) generated WO for {qty_to_order} {item_name}(s).")
                 item_processed_this_tick = True; self._mc_item_check_idx = (current_idx + 1) % len(target_item_names); break
         if not item_processed_this_tick: self.current_goal = "Idle"; self._mc_item_check_idx = 0
-    def _execute_manage_work_orders(self, world: 'World'):
+
+    # Renamed from _execute_manage_work_orders to _execute_manage_subordinates
+    def _execute_manage_subordinates(self, world: 'World'):
         if not (self.job == "Manager" or self.rank in ["Noble Lord", "Baron"]) or not self.subordinates_names:
             self.current_goal = self.job_default_goal(); return # Not a manager or no one to manage
 
@@ -305,27 +307,64 @@ class Character:
                 self.current_goal = "Idle" # Re-evaluate next tick; prevents multiple manager actions in one tick
                 return
 
-            # 2. Warning/Firing Logic (if review not just conducted)
-            if subordinate.performance_rating == "Poor" and subordinate.warning_count < 3 and subordinate.performance_rating != "Fired":
-                # Consider issuing a warning if performance is poor and not max warnings
-                # For simplicity, let's assume a poor review already counts as a strong indicator.
-                # A more nuanced system could have specific triggers for warnings.
-                if random.random() < 0.3: # Chance to issue a warning if poor and not maxed
-                    reason = "Consistently poor performance noted."
+            # 2. Warning/Firing Logic (if review not just conducted or if performance dictates immediate action)
+            relationship_to_sub = self.get_relationship_score(subordinate.name)
+
+            # --- Warning Logic ---
+            # Condition for considering a warning: performance is "Poor" or "Needs Improvement" with existing warnings.
+            should_consider_warning = (subordinate.performance_rating == "Poor" and subordinate.warning_count < config.FIRING_WARNING_THRESHOLD) or \
+                                      (subordinate.performance_rating == "Needs Improvement" and subordinate.warning_count > 0)
+
+            if should_consider_warning and subordinate.performance_rating != "Fired":
+                warning_chance = 0.3 # Base chance
+                reason_for_warning = "Ongoing performance issues."
+                if subordinate.performance_rating == "Poor": reason_for_warning = "Performance rated Poor."
+                elif subordinate.performance_rating == "Needs Improvement": reason_for_warning = "Performance Needs Improvement, with prior warnings."
+
+                if "Strict" in self.traits or self.personality == "Demanding": warning_chance += 0.2
+                if "Forgiving" in self.traits or self.personality == "Kind": warning_chance -= 0.2
+                if relationship_to_sub < -30: warning_chance += 0.15 # Bad relationship increases chance
+                if relationship_to_sub > 30: warning_chance -= 0.15  # Good relationship decreases chance
+                warning_chance = max(0.05, min(0.95, warning_chance)) # Clamp chance
+
+                if random.random() < warning_chance:
+                    self.add_memory(f"Considering issuing warning to {subordinate.name} (Perf: {subordinate.performance_rating}, Warns: {subordinate.warning_count}, Rel: {relationship_to_sub}, Chance: {warning_chance:.2f}).")
                     if subordinate.job == "Bookkeeper" and any(world.ledger.get_stockpile_last_update_day(sp.name) is None or (world.game_time.current_day - world.ledger.get_stockpile_last_update_day(sp.name) > config.STALE_THRESHOLD_DAYS + 2) for sp in world.stockpiles):
-                        reason = "Ledger maintenance is unsatisfactory."
-                    self.issue_warning(subordinate.name, world, reason)
-                    self.current_goal = "Idle"
+                        reason_for_warning = "Ledger maintenance remains unsatisfactory."
+
+                    self.issue_warning(subordinate.name, world, reason_for_warning)
+                    # Issuing a warning affects relationships
+                    self.modify_relationship(subordinate.name, -10, world, reason=f"Issued warning to them for {reason_for_warning}")
+                    subordinate.modify_relationship(self.name, -15, world, reason=f"Received warning from them about {reason_for_warning}")
+                    self.current_goal = "Idle" # Action taken
                     return
 
-            if subordinate.performance_rating == "Poor" and subordinate.warning_count >= config.FIRING_WARNING_THRESHOLD and subordinate.performance_rating != "Fired":
-                if random.random() < 0.5: # High chance to fire if performance is poor and max warnings
-                    self.add_memory(f"Considering firing {subordinate.name} due to poor performance and {subordinate.warning_count} warnings (Threshold: {config.FIRING_WARNING_THRESHOLD}).")
+            # --- Firing Logic ---
+            # Condition for considering firing: performance is "Poor" AND at/above warning threshold.
+            if subordinate.performance_rating == "Poor" and \
+               subordinate.warning_count >= config.FIRING_WARNING_THRESHOLD and \
+               subordinate.performance_rating != "Fired":
+
+                firing_chance = 0.5 # Base chance
+                if "Ruthless" in self.traits or self.personality == "Stern": firing_chance += 0.25
+                if "Compassionate" in self.traits or self.personality == "Kind": firing_chance -= 0.25
+                if relationship_to_sub < -50: firing_chance += 0.20 # Very bad relationship
+                elif relationship_to_sub > 50: firing_chance -= 0.30 # Very good relationship might save them
+
+                firing_chance = max(0.01, min(0.99, firing_chance)) # Clamp chance
+
+                self.add_memory(f"Considering firing {subordinate.name} (Perf: {subordinate.performance_rating}, Warns: {subordinate.warning_count}, Rel: {relationship_to_sub}, Chance: {firing_chance:.2f}).")
+                if random.random() < firing_chance:
                     self.fire_subordinate(subordinate.name, world)
-                    self.current_goal = "Idle"
+                    # Firing drastically affects relationship (mostly for the record now)
+                    self.modify_relationship(subordinate.name, -100, world, reason="Fired them.")
+                    # No need for subordinate to update relationship, they are 'gone' in terms of this dynamic with this supervisor
+                    self.current_goal = "Idle" # Action taken
                     return
 
         # If no specific management action taken for any subordinate, manager might do other things or idle.
+        # Or, if they just managed work orders, they might still want to check subordinates in the same tick if logic allows.
+        # For now, one significant management action (review, warn, fire) or WO approval per "Manage Subordinates" cycle.
         # For now, just idle and wait for next cycle.
         self.current_goal = "Idle"
 
@@ -547,43 +586,90 @@ class Character:
         if not world.game_time: # Should always be set, but good practice
             self.add_memory(f"Cannot conduct review for {subordinate_char_name}, game time not available."); return
 
-        # Initial simple review logic
-        new_rating = "Needs Improvement" # Default if no specific positive criteria met
+        # --- Base Performance Assessment ---
+        objective_rating = "Needs Improvement" # Default if no specific positive criteria met
         review_notes = []
 
         if subordinate.job == "Bookkeeper":
             is_diligent = True
-            if not world.stockpiles: review_notes.append("No stockpiles to check for Bookkeeper.")
-            for sp in world.stockpiles:
-                last_update = world.ledger.get_stockpile_last_update_day(sp.name)
-                # More lenient for review than strict manager check for WO approval
-                if last_update is None or (world.game_time.current_day - last_update > config.STALE_THRESHOLD_DAYS + 2) :
-                    is_diligent = False
-                    review_notes.append(f"Ledger for {sp.name} is stale (last update: Day {last_update}).")
-                    break
-            if is_diligent and world.stockpiles: new_rating = "Good"; review_notes.append("Ledger appears up-to-date.")
-            elif not world.stockpiles and is_diligent : new_rating = "Not Evaluated"; review_notes.append("Bookkeeper has no stockpiles to manage yet.")
-
+            if not world.stockpiles: review_notes.append("No stockpiles for Bookkeeper to check.")
+            else:
+                for sp in world.stockpiles:
+                    last_update = world.ledger.get_stockpile_last_update_day(sp.name)
+                    if last_update is None or (world.game_time.current_day - last_update > config.STALE_THRESHOLD_DAYS + 2):
+                        is_diligent = False; review_notes.append(f"Ledger for {sp.name} stale (Day {last_update})."); break
+            if is_diligent and world.stockpiles: objective_rating = "Good"; review_notes.append("Ledger up-to-date.")
+            elif not world.stockpiles and is_diligent: objective_rating = "Not Evaluated"; review_notes.append("No stockpiles to manage.")
 
         elif subordinate.job == "Woodcutter":
-            # Check if they have wood, or deposited recently (harder to check 'recently deposited' without more logs)
-            if subordinate.inventory.get("Wood", 0) > 0:
-                new_rating = "Good"; review_notes.append("Currently carrying Wood.")
-            # TODO: Could check if they have a history of depositing wood if ledger/event log was more detailed
+            if subordinate.inventory.get("Wood", 0) >= 3: # Arbitrary threshold for "Good"
+                objective_rating = "Good"; review_notes.append("Carrying a good amount of Wood.")
+            elif subordinate.inventory.get("Wood", 0) > 0:
+                objective_rating = "Satisfactory"; review_notes.append("Carrying some Wood.")
             else:
-                review_notes.append("Not actively carrying Wood. Further checks needed for deposit history (not implemented).")
+                review_notes.append("Not carrying Wood. Performance based on recent deposits not yet tracked.")
+        # Add more job-specific checks here for objective_rating: "Excellent", "Good", "Satisfactory", "Needs Improvement", "Poor"
 
-        # Add more job-specific checks here later
+        # --- Supervisor's Subjective Modifiers ---
+        final_rating = objective_rating
+        rating_modifier_score = 0 # -2 to +2 scale for simplicity
 
-        subordinate.performance_rating = new_rating
+        # Personality/Traits based modifier
+        if "Strict" in self.traits or self.personality == "Demanding": rating_modifier_score -= 1
+        if "Kind" in self.traits or self.personality == "Forgiving": rating_modifier_score += 1
+        if "Lazy" in self.traits and random.random() < 0.3: rating_modifier_score +=1 # Lazy supervisor might inflate rating
+
+        # Relationship based modifier
+        relationship_to_sub = self.get_relationship_score(subordinate.name)
+        if relationship_to_sub > 50: rating_modifier_score += 1
+        elif relationship_to_sub < -50: rating_modifier_score -= 1
+
+        # Apply modifier score to objective rating
+        # Define rating scale: Poor (-2), Needs Improvement (-1), Satisfactory (0), Good (1), Excellent (2)
+        rating_scale = {"Poor": -2, "Needs Improvement": -1, "Satisfactory": 0, "Good": 1, "Excellent": 2, "Not Evaluated": 0}
+        objective_score = rating_scale.get(objective_rating, 0)
+
+        final_score = max(-2, min(2, objective_score + rating_modifier_score)) # Clamp final score
+
+        for r_name, r_val in rating_scale.items(): # Convert score back to string rating
+            if r_val == final_score: final_rating = r_name; break
+        if objective_rating == "Not Evaluated": final_rating = "Not Evaluated" # Preserve this specific state
+
+        if final_rating != objective_rating:
+            review_notes.append(f"Supervisor's discretion ({self.personality}, Rel: {relationship_to_sub}) adjusted rating from {objective_rating} to {final_rating}.")
+
+        # --- Update Subordinate & Log ---
+        subordinate.performance_rating = final_rating
         subordinate.last_performance_review_day = world.game_time.current_day
-        subordinate.warning_count = 0 # Reset warnings on a new review, unless performance is poor from review itself.
-        if new_rating == "Poor": subordinate.warning_count = 1 # A poor review itself counts as a warning
 
-        review_summary = f"Performance review for {subordinate.name}: {new_rating}. Notes: {'; '.join(review_notes) or 'General review.'}"
+        relationship_change_value = 0
+        if final_rating == "Excellent": relationship_change_value = 10
+        elif final_rating == "Good": relationship_change_value = 5
+        elif final_rating == "Satisfactory": relationship_change_value = 1
+        elif final_rating == "Needs Improvement": relationship_change_value = -5
+        elif final_rating == "Poor": relationship_change_value = -10
+
+        if relationship_change_value != 0:
+            # Supervisor's feeling towards subordinate might change less, or be more dispositional
+            # For now, let's make it a smaller, more tempered change for the supervisor
+            self.modify_relationship(subordinate.name, relationship_change_value // 2, world, reason=f"Performance review outcome: {final_rating}")
+            # Subordinate's feeling towards supervisor
+            subordinate.modify_relationship(self.name, relationship_change_value, world, reason=f"Performance review outcome from {self.name}: {final_rating}")
+
+        # Reset warnings only if performance is not "Poor" or "Needs Improvement" as a result of this review.
+        if final_rating not in ["Poor", "Needs Improvement"]:
+             if subordinate.warning_count > 0:
+                review_notes.append(f"Past warnings ({subordinate.warning_count}) cleared due to improved review.")
+                subordinate.warning_count = 0
+        elif final_rating == "Poor" and subordinate.warning_count == 0 : # A Poor review itself acts as a first warning
+            subordinate.warning_count = 1
+            review_notes.append("Performance rated Poor, counts as a warning.")
+
+
+        review_summary = f"Performance review for {subordinate.name}: {final_rating}. Notes: {'; '.join(review_notes) or 'General review.'}"
         self.add_memory(review_summary)
-        print(f"{self.name} conducted performance review for {subordinate.name}. Result: {new_rating}.")
-        subordinate.add_memory(f"Had performance review with {self.name}. Rated: {new_rating}.")
+        print(f"{self.name} ({self.personality}) reviewed {subordinate.name}. Objective: {objective_rating}, Final: {final_rating}. Rel: {relationship_to_sub}.")
+        subordinate.add_memory(f"Had performance review with {self.name} ({self.personality}). Rated: {final_rating}. My rel with them: {subordinate.get_relationship_score(self.name)}")
 
     def issue_warning(self, subordinate_char_name: str, world: 'World', reason_message: str):
         if self.name == subordinate_char_name:
@@ -666,3 +752,31 @@ class Character:
         # print(f"{subordinate.name} has been removed from the world.")
         # However, this could cause issues if other parts of the code expect the character to exist.
         # Keeping them as "Unemployed" is safer for now.
+
+    def get_relationship_score(self, target_char_name: str) -> int:
+        """Returns the relationship score towards the target character, default 0."""
+        return self.relationships.get(target_char_name, 0)
+
+    def modify_relationship(self, target_char_name: str, value_change: int, world: 'World', reason: Optional[str] = None):
+        """Modifies the relationship score with the target character."""
+        if self.name == target_char_name: return # Cannot have a relationship with oneself
+
+        current_score = self.relationships.get(target_char_name, 0)
+        new_score = current_score + value_change
+
+        # Clamp score between -100 and 100
+        new_score = max(-100, min(100, new_score))
+
+        self.relationships[target_char_name] = new_score
+
+        if reason:
+            self.add_memory(f"My relationship with {target_char_name} changed by {value_change} to {new_score}. Reason: {reason}")
+            # print(f"DEBUG: {self.name}'s relationship with {target_char_name} changed by {value_change} to {new_score}. Reason: {reason}")
+
+        # Optionally, have the target character reciprocate or have their own view change (more complex social model)
+        # For now, relationships are one-way perspectives.
+        # However, the event CAUSER (e.g. supervisor doing review) might trigger a separate call
+        # for the TARGET's relationship change towards the CAUSER.
+
+        # Example: If a supervisor reviews poorly, supervisor's relationship to subordinate might not change much,
+        # but subordinate's relationship to supervisor likely worsens. This would be handled by the calling function.

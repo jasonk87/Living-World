@@ -48,7 +48,10 @@ class TestManagement(unittest.TestCase):
         self.assertEqual(self.subordinate.performance_rating, "Good")
         self.assertEqual(self.subordinate.last_performance_review_day, self.time.current_day)
         self.assertIn(f"Performance review for {self.subordinate.name}: Good.", self.supervisor.memory[-1])
-        self.assertIn(f"Had performance review with {self.supervisor.name}. Rated: Good.", self.subordinate.memory[-1])
+        # Updated expected memory log for subordinate
+        expected_sub_memory = f"Had performance review with {self.supervisor.name} ({self.supervisor.personality}). Rated: Good. My rel with them: {self.subordinate.get_relationship_score(self.supervisor.name)}"
+        self.assertIn(expected_sub_memory, self.subordinate.memory[-1])
+
 
     def test_performance_review_bookkeeper_stale_ledger(self):
         # Make ledger stale
@@ -58,7 +61,9 @@ class TestManagement(unittest.TestCase):
 
         self.assertEqual(self.subordinate.performance_rating, "Needs Improvement")
         self.assertEqual(self.subordinate.last_performance_review_day, self.time.current_day)
-        self.assertIn(f"Ledger for {self.stockpile1.name} is stale", self.supervisor.memory[-1])
+        # Updated to check for substring in a more complete log
+        self.assertIn(f"Ledger for {self.stockpile1.name} stale", self.supervisor.memory[-1])
+
 
     def test_performance_review_resets_warnings_if_not_poor(self):
         self.subordinate.warning_count = 2
@@ -171,6 +176,113 @@ class TestManagement(unittest.TestCase):
         if original_wo_in_world: # Should always be true if setup is correct
             self.assertEqual(original_wo_in_world.status, "Pending")
             self.assertIsNone(original_wo_in_world.assigned_to)
+
+    # --- Phase 2: Personality-Driven AI Tests ---
+
+    def test_modify_relationship(self):
+        self.supervisor.modify_relationship(self.subordinate.name, 20, self.world, reason="Good deed")
+        self.assertEqual(self.supervisor.get_relationship_score(self.subordinate.name), 20)
+        self.assertIn(f"My relationship with {self.subordinate.name} changed by 20 to 20. Reason: Good deed", self.supervisor.memory[-1])
+
+        self.supervisor.modify_relationship(self.subordinate.name, -30, self.world, reason="Bad deed")
+        self.assertEqual(self.supervisor.get_relationship_score(self.subordinate.name), -10) # 20 - 30 = -10
+
+        # Test clamping
+        self.supervisor.modify_relationship(self.subordinate.name, 200, self.world) # Should clamp to 100 from -10
+        self.assertEqual(self.supervisor.get_relationship_score(self.subordinate.name), 100)
+
+        self.supervisor.modify_relationship(self.subordinate.name, -300, self.world) # Should clamp to -100 from 100
+        self.assertEqual(self.supervisor.get_relationship_score(self.subordinate.name), -100)
+
+    def test_review_leniency_kind_supervisor_good_relationship(self):
+        self.supervisor.personality = "Forgiving"
+        self.supervisor.traits = ["Kind"]
+        self.supervisor.modify_relationship(self.subordinate.name, 60, self.world, "Likes subordinate") # Positive relationship
+
+        # Subordinate does poorly (stale ledger for bookkeeper)
+        self.world.ledger.update_stockpile_record(self.stockpile1.name, {}, self.time.current_day - (config.STALE_THRESHOLD_DAYS + 3))
+
+        self.supervisor.conduct_performance_review(self.subordinate.name, self.world)
+        # Objective: Needs Improvement. Kind (+1), Good Rel (+1) => Total +2. Needs Improvement (-1) + 2 = Good (1)
+        self.assertEqual(self.subordinate.performance_rating, "Good")
+        self.assertIn("Supervisor's discretion (Forgiving, Rel: 60) adjusted rating from Needs Improvement to Good", self.supervisor.memory[-1])
+        self.assertTrue(self.supervisor.get_relationship_score(self.subordinate.name) > 60) # Should improve slightly
+        self.assertTrue(self.subordinate.get_relationship_score(self.supervisor.name) > 0) # Subordinate feels better too
+
+    def test_review_harshness_strict_supervisor_bad_relationship(self):
+        self.supervisor.personality = "Demanding"
+        self.supervisor.traits = ["Strict"]
+        self.supervisor.modify_relationship(self.subordinate.name, -60, self.world, "Dislikes subordinate") # Negative relationship
+
+        # Subordinate does okay (e.g. Satisfactory for a Woodcutter carrying some wood, but not much)
+        self.subordinate.job = "Woodcutter" # Change job for this test
+        self.subordinate.inventory["Wood"] = 1 # Objective "Satisfactory"
+
+        self.supervisor.conduct_performance_review(self.subordinate.name, self.world)
+        # Objective: Satisfactory (0). Strict (-1), Bad Rel (-1) => Total -2. Satisfactory (0) - 2 = Poor (-2)
+        self.assertEqual(self.subordinate.performance_rating, "Poor")
+        self.assertIn("Supervisor's discretion (Demanding, Rel: -60) adjusted rating from Satisfactory to Poor", self.supervisor.memory[-1])
+        self.assertTrue(self.supervisor.get_relationship_score(self.subordinate.name) < -60) # Should worsen
+        self.assertTrue(self.subordinate.get_relationship_score(self.supervisor.name) < 0)
+
+    def test_warning_leniency_kind_supervisor_good_relationship(self):
+        self.supervisor.personality = "Kind"
+        self.supervisor.traits = ["Forgiving"]
+        self.supervisor.modify_relationship(self.subordinate.name, 70, self.world, "Very good relationship")
+        self.subordinate.performance_rating = "Poor" # Subordinate is objectively poor
+        self.subordinate.warning_count = 0
+
+        # In _execute_manage_subordinates, this would be a loop. Here we simulate one pass.
+        # Base warning chance for "Poor" is 0.3. Kind (-0.2), Good Rel (-0.15) => 0.3 - 0.2 - 0.15 = -0.05, clamped to 0.05
+        # So, very unlikely to warn. We'll run it a few times to check it doesn't warn easily.
+        warned = False
+        for _ in range(20): # Simulate multiple checks where random chance is involved
+            self.supervisor._execute_manage_subordinates(self.world) # Call the actual logic
+            if "Issued warning" in (self.supervisor.memory[-1] if self.supervisor.memory else ""):
+                warned = True; break
+            # Reset goal if supervisor idled after not warning, to allow re-evaluation in next loop iter
+            if self.supervisor.current_goal == "Idle": self.supervisor.current_goal = "Manage Subordinates"
+
+        self.assertFalse(warned, "Kind supervisor with good relationship warned too easily for 'Poor' performance.")
+        # Also check subordinate's warning count directly
+        sub_char = next(c for c in self.world.characters if c.name == self.subordinate.name)
+        self.assertEqual(sub_char.warning_count, 0)
+
+
+    def test_firing_harshness_ruthless_supervisor_bad_relationship(self):
+        self.supervisor.personality = "Demanding" # For review harshness
+        self.supervisor.traits = ["Strict", "Ruthless"] # Strict for review, Ruthless for firing
+        self.supervisor.modify_relationship(self.subordinate.name, -70, self.world, "Despises subordinate")
+
+        # Subordinate is a Bookkeeper (default from setUp)
+        # Make ledger stale so objective performance is "Needs Improvement", which becomes "Poor" after harsh review
+        self.world.ledger.update_stockpile_record(self.stockpile1.name, {}, self.time.current_day - (config.STALE_THRESHOLD_DAYS + 3))
+
+        # Set warning count to threshold. Performance rating will be set by the first review.
+        self.subordinate.warning_count = config.FIRING_WARNING_THRESHOLD
+        # self.subordinate.performance_rating = "Poor" # This will be determined by the first review.
+
+        # Firing chance calculation after first review makes subordinate "Poor":
+        # Base firing chance 0.5.
+        # "Ruthless" in traits or personality=="Stern" (personality is "Demanding", so no +0.25 from this part of OR)
+        # "Ruthless" in traits: Yes -> +0.25. Current chance = 0.75
+        # Relationship -70 (< -50): Yes -> +0.20. Current chance = 0.95
+        # Very likely to fire.
+        fired = False
+        # Increased iterations for higher probability of passing the random check
+        for _ in range(50):
+            self.supervisor._execute_manage_subordinates(self.world)
+            if self.subordinate.name not in self.supervisor.subordinates_names: # Fired
+                fired = True; break
+            if self.supervisor.current_goal == "Idle": self.supervisor.current_goal = "Manage Subordinates"
+            # If subordinate was somehow removed from world characters (not current fire logic)
+            if not any(c.name == self.subordinate.name for c in self.world.characters):
+                 fired = True; break # Assume fired if removed
+
+        self.assertTrue(fired, "Ruthless supervisor with bad relationship failed to fire under dire conditions.")
+        sub_char = next((c for c in self.world.characters if c.name == self.subordinate.name), None)
+        if sub_char: # If still in world (current logic keeps them as Unemployed)
+            self.assertEqual(sub_char.job, "Unemployed")
 
 
 if __name__ == '__main__':
