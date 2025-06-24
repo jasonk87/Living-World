@@ -7,3 +7,6 @@ LLM_HAS_THINKING_TAGS = False # Set to True if your model uses <thinking>...</th
 
 # Other game settings (can be added later)
 # e.g., TICKS_PER_DAY = 10
+STALE_THRESHOLD_DAYS = 2 # Days after which ledger data is considered stale for manager decisions
+MANAGEMENT_REVIEW_INTERVAL_DAYS = 5 # How often managers review subordinates
+FIRING_WARNING_THRESHOLD = 3 # Number of warnings before firing is likely

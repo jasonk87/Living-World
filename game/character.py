@@ -5,12 +5,13 @@ from .llm_integration import generate_dialogue
 from .stockpile import Stockpile
 from .work_order import WorkOrder
 from .data import BLUEPRINTS, JOB_TASK_DEFINITIONS
+from . import config # Import config
 
 if TYPE_CHECKING:
     from .world import World
     from .character import Character as OtherCharacter
 
-STALE_THRESHOLD_DAYS = 2
+# STALE_THRESHOLD_DAYS = 2 # Now in config
 ORDER_SPAM_PREVENTION_DAYS = 3
 
 class Character:
@@ -19,7 +20,8 @@ class Character:
                  needs: Optional[Dict[str, int]] = None,
                  current_goal: Optional[str] = None,
                  job: Optional[str] = None,
-                 max_inventory_items: int = 10):
+                 max_inventory_items: int = 10,
+                 rank: str = "Worker"): # Added rank parameter
         self.name = name; self.personality = personality; self.traits = traits; self.skills = skills
         self.x = x; self.y = y; self.inventory = {}; self.memory = [];
         self.needs = needs if needs else {}; self.current_goal = current_goal
@@ -30,6 +32,13 @@ class Character:
         self.managed_item_targets: Dict[str, int] = {}; self.order_cooldown: Dict[str, int] = {}
         self.active_work_order_id: Optional[str] = None; self.crafting_progress: int = 0
         self.materials_gathered_for_wo: bool = False; self.items_crafted_for_wo: bool = False
+
+        # New attributes for hierarchy and accountability
+        self.rank: str = rank  # Use parameter, default to "Worker"
+        self.assigned_tasks: List[Dict] = []  # Tasks assigned by a supervisor
+        self.performance_rating: str = "Not Evaluated"  # e.g., "Excellent", "Good", "Needs Improvement", "Poor"
+        self.last_performance_review_day: Optional[int] = None
+        self.warning_count: int = 0
         self.resource_to_fetch: Optional[Dict] = None; self.workshop_location: Optional[Tuple[int,int]] = None
         self.equipped_tool: Optional[Dict] = None
         self.task_work_progress: int = 0
@@ -45,13 +54,14 @@ class Character:
         self.crafting_progress = 0; self.hauling_info = None; self.workshop_location = None
 
     def __str__(self):
-        base_info = (f"Character(Name: {self.name}, Job: {self.job}, Pos: ({self.x},{self.y}), Goal: {self.current_goal}, WO: {self.active_work_order_id}, Load: {self.get_inventory_load()}/{self.max_inventory_items})")
+        base_info = (f"Character(Name: {self.name}, Rank: {self.rank}, Job: {self.job}, Pos: ({self.x},{self.y}), Goal: {self.current_goal}, WO: {self.active_work_order_id}, Load: {self.get_inventory_load()}/{self.max_inventory_items})")
         supervisor_info = f"  Supervisor: {self.supervisor_name if self.supervisor_name else 'None'}"
         subordinates_info = f"  Subordinates: {len(self.subordinates_names)}"
+        performance_info = f"  Performance: {self.performance_rating} (Warnings: {self.warning_count}, Last Review: Day {self.last_performance_review_day if self.last_performance_review_day is not None else 'N/A'})"
         equipped_tool_info = "None";
         if self.equipped_tool: equipped_tool_info = f"{self.equipped_tool['name']} ({self.equipped_tool['durability']}/{self.equipped_tool['max_durability']})"
         tool_info_str = f"  Equipped Tool: {equipped_tool_info}"
-        return f"{base_info}\n{supervisor_info}; {subordinates_info}\n{tool_info_str}"
+        return f"{base_info}\n{supervisor_info}; {subordinates_info}\n{performance_info}\n{tool_info_str}"
     def set_supervisor(self, s: Optional[str]): self.supervisor_name=s
     def add_subordinate(self, s: str): self.subordinates_names.append(s) if s not in self.subordinates_names else None
     def remove_subordinate(self, s: str): self.subordinates_names.remove(s) if s in self.subordinates_names else None
@@ -119,9 +129,14 @@ class Character:
         if self.job == "Woodcutter": return "Perform Woodcutter Duties"
         if self.job == "Stonemason": return "Perform Stonemason Duties"
         if self.job == "Master Craftsman": return "Assess Production Needs"
-        if self.job == "Manager": return "Manage Work Orders"
+        if self.job == "Manager": return "Manage Subordinates" # Changed from "Manage Work Orders"
         if self.job == "Bookkeeper": return "Maintain Ledger"
         if self.job == "Expedition Leader": return "Oversee Expedition"
+        # Add a check for rank if we want Nobles who aren't "Manager" to also manage
+        if self.rank in ["Noble Lord", "Baron"] and not self.subordinates_names: # Example: A noble without a specific job might just idle or have other duties
+            return "Oversee Domain" # Placeholder for other noble tasks
+        elif self.rank in ["Noble Lord", "Baron"]:
+            return "Manage Subordinates"
         return "Idle"
 
     def _execute_fetch_tool(self, world: 'World') -> bool: # True if still fetching, False if done/failed
@@ -257,9 +272,71 @@ class Character:
                 item_processed_this_tick = True; self._mc_item_check_idx = (current_idx + 1) % len(target_item_names); break
         if not item_processed_this_tick: self.current_goal = "Idle"; self._mc_item_check_idx = 0
     def _execute_manage_work_orders(self, world: 'World'):
-        if self.job != "Manager": self.current_goal = self.job_default_goal(); return
+        if not (self.job == "Manager" or self.rank in ["Noble Lord", "Baron"]) or not self.subordinates_names:
+            self.current_goal = self.job_default_goal(); return # Not a manager or no one to manage
+
+        # Prioritize managing work orders if also a Manager (dual role)
+        if self.job == "Manager":
+            self._execute_manage_work_orders_as_part_of_supervision(world) # A new helper for this
+            # After potentially handling a WO, proceed to subordinate management unless an action was taken that changes goal
+
+        if not world.game_time: return # Need game time for reviews
+
+        # Iterate through subordinates for potential actions
+        # Simple approach: one management action per 'Manage Subordinates' cycle to avoid spamming actions
+        # More sophisticated: a priority queue of management tasks
+
+        for sub_name in self.subordinates_names:
+            subordinate: Optional['Character'] = None
+            for char_obj in world.characters: # Find subordinate object
+                if char_obj.name == sub_name: subordinate = char_obj; break
+
+            if not subordinate: continue
+
+            # 1. Performance Review Logic
+            review_due_day = subordinate.last_performance_review_day is None or \
+                             (world.game_time.current_day - subordinate.last_performance_review_day >= config.MANAGEMENT_REVIEW_INTERVAL_DAYS)
+
+            if review_due_day and subordinate.performance_rating != "Fired":
+                self.add_memory(f"Considering performance review for {subordinate.name} (Last review: Day {subordinate.last_performance_review_day}, Current Day: {world.game_time.current_day}).")
+                self.conduct_performance_review(subordinate.name, world)
+                # After a review, the supervisor might be "done" for this cycle of Manage Subordinates.
+                # Or they could continue to check other subordinates. For now, one action is enough.
+                self.current_goal = "Idle" # Re-evaluate next tick; prevents multiple manager actions in one tick
+                return
+
+            # 2. Warning/Firing Logic (if review not just conducted)
+            if subordinate.performance_rating == "Poor" and subordinate.warning_count < 3 and subordinate.performance_rating != "Fired":
+                # Consider issuing a warning if performance is poor and not max warnings
+                # For simplicity, let's assume a poor review already counts as a strong indicator.
+                # A more nuanced system could have specific triggers for warnings.
+                if random.random() < 0.3: # Chance to issue a warning if poor and not maxed
+                    reason = "Consistently poor performance noted."
+                    if subordinate.job == "Bookkeeper" and any(world.ledger.get_stockpile_last_update_day(sp.name) is None or (world.game_time.current_day - world.ledger.get_stockpile_last_update_day(sp.name) > config.STALE_THRESHOLD_DAYS + 2) for sp in world.stockpiles):
+                        reason = "Ledger maintenance is unsatisfactory."
+                    self.issue_warning(subordinate.name, world, reason)
+                    self.current_goal = "Idle"
+                    return
+
+            if subordinate.performance_rating == "Poor" and subordinate.warning_count >= config.FIRING_WARNING_THRESHOLD and subordinate.performance_rating != "Fired":
+                if random.random() < 0.5: # High chance to fire if performance is poor and max warnings
+                    self.add_memory(f"Considering firing {subordinate.name} due to poor performance and {subordinate.warning_count} warnings (Threshold: {config.FIRING_WARNING_THRESHOLD}).")
+                    self.fire_subordinate(subordinate.name, world)
+                    self.current_goal = "Idle"
+                    return
+
+        # If no specific management action taken for any subordinate, manager might do other things or idle.
+        # For now, just idle and wait for next cycle.
+        self.current_goal = "Idle"
+
+
+    def _execute_manage_work_orders_as_part_of_supervision(self, world: 'World'):
+        # This is the original _execute_manage_work_orders logic, refactored slightly
+        # It's called if the character is a Manager AND is in "Manage Subordinates" goal.
+        # This allows a manager to still do their primary job of managing WOs.
         pending_orders = world.get_pending_work_orders()
-        if not pending_orders: self.current_goal = "Idle"; return
+        if not pending_orders: return # No orders to manage, main function will continue to subordinate mgmt
+
         order_to_process = pending_orders[0]; can_approve = True; missing_notes = []; stale_concerns = False
         req_res = order_to_process.details.get("required_resources", {})
         if req_res:
@@ -267,7 +344,7 @@ class Character:
                 avail = world.ledger.get_total_resource_count(resource)
                 for sp_name_key in world.ledger.records.get(resource, {}).keys():
                     last_update = world.ledger.get_stockpile_last_update_day(sp_name_key)
-                    if last_update is not None and world.game_time.current_day - last_update > STALE_THRESHOLD_DAYS: stale_concerns = True; break
+                    if last_update is not None and world.game_time.current_day - last_update > config.STALE_THRESHOLD_DAYS: stale_concerns = True; break
                 if stale_concerns: self.add_memory(f"Stale data for WO {order_to_process.order_id}, res {resource}");
                 if avail < req_qty: can_approve = False; missing_notes.append(f"{resource} (need {req_qty}, has {avail})")
         if stale_concerns and not can_approve: print(f"{self.name} (Manager) notes stale data for {order_to_process.order_id}, and resources confirmed insufficient.")
@@ -426,7 +503,8 @@ class Character:
 
         # 4. Execute Current Goal
         if self.current_goal == "Assess Production Needs": self._execute_assess_production_needs(world); return
-        elif self.current_goal == "Manage Work Orders": self._execute_manage_work_orders(world); return
+        elif self.current_goal == "Manage Subordinates": self._execute_manage_subordinates(world); return # New
+        elif self.current_goal == "Manage Work Orders": self._execute_manage_work_orders_as_part_of_supervision(world); return # Retain for direct WO management if ever set
         elif self.current_goal == "Maintain Ledger": self._execute_maintain_ledger(world); return
         elif self.current_goal == "Count Stockpile": self._execute_count_stockpile(world); return
         elif self.current_goal == "Perform Woodcutter Duties": self._execute_perform_woodcutter_duties(world); return
@@ -449,3 +527,142 @@ class Character:
         # self.current_goal = "Idle"
         return
     # --- END OF DECIDE_ACTION and HELPER _execute_ METHODS ---
+
+    # --- Management Actions ---
+    def conduct_performance_review(self, subordinate_char_name: str, world: 'World'):
+        if self.name == subordinate_char_name:
+            self.add_memory("Attempted to conduct self-performance review. This is not allowed."); return
+
+        subordinate: Optional['Character'] = None
+        for char_obj in world.characters:
+            if char_obj.name == subordinate_char_name:
+                subordinate = char_obj; break
+
+        if not subordinate:
+            self.add_memory(f"Could not find subordinate {subordinate_char_name} for performance review."); return
+
+        if subordinate.supervisor_name != self.name:
+            self.add_memory(f"Attempted to review {subordinate_char_name}, but I am not their supervisor."); return
+
+        if not world.game_time: # Should always be set, but good practice
+            self.add_memory(f"Cannot conduct review for {subordinate_char_name}, game time not available."); return
+
+        # Initial simple review logic
+        new_rating = "Needs Improvement" # Default if no specific positive criteria met
+        review_notes = []
+
+        if subordinate.job == "Bookkeeper":
+            is_diligent = True
+            if not world.stockpiles: review_notes.append("No stockpiles to check for Bookkeeper.")
+            for sp in world.stockpiles:
+                last_update = world.ledger.get_stockpile_last_update_day(sp.name)
+                # More lenient for review than strict manager check for WO approval
+                if last_update is None or (world.game_time.current_day - last_update > config.STALE_THRESHOLD_DAYS + 2) :
+                    is_diligent = False
+                    review_notes.append(f"Ledger for {sp.name} is stale (last update: Day {last_update}).")
+                    break
+            if is_diligent and world.stockpiles: new_rating = "Good"; review_notes.append("Ledger appears up-to-date.")
+            elif not world.stockpiles and is_diligent : new_rating = "Not Evaluated"; review_notes.append("Bookkeeper has no stockpiles to manage yet.")
+
+
+        elif subordinate.job == "Woodcutter":
+            # Check if they have wood, or deposited recently (harder to check 'recently deposited' without more logs)
+            if subordinate.inventory.get("Wood", 0) > 0:
+                new_rating = "Good"; review_notes.append("Currently carrying Wood.")
+            # TODO: Could check if they have a history of depositing wood if ledger/event log was more detailed
+            else:
+                review_notes.append("Not actively carrying Wood. Further checks needed for deposit history (not implemented).")
+
+        # Add more job-specific checks here later
+
+        subordinate.performance_rating = new_rating
+        subordinate.last_performance_review_day = world.game_time.current_day
+        subordinate.warning_count = 0 # Reset warnings on a new review, unless performance is poor from review itself.
+        if new_rating == "Poor": subordinate.warning_count = 1 # A poor review itself counts as a warning
+
+        review_summary = f"Performance review for {subordinate.name}: {new_rating}. Notes: {'; '.join(review_notes) or 'General review.'}"
+        self.add_memory(review_summary)
+        print(f"{self.name} conducted performance review for {subordinate.name}. Result: {new_rating}.")
+        subordinate.add_memory(f"Had performance review with {self.name}. Rated: {new_rating}.")
+
+    def issue_warning(self, subordinate_char_name: str, world: 'World', reason_message: str):
+        if self.name == subordinate_char_name:
+            self.add_memory("Attempted to issue self-warning. This is not allowed."); return
+
+        subordinate: Optional['Character'] = None
+        for char_obj in world.characters:
+            if char_obj.name == subordinate_char_name:
+                subordinate = char_obj; break
+
+        if not subordinate:
+            self.add_memory(f"Could not find subordinate {subordinate_char_name} to issue warning."); return
+
+        if subordinate.supervisor_name != self.name:
+            self.add_memory(f"Attempted to warn {subordinate_char_name}, but I am not their supervisor."); return
+
+        subordinate.warning_count += 1
+        warning_memory = f"Issued warning to {subordinate.name} for: {reason_message}. Total warnings: {subordinate.warning_count}."
+        self.add_memory(warning_memory)
+        print(f"{self.name} issued WARNING to {subordinate.name} for '{reason_message}'. Total warnings: {subordinate.warning_count}.")
+
+        subordinate.add_memory(f"Received warning from {self.name} regarding: {reason_message}. Current warnings: {subordinate.warning_count}.")
+
+        if subordinate.warning_count >= config.FIRING_WARNING_THRESHOLD: # Threshold for automatic performance degradation
+            if subordinate.performance_rating != "Poor":
+                subordinate.performance_rating = "Poor"
+                self.add_memory(f"{subordinate.name}'s performance set to Poor due to {subordinate.warning_count} warnings (Threshold: {config.FIRING_WARNING_THRESHOLD}).")
+                subordinate.add_memory(f"Performance automatically set to Poor due to reaching {subordinate.warning_count} warnings.")
+                print(f"{subordinate.name}'s performance automatically set to Poor due to {subordinate.warning_count} warnings.")
+
+    def fire_subordinate(self, subordinate_char_name: str, world: 'World'):
+        if self.name == subordinate_char_name:
+            self.add_memory("Attempted to fire self. This is not allowed."); return
+
+        subordinate: Optional['Character'] = None
+        sub_idx = -1
+        for idx, char_obj in enumerate(world.characters):
+            if char_obj.name == subordinate_char_name:
+                subordinate = char_obj; sub_idx = idx; break
+
+        if not subordinate:
+            self.add_memory(f"Could not find subordinate {subordinate_char_name} to fire."); return
+
+        if subordinate.supervisor_name != self.name:
+            self.add_memory(f"Attempted to fire {subordinate_char_name}, but I am not their supervisor."); return
+
+        # Remove from supervisor's list
+        if subordinate.name in self.subordinates_names:
+            self.remove_subordinate(subordinate.name) # Uses existing method
+
+        # Update subordinate's status
+        original_job = subordinate.job
+        subordinate.supervisor_name = None
+        subordinate.job = "Unemployed"
+        subordinate.rank = "Commoner" # Or some other default non-noble/non-worker rank
+        subordinate.current_goal = "Idle" # Or "Find New Job" in the future
+        subordinate.assigned_tasks = []
+        subordinate.performance_rating = "Fired"
+        subordinate.warning_count = 0
+        # Consider if active work order should be dropped/cancelled
+        if subordinate.active_work_order_id:
+            wo = world.get_work_order_by_id(subordinate.active_work_order_id)
+            if wo and wo.status == "InProgress" and wo.assigned_to == subordinate.name:
+                wo.status = "Pending" # Re-queue it
+                wo.assigned_to = None
+                subordinate.add_memory(f"Work order {subordinate.active_work_order_id} unassigned due to termination.")
+                print(f"Work order {subordinate.active_work_order_id} unassigned from {subordinate.name} due to termination.")
+            subordinate._reset_crafting_state()
+
+
+        fire_memory = f"Fired {subordinate.name} from their job as {original_job}."
+        self.add_memory(fire_memory)
+        print(f"{self.name} FIRED {subordinate.name} who was a {original_job}.")
+
+        subordinate.add_memory(f"Was fired by {self.name} from job {original_job}. Now Unemployed.")
+
+        # Optional: Remove from world or mark inactive. For now, they become "Unemployed".
+        # If you want to remove them from the simulation entirely:
+        # world.characters.pop(sub_idx)
+        # print(f"{subordinate.name} has been removed from the world.")
+        # However, this could cause issues if other parts of the code expect the character to exist.
+        # Keeping them as "Unemployed" is safer for now.

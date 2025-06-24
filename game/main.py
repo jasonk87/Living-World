@@ -48,20 +48,36 @@ def main():
                       needs={"Wood":5}, max_inventory_items=5, current_goal=None)
 
     elara = Character(name="Elara", personality="observant", traits=["Quiet"], job="Bookkeeper", x=4,y=4, skills={}, max_inventory_items=1, current_goal=None)
+
+    # Management Test Setup
+    boris = Character(name="Boris", personality="stern", traits=["Organized"], job="Manager", rank="Baron", x=5,y=5, skills={}, max_inventory_items=2)
+    boris.managed_item_targets = {"Stone Axe": 2} # So Manager has something to approve/deny potentially
+
     game_world.add_character(gimli)
     game_world.add_character(elara)
+    game_world.add_character(boris)
 
-    print("\n--- Initial State (Tool Usage Test) ---")
+    # Set up reporting line: Boris manages Elara
+    set_reporting_line(supervisor=boris, subordinate=elara)
+    print(f"\n--- Management Setup ---")
+    print(f"{boris.name} is Manager (Rank: {boris.rank}). Supervisor of: {boris.subordinates_names}")
+    print(f"{elara.name} is Bookkeeper. Supervisor: {elara.supervisor_name}. Performance: {elara.performance_rating}")
+
+
+    print("\n--- Initial State (Management Test) ---")
     print(f"Gimli: {gimli}")
     print(f"ToolShed: {tool_shed}")
     print(f"Ledger: {game_world.ledger}")
     print(f"Forest at (0,0): {game_world.get_tile(0,0)}")
+    print(f"Boris the Manager: {boris}")
+    print(f"Elara the Bookkeeper: {elara}")
 
 
-    print("\n--- Simulation: Tool Usage & Durability ---")
-    max_simulation_days = 3
+    print("\n--- Simulation: Management Actions ---")
+    max_simulation_days = 20 # Increased to observe management cycles
     last_season_change_day = game_time_obj.current_day
     running = True; current_total_ticks = 0
+    elara_last_action_day = 0 # For forcing Elara to be lazy
 
     while running:
         new_day = game_time_obj.tick()
@@ -75,24 +91,67 @@ def main():
                 header_printed_this_tick = True
 
         for char_to_act in list(game_world.characters):
-            if char_to_act in game_world.characters:
-                if char_to_act.name == "Gimli":
+            if char_to_act not in game_world.characters: continue # Character might have been fired/removed
+
+            original_goal = char_to_act.current_goal
+            original_performance = char_to_act.performance_rating
+            original_warnings = char_to_act.warning_count
+
+            # Simulate Elara being lazy sometimes
+            if char_to_act.name == "Elara" and char_to_act.job == "Bookkeeper":
+                # Make Elara lazy if too much time has passed since last "action" (simulated)
+                # Forcing her to not update ledger to test Boris's reaction
+                if game_time_obj.current_day > 3 and game_time_obj.current_day % 4 == 0 and elara_last_action_day < game_time_obj.current_day:
+                     # On day 4, 8, 12 etc. if she hasn't "worked" that day.
+                    if char_to_act.current_goal == "Maintain Ledger" or char_to_act.current_goal == "Count Stockpile":
+                        print_tick_header()
+                        print(f"  SIMULATING LAZINESS: {elara.name} decides to idle instead of '{char_to_act.current_goal}'.")
+                        char_to_act.current_goal = "Idle" # Force her to be idle
+                        # To make ledger stale, we can also directly manipulate ledger update day for testing
+                        if game_world.stockpiles:
+                            sp_to_make_stale = game_world.stockpiles[0]
+                            if game_world.ledger.records.get(sp_to_make_stale.name): # Check if record exists
+                                game_world.ledger.records[sp_to_make_stale.name]["last_updated_day"] = game_time_obj.current_day - (config.STALE_THRESHOLD_DAYS + 5 if hasattr(config, 'STALE_THRESHOLD_DAYS') else 7)
+                                print(f"  DEBUG: Manually made {sp_to_make_stale.name} ledger entry stale for testing.")
+                    elara_last_action_day = game_time_obj.current_day
+
+
+            char_to_act.decide_action(game_world)
+
+            # Log management related changes
+            if char_to_act.name == boris.name: # Boris is the manager
+                if original_goal != char_to_act.current_goal and char_to_act.current_goal == "Idle" and original_goal == "Manage Subordinates":
                     print_tick_header()
-                    print(f"  Pre-Action {char_to_act.name}: Goal='{char_to_act.current_goal}', Tool='{char_to_act.equipped_tool.get('name') if char_to_act.equipped_tool else 'None'}', TaskProg={char_to_act.task_work_progress}, FetchInfo={char_to_act.fetching_tool_info}, Pos=({char_to_act.x},{char_to_act.y}), Inv={char_to_act.inventory}")
+                    print(f"  MANAGER ACTIVITY: {boris.name} completed 'Manage Subordinates' cycle, now Idle.")
 
-                char_to_act.decide_action(game_world)
+            if char_to_act.name == elara.name: # Elara is the subordinate
+                if original_performance != char_to_act.performance_rating:
+                    print_tick_header()
+                    print(f"  PERFORMANCE CHANGE: {elara.name}'s performance changed from '{original_performance}' to '{char_to_act.performance_rating}' (Supervisor: {elara.supervisor_name}).")
+                if original_warnings != char_to_act.warning_count:
+                    print_tick_header()
+                    print(f"  WARNING COUNT CHANGE: {elara.name} now has {char_to_act.warning_count} warnings (Supervisor: {elara.supervisor_name}).")
+                if char_to_act.job == "Unemployed" and original_performance != "Fired": # Check if just got fired
+                    print_tick_header()
+                    print(f"  JOB STATUS CHANGE: {elara.name} is now '{char_to_act.job}'. Was supervised by {boris.name}.")
 
-                if char_to_act.name == "Gimli":
-                    if header_printed_this_tick :
-                         print(f"  Post-Action {char_to_act.name}: Goal='{char_to_act.current_goal}', Tool='{char_to_act.equipped_tool.get('name') if char_to_act.equipped_tool else 'None'}', TaskProg={char_to_act.task_work_progress}, FetchInfo={char_to_act.fetching_tool_info}, Pos=({char_to_act.x},{char_to_act.y}), Inv={char_to_act.inventory}")
 
         if new_day:
-            print(f"*** NEW DAY: Day {game_time_obj.current_day}. ***")
-            if gimli.equipped_tool: print(f"  Gimli's {gimli.equipped_tool['name']} durability: {gimli.equipped_tool['durability']}")
+            print(f"*** NEW DAY: Day {game_time_obj.current_day}. Weather: {game_world.weather}, Season: {game_world.season} ***")
+            # if gimli.equipped_tool: print(f"  Gimli's {gimli.equipped_tool['name']} durability: {gimli.equipped_tool['durability']}")
 
             for char_daily_reset in game_world.characters:
-                if char_daily_reset.current_goal in ["Wander", None, "Idle"] and not char_daily_reset.active_work_order_id :
+                # If idle, not working on a WO, and not fired, try to get a job default goal
+                if char_daily_reset.current_goal in ["Wander", None, "Idle"] and \
+                   not char_daily_reset.active_work_order_id and \
+                   char_daily_reset.job != "Unemployed":
                     char_daily_reset.current_goal = char_daily_reset.job_default_goal()
+
+            # Daily status print for relevant characters
+            if boris in game_world.characters: print(f"  {boris.name} (Manager): Goal='{boris.current_goal}', Subordinates='{len(boris.subordinates_names)}'")
+            if elara in game_world.characters: print(f"  {elara.name} (Bookkeeper): Goal='{elara.current_goal}', Performance='{elara.performance_rating}', Warnings='{elara.warning_count}', Supervisor='{elara.supervisor_name}'")
+            else: print(f"  INFO: Elara is no longer in the world's character list (presumably fired and removed).")
+
 
             if (game_time_obj.current_day - last_season_change_day) >= days_per_season:
                 game_world.advance_season()
