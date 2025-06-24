@@ -2,14 +2,22 @@
 from typing import List, Optional, Dict, Tuple
 
 class Stockpile:
+    _init_default_allowed_resources_marker = object() # Unique marker for default argument
+
     def __init__(self, name: str, x: int, y: int, width: int, height: int,
-                 allowed_resources: Optional[List[str]] = None,
+                 allowed_resources: Optional[List[str]] = _init_default_allowed_resources_marker,
                  capacity_per_resource: Optional[int] = None, # Max items of a single resource type
                  total_capacity: Optional[int] = None): # Max total items in stockpile
         self.name = name
         self.rect = (x, y, width, height)  # (top_left_x, top_left_y, width, height)
-        # If None, all resources allowed. If [], no resources allowed (effectively)
-        self.allowed_resources = allowed_resources if allowed_resources is not None else ["Wood", "Stone"] # Default
+
+        # If allowed_resources is explicitly passed (even if None), use that.
+        # If the argument is omitted by the caller (i.e., it's our marker), then apply a game default.
+        if allowed_resources == Stockpile._init_default_allowed_resources_marker:
+            self.allowed_resources = ["Wood", "Stone"] # Game's default when arg is omitted
+        else:
+            self.allowed_resources = allowed_resources # Respects explicit None (for allow all) or a list
+
         self.inventory: Dict[str, int] = {}
         self.capacity_per_resource = capacity_per_resource # e.g., can hold 50 wood, 30 stone
         self.total_capacity = total_capacity # e.g., can hold 100 items total

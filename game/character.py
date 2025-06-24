@@ -170,19 +170,67 @@ class Character:
         if tool_type and (not self.equipped_tool or self.equipped_tool.get("tool_type") != tool_type):
             if not self.goal_before_fetching_tool : self.goal_before_fetching_tool = self.current_goal
             self.current_goal = "Fetch Tool"; self.tool_to_fetch_type = tool_type; self.task_work_progress = 0; return False
-        self.task_work_progress += 1
+
+        # --- Trait Effects on Progress ---
+        current_progress_gain = 1
+        is_lazy_this_tick = False
+
+        if "Lazy" in self.traits and not "Focused" in self.traits:
+            if random.random() < 0.25: # 25% chance to be lazy
+                current_progress_gain = 0
+                is_lazy_this_tick = True
+                self.add_memory(f"Felt lazy and decided to slack off for a bit while working on '{task_name}'.")
+
+        if current_progress_gain > 0: # Don't apply positive progress traits if slacked off
+            if "Diligent" in self.traits:
+                if random.random() < 0.25: # 25% chance for bonus progress
+                    current_progress_gain += 1
+                    self.add_memory(f"Worked with extra diligence on '{task_name}'.")
+            elif "Focused" in self.traits: # Focused but not Diligent, and not Lazy (or Lazy was overridden)
+                if random.random() < 0.10: # 10% chance for smaller bonus
+                    current_progress_gain += 1
+                    self.add_memory(f"Remained focused and made good progress on '{task_name}'.")
+
+        self.task_work_progress += current_progress_gain
+
+        if is_lazy_this_tick and current_progress_gain == 0: # If slacked, end tick here
+            return True
+
+        # --- Task Completion and Yield ---
         if self.task_work_progress >= task_def.get("base_time_per_yield", 1):
-            res_prod = task_def.get("resource_produced"); yield_amt = task_def.get("base_yield",1)
-            can_add = self.max_inventory_items - self.get_inventory_load(); actual_yield = min(yield_amt, can_add)
-            if actual_yield > 0 and res_prod:
-                self.inventory[res_prod] = self.inventory.get(res_prod,0) + actual_yield
+            res_prod = task_def.get("resource_produced")
+            base_yield_amount = task_def.get("base_yield",1)
+
+            # Trait Effect on Yield (e.g., Strong)
+            final_yield_amount = base_yield_amount
+            if "Strong" in self.traits and res_prod in ["Wood", "Stone", "Iron Ore"]: # Assuming Strong applies to these
+                if random.random() < 0.20: # 20% chance for +1 bonus
+                    final_yield_amount += 1
+                    self.add_memory(f"Put my strength into '{task_name}' and got a bit extra {res_prod}.")
+
+            can_add_to_inv = self.max_inventory_items - self.get_inventory_load()
+            actual_yield_taken = min(final_yield_amount, can_add_to_inv)
+
+            if actual_yield_taken > 0 and res_prod:
+                self.inventory[res_prod] = self.inventory.get(res_prod,0) + actual_yield_taken
                 tool_name_mem = self.equipped_tool['name'] if self.equipped_tool else 'hands'
-                self.add_memory(f"Task '{task_name}': got {actual_yield} {res_prod} with {tool_name_mem}.")
-                print(f"{self.name} task '{task_name}' yielded {actual_yield} {res_prod}.")
-            elif yield_amt > 0: print(f"{self.name} inventory full for {task_name}.")
-            self.task_work_progress = 0
+                self.add_memory(f"Task '{task_name}': got {actual_yield_taken} {res_prod} (base: {base_yield_amount}) with {tool_name_mem}.")
+                print(f"{self.name} task '{task_name}' yielded {actual_yield_taken} {res_prod} (base: {base_yield_amount}).")
+            elif final_yield_amount > 0: # Tried to yield something but inventory was full
+                 print(f"{self.name} inventory full for {task_name} (tried to yield {final_yield_amount} {res_prod}).")
+
+            self.task_work_progress = 0 # Reset progress for next unit
+
+            # Tool Durability
             if self.equipped_tool and tool_type:
-                self.equipped_tool["durability"] -= 1
+                durability_loss = 1
+                # Trait Effect on Tool Wear (e.g., Careless)
+                if "Careless" in self.traits:
+                    if random.random() < 0.25: # 25% chance for extra wear
+                        durability_loss += 1
+                        self.add_memory(f"Was a bit careless with my {self.equipped_tool['name']} during '{task_name}'.")
+
+                self.equipped_tool["durability"] -= durability_loss
                 if self.equipped_tool["durability"] <= 0:
                     self.add_memory(f"{self.equipped_tool['name']} broke!"); print(f"Oh no! {self.name}'s {self.equipped_tool['name']} BROKE!")
                     self.unequip_tool()
@@ -203,8 +251,34 @@ class Character:
         if self.materials_gathered_for_wo and not self.items_crafted_for_wo:
             if not self.workshop_location: self.workshop_location = (self.x, self.y)
             if (self.x, self.y) != self.workshop_location: self.move_towards(self.workshop_location[0], self.workshop_location[1], world); return
+
             craft_time_per_unit = blueprint.get("craft_time_per_unit", 5)
-            self.crafting_progress += 1
+
+            # --- Trait Effects on Crafting Progress ---
+            current_crafting_progress_gain = 1
+            is_slacking_craft = False
+
+            if "Lazy" in self.traits and not "Focused" in self.traits:
+                if random.random() < 0.25: # 25% chance to be lazy
+                    current_crafting_progress_gain = 0
+                    is_slacking_craft = True
+                    self.add_memory(f"Felt lazy and slacked off while crafting {item_name} for WO {order.order_id}.")
+
+            if current_crafting_progress_gain > 0: # Don't apply positive progress traits if slacked
+                if "Diligent" in self.traits:
+                    if random.random() < 0.25: # 25% chance for bonus progress
+                        current_crafting_progress_gain += 1
+                        self.add_memory(f"Worked with extra diligence crafting {item_name}.")
+                elif "Focused" in self.traits: # Focused but not Diligent, and not Lazy (or Lazy overridden)
+                    if random.random() < 0.10: # 10% chance for smaller bonus
+                        current_crafting_progress_gain += 1
+                        self.add_memory(f"Remained focused while crafting {item_name}.")
+
+            self.crafting_progress += current_crafting_progress_gain
+
+            if is_slacking_craft and current_crafting_progress_gain == 0:
+                return # End tick here if slacked off
+
             if self.crafting_progress >= craft_time_per_unit:
                 for res, req_qty_per_unit in blueprint["required_resources"].items():
                     self.inventory[res] -= req_qty_per_unit
@@ -406,8 +480,28 @@ class Character:
         if not stockpile_obj:self.current_goal="Maintain Ledger";self.counting_target_stockpile_name=None;self.decide_action(world);return
         spot=stockpile_obj.deposit_tiles[0] if stockpile_obj.deposit_tiles else (stockpile_obj.rect[0],stockpile_obj.rect[1])
         if(self.x,self.y)==spot:
-            inv=stockpile_obj.inventory.copy(); world.ledger.update_stockpile_record(stockpile_obj.name,inv,world.game_time.current_day)
-            self.add_memory(f"Counted {stockpile_obj.name}"); print(f"{self.name} (Bookkeeper) counted {stockpile_obj.name}. Inv: {inv}. Day: {world.game_time.current_day}.")
+            actual_inventory = stockpile_obj.inventory.copy()
+            recorded_inventory = actual_inventory.copy() # Start with the correct inventory
+
+            if "Careless" in self.traits:
+                miscounted_items = []
+                for item_name, actual_qty in actual_inventory.items():
+                    if random.random() < 0.10: # 10% chance to miscount this item type
+                        error_amount = random.choice([-1, 1])
+                        recorded_qty = actual_qty + error_amount
+
+                        # Ensure recorded quantity doesn't go below zero
+                        recorded_inventory[item_name] = max(0, recorded_qty)
+
+                        if recorded_inventory[item_name] != actual_qty:
+                             miscounted_items.append(f"{item_name} (actual: {actual_qty}, recorded: {recorded_inventory[item_name]})")
+
+                if miscounted_items:
+                    self.add_memory(f"Was a bit careless counting stockpile {stockpile_obj.name}. Might have miscounted: {', '.join(miscounted_items)}.")
+                    print(f"{self.name} (Bookkeeper, Careless) may have miscounted {stockpile_obj.name}. Actual: {actual_inventory}, Recorded for Ledger: {recorded_inventory}")
+
+            world.ledger.update_stockpile_record(stockpile_obj.name, recorded_inventory, world.game_time.current_day)
+            self.add_memory(f"Counted {stockpile_obj.name}"); print(f"{self.name} (Bookkeeper) finished counting {stockpile_obj.name}. Ledger updated with: {recorded_inventory}. Day: {world.game_time.current_day}.")
             self.counting_target_stockpile_name=None;self.current_goal="Maintain Ledger";self.decide_action(world)
         else:self.move_towards(spot[0],spot[1],world)
     def _execute_perform_woodcutter_duties(self, world: 'World'):

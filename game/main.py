@@ -49,56 +49,56 @@ def main():
 
     elara = Character(name="Elara", personality="observant", traits=["Quiet"], job="Bookkeeper", x=4,y=4, skills={}, max_inventory_items=1, current_goal=None)
 
-    # --- Character Setup for Phase 2 Testing ---
-    # Subordinate
-    elara_p2 = Character(name="Elara_P2", personality="diligent", traits=["Focused"], job="Bookkeeper",
-                         x=4,y=4, skills={}, max_inventory_items=1, current_goal=None)
-    game_world.add_character(elara_p2)
+    # --- Character Setup for Phase 3 Testing: Trait-based Task Performance ---
 
-    # Supervisor 1: Strict and dislikes Elara_P2 initially
-    boris_strict = Character(name="Boris_Strict", personality="Demanding", traits=["Strict", "Impatient"],
-                             job="Manager", rank="Baron", x=5,y=5, skills={}, max_inventory_items=2)
-    game_world.add_character(boris_strict)
-    set_reporting_line(supervisor=boris_strict, subordinate=elara_p2)
-    boris_strict.modify_relationship(elara_p2.name, -40, game_world, reason="Initial bad impression") # Negative start
-    elara_p2.modify_relationship(boris_strict.name, -20, game_world, reason="Feels scrutinized")
+    # Remove Phase 2 characters for cleaner logs, or keep them if combined testing is desired.
+    # For now, let's remove Phase 2 specific characters to focus on task performance traits.
+    phase2_chars = [char for char in game_world.characters if "_P2" in char.name or "Boris_" in char.name or "Flora_" in char.name]
+    for p2c in phase2_chars:
+        if p2c in game_world.characters: game_world.remove_character(p2c)
+    if gimli in game_world.characters: game_world.remove_character(gimli)
+    if elara in game_world.characters: game_world.remove_character(elara)
 
 
-    # Subordinate for Kind Supervisor
-    pip = Character(name="Pip_P2", personality="cheerful", traits=["Careless"], job="Bookkeeper", # Careless bookkeeper
-                    x=4,y=5, skills={}, max_inventory_items=1, current_goal=None)
-    game_world.add_character(pip)
+    # Worker Set 1: Woodcutters
+    woody_normal = Character(name="Woody_Normal", personality="neutral", traits=[], job="Woodcutter", x=1,y=1, skills={"Woodcutting":5}, needs={"Wood":20})
+    woody_lazy = Character(name="Woody_Lazy", personality="laid-back", traits=["Lazy"], job="Woodcutter", x=1,y=2, skills={"Woodcutting":5}, needs={"Wood":20})
+    woody_diligent = Character(name="Woody_Diligent", personality="hard-working", traits=["Diligent"], job="Woodcutter", x=1,y=3, skills={"Woodcutting":5}, needs={"Wood":20})
+    woody_strong = Character(name="Woody_Strong", personality="robust", traits=["Strong"], job="Woodcutter", x=1,y=4, skills={"Woodcutting":5}, needs={"Wood":20})
+    woody_focused_lazy = Character(name="Woody_FocusedLazy", personality="intense", traits=["Focused", "Lazy"], job="Woodcutter", x=1,y=5, skills={"Woodcutting":5}, needs={"Wood":20}) # Focused should override Lazy
 
-    # Supervisor 2: Kind and likes Pip_P2 initially
-    flora_kind = Character(name="Flora_Kind", personality="Forgiving", traits=["Kind", "Patient"],
-                           job="Manager", rank="Baron", x=5,y=6, skills={}, max_inventory_items=2)
-    game_world.add_character(flora_kind)
-    set_reporting_line(supervisor=flora_kind, subordinate=pip)
-    flora_kind.modify_relationship(pip.name, 40, game_world, reason="Initial good impression") # Positive start
-    pip.modify_relationship(flora_kind.name, 30, game_world, reason="Feels supported")
+    game_world.add_character(woody_normal)
+    game_world.add_character(woody_lazy)
+    game_world.add_character(woody_diligent)
+    game_world.add_character(woody_strong)
+    game_world.add_character(woody_focused_lazy)
 
-    # Keep Gimli for other activities if needed, or remove if focusing only on management
-    # game_world.add_character(gimli)
-    if gimli in game_world.characters: game_world.remove_character(gimli) # Remove Gimli for cleaner logs
-    if elara in game_world.characters: game_world.remove_character(elara) # Remove old Elara
+    # Worker Set 2: Bookkeepers
+    booky_normal = Character(name="Booky_Normal", personality="neutral", traits=[], job="Bookkeeper", x=3,y=1)
+    booky_careless = Character(name="Booky_Careless", personality="absent-minded", traits=["Careless"], job="Bookkeeper", x=3,y=2)
 
-    print(f"\n--- Management Setup (Phase 2) ---")
-    print(f"{boris_strict.name} ({boris_strict.personality}, Traits: {boris_strict.traits}) manages {elara_p2.name}. Initial Rel: {boris_strict.get_relationship_score(elara_p2.name)}")
-    print(f"{elara_p2.name} supervised by {boris_strict.name}. Initial Rel to Sup: {elara_p2.get_relationship_score(boris_strict.name)}")
-    print(f"{flora_kind.name} ({flora_kind.personality}, Traits: {flora_kind.traits}) manages {pip.name}. Initial Rel: {flora_kind.get_relationship_score(pip.name)}")
-    print(f"{pip.name} supervised by {flora_kind.name}. Initial Rel to Sup: {pip.get_relationship_score(flora_kind.name)}")
+    game_world.add_character(booky_normal)
+    game_world.add_character(booky_careless)
 
-
-    print("\n--- Initial State (Management Test - Phase 2) ---")
-    print(f"ToolShed: {tool_shed}") # Stockpiles are relevant for Bookkeepers
-    print(f"Ledger before sim: {game_world.ledger.records}")
+    # Ensure there's at least one stockpile with some items for Bookkeepers to (mis)count
+    if not wood_stockpile.inventory: # Add some items if empty for consistent testing
+        wood_stockpile.add_item("Wood", 10) # So bookkeepers have something to count.
+        game_world.ledger.update_stockpile_record(wood_stockpile.name, wood_stockpile.inventory, game_time_obj.current_day)
 
 
-    print("\n--- Simulation: Personality-Driven Management Actions ---")
-    max_simulation_days = 20 # Increased to observe management cycles
+    print(f"\n--- Character Setup (Phase 3 - Task Performance Traits) ---")
+    for char in [woody_normal, woody_lazy, woody_diligent, woody_strong, woody_focused_lazy, booky_normal, booky_careless]:
+        print(f"  {char.name} (Job: {char.job}, Traits: {char.traits}, Personality: {char.personality})")
+    print(f"Initial Wood in {wood_stockpile.name}: {wood_stockpile.inventory.get('Wood',0)}")
+
+    print("\n--- Simulation: Trait-Driven Task Performance ---")
+    max_simulation_days = 5 # Shorter sim, focus on task differences over a few days
     last_season_change_day = game_time_obj.current_day
     running = True; current_total_ticks = 0
-    # elara_last_action_day = 0 # No longer needed
+
+    # Store initial inventory/ledger state for comparison if needed, or rely on prints
+    initial_ledger_wood = game_world.ledger.get_total_resource_count("Wood")
+
 
     while running:
         new_day = game_time_obj.tick()
@@ -111,70 +111,29 @@ def main():
                 print(f"\nTick {current_total_ticks} | {game_time_obj} | {game_world.season}, {game_world.weather}")
                 header_printed_this_tick = True
 
+        # --- Log specific trait-triggered events ---
+        # This requires characters to log memories when traits trigger, which they now do.
+        # We can iterate memories or just observe print statements from character methods.
+
         for char_to_act in list(game_world.characters):
-            if char_to_act not in game_world.characters: continue # Character might have been fired/removed
+            if char_to_act not in game_world.characters: continue
 
-            original_goal = char_to_act.current_goal
-            original_performance = char_to_act.performance_rating
-            original_warnings = char_to_act.warning_count
-            original_relationship_to_supervisor = None
-            original_supervisor_relationship_to_char = None
+            # Store pre-action state for logging trait effects
+            pre_action_inv = char_to_act.inventory.copy()
+            pre_action_tool_dur = char_to_act.equipped_tool['durability'] if char_to_act.equipped_tool else None
 
-            if char_to_act.supervisor_name:
-                supervisor = next((c for c in game_world.characters if c.name == char_to_act.supervisor_name), None)
-                if supervisor:
-                    original_relationship_to_supervisor = char_to_act.get_relationship_score(supervisor.name)
-                    original_supervisor_relationship_to_char = supervisor.get_relationship_score(char_to_act.name)
+            char_to_act.decide_action(game_world) # This is where traits will affect actions
 
-            # Simulate Bookkeepers being lazy sometimes to make ledgers stale
-            if char_to_act.job == "Bookkeeper" and (char_to_act.name == elara_p2.name or char_to_act.name == pip.name) :
-                # Make them lazy on certain days to test supervisor reactions
-                if game_time_obj.current_day > 2 and game_time_obj.current_day % 3 == 0 : # Day 3, 6, 9 etc.
-                    if char_to_act.current_goal == "Maintain Ledger" or char_to_act.current_goal == "Count Stockpile":
-                        # Only make one of them lazy per trigger, to vary inputs to supervisors
-                        if (char_to_act.name == elara_p2.name and random.random() < 0.6) or \
-                           (char_to_act.name == pip.name and random.random() < 0.6 and pip.traits == ["Careless"]): # Pip is more likely to be lazy if careless
-                            print_tick_header()
-                            print(f"  SIMULATING LAZINESS: {char_to_act.name} ({char_to_act.personality}) decides to idle instead of '{char_to_act.current_goal}'.")
-                            char_to_act.current_goal = "Idle"
-                            # To ensure ledger becomes stale for sure during test period:
-                            if game_world.stockpiles:
-                                sp_to_make_stale = game_world.stockpiles[0]
-                                if game_world.ledger.records.get(sp_to_make_stale.name):
-                                    game_world.ledger.records[sp_to_make_stale.name]["last_updated_day"] = game_time_obj.current_day - (config.STALE_THRESHOLD_DAYS + 5)
-                                    print(f"  DEBUG: Manually made {sp_to_make_stale.name} ledger entry stale for {char_to_act.name} to be reviewed on.")
+            # Log changes potentially due to traits
+            if char_to_act.job == "Woodcutter":
+                wood_gathered_this_tick = char_to_act.inventory.get("Wood", 0) - pre_action_inv.get("Wood", 0)
+                if wood_gathered_this_tick > 0 : # Implicitly logs yield differences
+                    pass # Already printed by _execute_generic_task
 
-            char_to_act.decide_action(game_world)
-
-            # Log management related changes
-            if char_to_act.job == "Manager": # For Boris_Strict or Flora_Kind
-                if original_goal != char_to_act.current_goal and char_to_act.current_goal == "Idle" and original_goal == "Manage Subordinates":
+            if char_to_act.equipped_tool and pre_action_tool_dur is not None:
+                if char_to_act.equipped_tool['durability'] < pre_action_tool_dur -1 : # More than 1 durability lost
                     print_tick_header()
-                    print(f"  MANAGER ACTIVITY: {char_to_act.name} ({char_to_act.personality}) completed 'Manage Subordinates' cycle, now Idle.")
-
-            if char_to_act.supervisor_name: # For Elara_P2 or Pip_P2
-                supervisor = next((c for c in game_world.characters if c.name == char_to_act.supervisor_name), None)
-                if supervisor:
-                    new_relationship_to_supervisor = char_to_act.get_relationship_score(supervisor.name)
-                    new_supervisor_relationship_to_char = supervisor.get_relationship_score(char_to_act.name)
-
-                    if original_relationship_to_supervisor != new_relationship_to_supervisor:
-                        print_tick_header()
-                        print(f"  REL CHANGE: {char_to_act.name}'s rel with {supervisor.name} ({supervisor.personality}): {original_relationship_to_supervisor} -> {new_relationship_to_supervisor}")
-                    if original_supervisor_relationship_to_char != new_supervisor_relationship_to_char:
-                        print_tick_header()
-                        print(f"  REL CHANGE: {supervisor.name}'s ({supervisor.personality}) rel with {char_to_act.name}: {original_supervisor_relationship_to_char} -> {new_supervisor_relationship_to_char}")
-
-
-                if original_performance != char_to_act.performance_rating:
-                    print_tick_header()
-                    print(f"  PERF CHANGE: {char_to_act.name}'s performance changed from '{original_performance}' to '{char_to_act.performance_rating}' (Super: {char_to_act.supervisor_name}).")
-                if original_warnings != char_to_act.warning_count:
-                    print_tick_header()
-                    print(f"  WARN CHANGE: {char_to_act.name} now has {char_to_act.warning_count} warnings (Super: {char_to_act.supervisor_name}).")
-                if char_to_act.job == "Unemployed" and original_performance != "Fired":
-                    print_tick_header()
-                    print(f"  JOB STATUS CHANGE: {char_to_act.name} is now '{char_to_act.job}'. Was supervised by {char_to_act.supervisor_name or 'N/A'}.")
+                    print(f"  TOOL WEAR: {char_to_act.name}'s {char_to_act.equipped_tool['name']} lost {pre_action_tool_dur - char_to_act.equipped_tool['durability']} durability (Traits: {char_to_act.traits}).")
 
 
         if new_day:
@@ -185,20 +144,10 @@ def main():
                    char_daily_reset.job != "Unemployed":
                     char_daily_reset.current_goal = char_daily_reset.job_default_goal()
 
-            # Daily status print for relevant characters
-            for char_status in [boris_strict, elara_p2, flora_kind, pip]:
+            # Daily status print for task performance characters
+            for char_status in [woody_normal, woody_lazy, woody_diligent, woody_strong, woody_focused_lazy, booky_normal, booky_careless]:
                 if char_status in game_world.characters:
-                    sup_name = char_status.supervisor_name
-                    rel_to_sup_str = ""
-                    if sup_name:
-                        sup_char = next((c for c in game_world.characters if c.name == sup_name), None)
-                        if sup_char:
-                             rel_to_sup_str = f" RelToSup ({sup_char.personality}): {char_status.get_relationship_score(sup_name)}"
-
-                    print(f"  {char_status.name} ({char_status.personality}, {char_status.job}, Rank:{char_status.rank}): Goal='{char_status.current_goal}', Perf='{char_status.performance_rating}', Warns='{char_status.warning_count}'{rel_to_sup_str}")
-                elif char_status.job == "Unemployed" or char_status.performance_rating == "Fired": # If fired they might still be in the list but as Unemployed.
-                     print(f"  INFO: {char_status.name} is {char_status.job} / {char_status.performance_rating}.")
-                # else: print(f"  INFO: {char_status.name} is no longer in the world's active character list.")
+                     print(f"  {char_status.name} (Job: {char_status.job}, Traits: {char_status.traits}): Goal='{char_status.current_goal}', Inv: {char_status.inventory.get('Wood',0)} Wood. Tool: {char_status.equipped_tool['name'] if char_status.equipped_tool else 'None'}")
 
 
             if (game_time_obj.current_day - last_season_change_day) >= days_per_season:
