@@ -4,7 +4,8 @@ import random
 from .llm_integration import generate_dialogue
 from .stockpile import Stockpile
 from .work_order import WorkOrder
-from .data import BLUEPRINTS, JOB_TASK_DEFINITIONS
+from .data import BLUEPRINTS, JOB_TASK_DEFINITIONS, STRUCTURE_BLUEPRINTS # Added STRUCTURE_BLUEPRINTS
+from .building import Building # Added Building
 from . import config # Import config
 
 if TYPE_CHECKING:
@@ -24,7 +25,10 @@ class Character:
                  rank: str = "Worker"): # Added rank parameter
         self.name = name; self.personality = personality; self.traits = traits; self.skills = skills
         self.x = x; self.y = y; self.inventory = {}; self.memory = [];
-        self.needs = needs if needs else {}; self.current_goal = current_goal
+        self.needs = needs if needs else {}
+        if 'Social' not in self.needs: # Ensure 'Social' need is present
+            self.needs['Social'] = 50 # Default social need
+        self.current_goal = current_goal
         self.relationships = {}; self.job = job; self.max_inventory_items = max_inventory_items
         self.hauling_info: Optional[Dict] = None
         self.counting_target_stockpile_name: Optional[str] = None
@@ -32,6 +36,12 @@ class Character:
         self.managed_item_targets: Dict[str, int] = {}; self.order_cooldown: Dict[str, int] = {}
         self.active_work_order_id: Optional[str] = None; self.crafting_progress: int = 0
         self.materials_gathered_for_wo: bool = False; self.items_crafted_for_wo: bool = False
+
+        # Attributes for building
+        self.active_build_order_id: Optional[str] = None
+        self.materials_gathered_for_build: bool = False
+        self.building_site_target: Optional[Tuple[int,int]] = None
+        self.current_building_project: Optional[str] = None # structure_type of current project
 
         # New attributes for hierarchy and accountability
         self.rank: str = rank  # Use parameter, default to "Worker"
@@ -53,8 +63,16 @@ class Character:
         self.items_crafted_for_wo = False; self.resource_to_fetch = None
         self.crafting_progress = 0; self.hauling_info = None; self.workshop_location = None
 
+    def _reset_building_state(self):
+        self.active_build_order_id = None
+        self.materials_gathered_for_build = False
+        self.building_site_target = None
+        self.resource_to_fetch = None # Clear fetching state as well
+        self.current_building_project = None
+
     def __str__(self):
-        base_info = (f"Character(Name: {self.name}, Rank: {self.rank}, Job: {self.job}, Pos: ({self.x},{self.y}), Goal: {self.current_goal}, WO: {self.active_work_order_id}, Load: {self.get_inventory_load()}/{self.max_inventory_items})")
+        build_wo_info = f", BuildWO: {self.active_build_order_id}" if self.active_build_order_id else ""
+        base_info = (f"Character(Name: {self.name}, Rank: {self.rank}, Job: {self.job}, Pos: ({self.x},{self.y}), Goal: {self.current_goal}, CraftWO: {self.active_work_order_id}{build_wo_info}, Load: {self.get_inventory_load()}/{self.max_inventory_items})")
         supervisor_info = f"  Supervisor: {self.supervisor_name if self.supervisor_name else 'None'}"
         subordinates_info = f"  Subordinates: {len(self.subordinates_names)}"
         performance_info = f"  Performance: {self.performance_rating} (Warnings: {self.warning_count}, Last Review: Day {self.last_performance_review_day if self.last_performance_review_day is not None else 'N/A'})"
@@ -89,6 +107,7 @@ class Character:
         elif dx < 0: norm_dx = -1
         if dy > 0: norm_dy = 1
         elif dy < 0: norm_dy = -1
+
         if norm_dx == 0 and norm_dy == 0: return
         if self.move(norm_dx, norm_dy, world): return
         if norm_dx != 0 and norm_dy != 0:
@@ -128,6 +147,7 @@ class Character:
     def job_default_goal(self) -> str:
         if self.job == "Woodcutter": return "Perform Woodcutter Duties"
         if self.job == "Stonemason": return "Perform Stonemason Duties"
+        if self.job == "Builder": return "Perform Builder Duties" # Added Builder job
         if self.job == "Master Craftsman": return "Assess Production Needs"
         if self.job == "Manager": return "Manage Subordinates" # Changed from "Manage Work Orders"
         if self.job == "Bookkeeper": return "Maintain Ledger"
@@ -238,10 +258,44 @@ class Character:
 
     def _execute_craft_order(self, world: 'World'):
         order = world.get_work_order_by_id(self.active_work_order_id)
-        if not order or order.status != "InProgress" or order.assigned_to != self.name : self._reset_crafting_state(); self.current_goal=self.job_default_goal() or "Idle"; return
-        item_name = order.details["item_name"]; item_qty_total = order.details["quantity"]; blueprint = BLUEPRINTS.get(item_name)
+        if not order or order.status != "InProgress" or order.assigned_to != self.name :
+            self._reset_crafting_state()
+            self.current_goal=self.job_default_goal() or "Idle"
+            return
+
+        item_name = order.details["item_name"]
+        item_qty_total = order.details["quantity"]
+        blueprint = BLUEPRINTS.get(item_name)
+
+        # If all items for the order are already crafted, transition to hauling or complete.
+        if self.items_crafted_for_wo:
+            if not self.hauling_info and self.inventory.get(item_name, 0) > 0: # Items are crafted and in inventory
+                self.hauling_info = {"resource":item_name, "quantity":self.inventory.get(item_name,0), "for_wo_id":order.order_id, "is_crafted_item":True}
+                self.current_goal = "Initiate Hauling"
+                print(f"DEBUG: {self.name} (already crafted {item_name} for WO {order.order_id}) -> Initiate Hauling. Inv: {self.inventory}")
+                self._execute_initiate_hauling(world) # Call directly
+                return
+            elif self.hauling_info is None and self.inventory.get(item_name, 0) == 0: # All items crafted AND already hauled
+                 order.status = "Completed"; self.add_memory(f"Completed/Stocked WO {order.order_id} ({item_name})."); print(f"{self.name} COMPLETED/STOCKED WO {order.order_id} ({item_name})."); self._reset_crafting_state(); self.current_goal = self.job_default_goal() or "Idle"; return
+            else:
+                # This case means items_crafted_for_wo is true, but either hauling_info is already set (so should be in a hauling goal)
+                # or item is not in inventory (which is an issue).
+                # If already hauling, this function shouldn't be called. If item missing, it's an error.
+                # For safety, if goal is still Execute Craft Order, try to re-initiate hauling.
+                if self.current_goal == "Execute Craft Order": # Stuck in this goal despite items crafted
+                    if self.inventory.get(item_name, 0) > 0 : # If item still there, try hauling again
+                         self.hauling_info = {"resource":item_name, "quantity":self.inventory.get(item_name,0), "for_wo_id":order.order_id, "is_crafted_item":True}
+                         self.current_goal = "Initiate Hauling"
+                         print(f"DEBUG: {self.name} (stuck in ExecuteCraftOrder with crafted items) -> Re-Initiate Hauling. Inv: {self.inventory}")
+                    else: # Items crafted but not in inventory, and not hauled. Problem.
+                         print(f"ERROR: {self.name} has items_crafted_for_wo for {item_name} but item not in inventory and not hauled.")
+                         order.status = "Denied"; order.denial_reason = "Crafted item disappeared before hauling."
+                         self._reset_crafting_state(); self.current_goal = "Idle"
+                return
+
+        # --- Material Gathering & Crafting (only if not self.items_crafted_for_wo) ---
         if not self.materials_gathered_for_wo:
-            all_mats_one_unit = True
+            all_mats_one_unit = True # Check for materials for ONE unit
             for res, req_qty_pu in blueprint["required_resources"].items():
                 if self.inventory.get(res, 0) < req_qty_pu:
                     all_mats_one_unit = False; self.resource_to_fetch = {"name": res, "quantity": req_qty_pu - self.inventory.get(res, 0), "for_wo_id": order.order_id}; break
@@ -249,9 +303,59 @@ class Character:
             else: self._execute_fetch_resource_for_wo(world, blueprint); return
         if self.resource_to_fetch: self._execute_fetch_resource_for_wo(world, blueprint); return
         if self.materials_gathered_for_wo and not self.items_crafted_for_wo:
-            if not self.workshop_location: self.workshop_location = (self.x, self.y)
-            if (self.x, self.y) != self.workshop_location: self.move_towards(self.workshop_location[0], self.workshop_location[1], world); return
+            if not self.workshop_location: # Default workshop location to current spot if not set
+                self.workshop_location = (self.x, self.y)
 
+            # Check for required workshop type
+            required_workshop_str = blueprint.get("required_workshop_type")
+            if required_workshop_str:
+                # Check if current workshop_location hosts an operational building of the required type
+                building_at_loc = world.get_building_at(self.workshop_location[0], self.workshop_location[1])
+                if not building_at_loc or not building_at_loc.is_operational or building_at_loc.structure_type != required_workshop_str:
+                    # Try to find a suitable workshop
+                    suitable_workshops = world.get_operational_buildings_of_type(required_workshop_str)
+                    if not suitable_workshops:
+                        self.add_memory(f"Cannot craft {item_name}: requires {required_workshop_str}, none available or operational.")
+                        print(f"{self.name} cannot craft {item_name}: no operational '{required_workshop_str}' found. WO {order.order_id} stalled.")
+                        # Potentially change WO status to Pending/Denied or character to Idle
+                        order.status = "Pending" # Re-queue
+                        order.assigned_to = None # Unassign
+                        self._reset_crafting_state()
+                        self.current_goal = "Idle"
+                        return
+
+                    # Found a suitable workshop, set it as new workshop_location
+                    # For simplicity, pick the first one. Could be closest, least crowded, etc. later.
+                    new_workshop = suitable_workshops[0]
+                    self.workshop_location = new_workshop.location
+                    # if self.name == "Carl_Crafter" and order and order.details.get("item_name") == "Iron Pickaxe": # DEBUG
+                    #     print(f"CARL_DEBUG_CRAFT_ORDER: self.workshop_location just set to {self.workshop_location} (actual new_workshop.location is {new_workshop.location}) inside _execute_craft_order / workshop finding block.")
+                    self.add_memory(f"Identified {new_workshop.display_name} at {new_workshop.location} for crafting {item_name}.")
+                    print(f"{self.name} needs to go to {new_workshop.display_name} at {new_workshop.location} for {item_name}.")
+
+            # Check if character is inside the designated workshop building
+            # self.workshop_location should point to the main location of the correct workshop building
+            target_workshop_building = None
+            if self.workshop_location: # Ensure workshop_location is set
+                 target_workshop_building = world.get_building_at(self.workshop_location[0], self.workshop_location[1])
+
+            # If a specific workshop building is required and the character is not inside it, move towards it.
+            # Also handles if target_workshop_building is None (e.g. self.workshop_location was None or pointed to empty space)
+            if required_workshop_str and (not target_workshop_building or target_workshop_building.structure_type != required_workshop_str or not target_workshop_building.is_inside(self.x, self.y)):
+                if self.workshop_location: # Should always be set if required_workshop_str is true and we passed earlier checks
+                    self.move_towards(self.workshop_location[0], self.workshop_location[1], world)
+                else: # Fallback, though should ideally not be reached if logic is correct
+                    print(f"ERROR: {self.name} needs workshop {required_workshop_str} but self.workshop_location is None.")
+                    self.current_goal = "Idle"
+                return
+            elif not required_workshop_str and (self.x, self.y) != self.workshop_location:
+                # No specific workshop type, but still move to the generic workshop_location if not there
+                # This handles crafting items that don't need a special building, done at current spot unless workshop_location was set differently
+                 self.move_towards(self.workshop_location[0], self.workshop_location[1], world)
+                 return
+
+
+            # Now at the (potentially required and verified) workshop location, or inside the required workshop building
             craft_time_per_unit = blueprint.get("craft_time_per_unit", 5)
 
             # --- Trait Effects on Crafting Progress ---
@@ -286,14 +390,24 @@ class Character:
                 self.inventory[item_name] = self.inventory.get(item_name, 0) + 1 ; self.add_memory(f"Crafted 1 {item_name} for WO {order.order_id}.")
                 print(f"{self.name} CRAFTED 1 {item_name}. Inv has: {self.inventory.get(item_name,0)}/{item_qty_total} for WO {order.order_id}.")
                 self.crafting_progress = 0; self.materials_gathered_for_wo = False
-                if self.inventory.get(item_name,0) >= item_qty_total: self.items_crafted_for_wo = True
-            return
-        if self.items_crafted_for_wo:
-            if not self.hauling_info and self.inventory.get(item_name, 0) > 0:
+                if self.inventory.get(item_name,0) >= item_qty_total:
+                    self.items_crafted_for_wo = True
+
+                # If items_crafted_for_wo just became true, don't return, fall through to hauling logic.
+                # Only return if still crafting (more quantity needed or not enough progress for current unit).
+                if not self.items_crafted_for_wo:
+                    return # Still crafting more units or current unit not finished.
+
+        if self.items_crafted_for_wo: # Check if all units for the WO are crafted
+            if not self.hauling_info and self.inventory.get(item_name, 0) > 0: # And items are in inventory
                 self.hauling_info = {"resource":item_name, "quantity":self.inventory.get(item_name,0), "for_wo_id":order.order_id, "is_crafted_item":True}
-                self.current_goal = "Initiate Hauling"; return
-            elif self.hauling_info is None and self.inventory.get(item_name, 0) == 0:
+                self.current_goal = "Initiate Hauling"
+                print(f"DEBUG: {self.name} finished crafting {item_name} for WO {order.order_id}, now needs to Haul. Inv: {self.inventory}")
+                self._execute_initiate_hauling(world) # Call directly
+                return
+            elif self.hauling_info is None and self.inventory.get(item_name, 0) == 0: # All items crafted AND hauled (inventory empty of this item)
                  order.status = "Completed"; self.add_memory(f"Completed/Stocked WO {order.order_id} ({item_name})."); print(f"{self.name} COMPLETED/STOCKED WO {order.order_id} ({item_name})."); self._reset_crafting_state(); self.current_goal = self.job_default_goal() or "Idle"; return
+            # If self.hauling_info is set, the character is already in hauling process, which is handled by other goals.
 
     def _execute_fetch_resource_for_wo(self, world:'World', blueprint:Dict):
         if not self.resource_to_fetch: return
@@ -321,46 +435,129 @@ class Character:
     def _execute_assess_production_needs(self, world: 'World'):
         if self.job != "Master Craftsman": self.current_goal = self.job_default_goal(); return
         item_processed_this_tick = False;
-        if not self.managed_item_targets: self.current_goal = "Idle"; return
-        target_item_names = list(self.managed_item_targets.keys())
-        if not target_item_names: self.current_goal = "Idle"; return
-        for i in range(len(target_item_names)):
-            current_idx = (self._mc_item_check_idx + i) % len(target_item_names)
-            item_name = target_item_names[current_idx]; target_qty = self.managed_item_targets[item_name]
-            last_ordered_day = self.order_cooldown.get(item_name, -ORDER_SPAM_PREVENTION_DAYS - 1)
-            if world.game_time.current_day - last_ordered_day < ORDER_SPAM_PREVENTION_DAYS: continue
-            pending_or_approved_count = 0; stock_from_ledger = world.ledger.get_total_resource_count(item_name)
-            for wo in world.work_orders:
-                if wo.details.get("item_name") == item_name and wo.status in ["Pending", "Approved", "InProgress"]:
-                    pending_or_approved_count += wo.details.get("quantity", 1)
-            effective_available = stock_from_ledger + pending_or_approved_count
-            if effective_available < target_qty:
-                blueprint = BLUEPRINTS.get(item_name);
-                if not blueprint: print(f"Error: MC {self.name} - No blueprint for {item_name}."); continue
-                qty_to_order = target_qty - effective_available
-                total_req_res_for_order = {res: qty * qty_to_order for res, qty in blueprint["required_resources"].items()}
-                order_details = {"item_name": item_name, "quantity": qty_to_order, "required_resources": total_req_res_for_order}
-                new_order = WorkOrder(order_type="CraftItem", details=order_details, creation_day=world.game_time.current_day, priority=2)
-                world.add_work_order(new_order); self.order_cooldown[item_name] = world.game_time.current_day
-                self.add_memory(f"Generated WO for {qty_to_order} {item_name}."); print(f"{self.name} (MC) generated WO for {qty_to_order} {item_name}(s).")
-                item_processed_this_tick = True; self._mc_item_check_idx = (current_idx + 1) % len(target_item_names); break
+
+        # Check for needed workshops first (e.g., if no small_workshop exists)
+        # This is a simplified check; could be more sophisticated based on game needs.
+        needed_structure_type = "small_workshop" # Example
+        if not world.get_operational_buildings_of_type(needed_structure_type) and \
+           not any(wo.order_type == "BuildStructure" and wo.details.get("structure_type") == needed_structure_type and wo.status in ["Pending", "Approved", "InProgress"] for wo in world.work_orders):
+
+            structure_bp = STRUCTURE_BLUEPRINTS.get(needed_structure_type)
+            if structure_bp:
+                # Find a suitable location (very basic: first available 3x2 space near MC)
+                # This location finding needs to be much better in a real scenario.
+                build_location = None
+                mc_x, mc_y = self.x, self.y
+                search_radius = 5
+                found_loc = False
+                for r in range(1, search_radius + 1):
+                    for dx_s in range(-r, r + 1):
+                        for dy_s in range(-r, r + 1):
+                            if abs(dx_s) + abs(dy_s) != r: continue # Only check perimeter of search square
+                            check_x, check_y = mc_x + dx_s, mc_y + dy_s
+
+                            # Check if area is clear for the building footprint
+                            can_place = True
+                            for bx_offset in range(structure_bp["size"][0]):
+                                for by_offset in range(structure_bp["size"][1]):
+                                    tile_to_check_x, tile_to_check_y = check_x + bx_offset, check_y + by_offset
+                                    if not (0 <= tile_to_check_x < world.grid_size[0] and 0 <= tile_to_check_y < world.grid_size[1]) or \
+                                       world.get_tile(tile_to_check_x, tile_to_check_y) not in ["Grass"] or \
+                                       world.get_building_at(tile_to_check_x, tile_to_check_y) is not None or \
+                                       world.get_characters_at_location(tile_to_check_x, tile_to_check_y): # Basic check
+                                        can_place = False; break
+                                if not can_place: break
+                            if can_place:
+                                build_location = (check_x, check_y)
+                                found_loc = True; break
+                        if found_loc: break
+                    if found_loc: break
+
+                if build_location:
+                    order_details = {
+                        "structure_type": needed_structure_type,
+                        "location": build_location,
+                        "required_resources": structure_bp["required_resources"],
+                        "size": structure_bp["size"], # For reference in WO
+                        "build_time": structure_bp["build_time"] # For reference
+                    }
+                    # Check resource availability (optional, manager might approve later)
+                    # For now, let MC queue it directly if location found.
+                    new_build_order = WorkOrder(order_type="BuildStructure", details=order_details, creation_day=world.game_time.current_day, priority=1) # High priority for essential buildings
+                    world.add_work_order(new_build_order)
+                    self.add_memory(f"Queued Build WO for {needed_structure_type} at {build_location}.")
+                    print(f"{self.name} (MC) queued Build WO for {needed_structure_type} at {build_location}.")
+                    item_processed_this_tick = True # Count this as an action for the tick
+                else:
+                    print(f"{self.name} (MC) wants to build {needed_structure_type} but couldn't find a suitable location near them.")
+            else:
+                print(f"Error: MC {self.name} - No blueprint for structure {needed_structure_type}.")
+
+        # Original logic for crafting item WOs
+        if not item_processed_this_tick and self.managed_item_targets:
+            target_item_names = list(self.managed_item_targets.keys())
+            if not target_item_names: self.current_goal = "Idle"; return # Should be caught by self.managed_item_targets check
+
+            for i in range(len(target_item_names)):
+                current_idx = (self._mc_item_check_idx + i) % len(target_item_names)
+                item_name = target_item_names[current_idx]; target_qty = self.managed_item_targets[item_name]
+                last_ordered_day = self.order_cooldown.get(item_name, -ORDER_SPAM_PREVENTION_DAYS - 1)
+                if world.game_time.current_day - last_ordered_day < ORDER_SPAM_PREVENTION_DAYS: continue
+
+                pending_or_approved_count = 0; stock_from_ledger = world.ledger.get_total_resource_count(item_name)
+                for wo in world.work_orders:
+                    if wo.order_type == "CraftItem" and wo.details.get("item_name") == item_name and wo.status in ["Pending", "Approved", "InProgress"]:
+                        pending_or_approved_count += wo.details.get("quantity", 1)
+
+                effective_available = stock_from_ledger + pending_or_approved_count
+                if effective_available < target_qty:
+                    blueprint = BLUEPRINTS.get(item_name);
+                    if not blueprint: print(f"Error: MC {self.name} - No blueprint for {item_name}."); continue
+                    qty_to_order = target_qty - effective_available
+                    total_req_res_for_order = {res: qty * qty_to_order for res, qty in blueprint["required_resources"].items()}
+                    order_details = {"item_name": item_name, "quantity": qty_to_order, "required_resources": total_req_res_for_order}
+                    new_order = WorkOrder(order_type="CraftItem", details=order_details, creation_day=world.game_time.current_day, priority=2)
+                    world.add_work_order(new_order); self.order_cooldown[item_name] = world.game_time.current_day
+                    self.add_memory(f"Generated Craft WO for {qty_to_order} {item_name}."); print(f"{self.name} (MC) generated Craft WO for {qty_to_order} {item_name}(s).")
+                    item_processed_this_tick = True; self._mc_item_check_idx = (current_idx + 1) % len(target_item_names); break
+
         if not item_processed_this_tick: self.current_goal = "Idle"; self._mc_item_check_idx = 0
+
 
     # Renamed from _execute_manage_work_orders to _execute_manage_subordinates
     def _execute_manage_subordinates(self, world: 'World'):
-        if not (self.job == "Manager" or self.rank in ["Noble Lord", "Baron"]) or not self.subordinates_names:
-            self.current_goal = self.job_default_goal(); return # Not a manager or no one to manage
+        # A character must have the "Manager" job or be a managing rank to perform these duties.
+        is_eligible_manager = self.job == "Manager" or self.rank in ["Noble Lord", "Baron"]
+        if not is_eligible_manager:
+            self.current_goal = self.job_default_goal() or "Idle"
+            return
 
-        # Prioritize managing work orders if also a Manager (dual role)
-        if self.job == "Manager":
-            self._execute_manage_work_orders_as_part_of_supervision(world) # A new helper for this
-            # After potentially handling a WO, proceed to subordinate management unless an action was taken that changes goal
+        # Manager-specific task: Process Work Orders
+        if self.job == "Manager": # Only those with the actual "Manager" job process WOs this way for now
+            self._execute_manage_work_orders_as_part_of_supervision(world)
+            # If _execute_manage_work_orders_as_part_of_supervision took an action that changed the goal or returned, respect that.
+            # For now, assume it might have processed one, and we can continue to subordinate mgmt if applicable.
+            # A more robust system might have these as separate exclusive actions per tick.
 
-        if not world.game_time: return # Need game time for reviews
+        # Subordinate Management (if character has subordinates)
+        if not self.subordinates_names:
+            if self.job == "Manager": # If a manager has no subordinates, and processed WOs, they can idle.
+                self.current_goal = "Idle" # Or a new goal like "Recruit Subordinates"
+            # If a Noble Lord without subordinates, they might do other things or just idle.
+            # If current_goal wasn't changed by WO management, and no subs, then idle.
+            # This 'Idle' might be premature if WO management is supposed to be the primary action for a tick.
+            # Let's assume for now a manager tries to manage WOs *and then* if they have time/no subs, they might idle.
+            # The goal setting to Idle at the end of this function will handle it if no other action is taken.
+            pass # Continue, might just idle if no other actions taken by WO mgmt
 
-        # Iterate through subordinates for potential actions
-        # Simple approach: one management action per 'Manage Subordinates' cycle to avoid spamming actions
-        # More sophisticated: a priority queue of management tasks
+        if not world.game_time: return # Need game time for reviews (relevant for subordinate part)
+
+        # If no subordinates, the loop below won't run.
+        # The manager might have already processed a WO.
+        # If they did, their goal might be "Idle" from that function or they continue.
+        # If they didn't process a WO and have no subordinates, they will fall through to Idle at the end.
+
+        action_taken_this_cycle = False # Track if a subordinate management action occurred
 
         for sub_name in self.subordinates_names:
             subordinate: Optional['Character'] = None
@@ -448,11 +645,16 @@ class Character:
         # It's called if the character is a Manager AND is in "Manage Subordinates" goal.
         # This allows a manager to still do their primary job of managing WOs.
         pending_orders = world.get_pending_work_orders()
+        print(f"DEBUG: {self.name} (Manager) checking pending_orders. Count: {len(pending_orders)}") # DEBUG
         if not pending_orders: return # No orders to manage, main function will continue to subordinate mgmt
 
-        order_to_process = pending_orders[0]; can_approve = True; missing_notes = []; stale_concerns = False
+        order_to_process = pending_orders[0]
+        print(f"DEBUG: {self.name} (Manager) processing order: {order_to_process.order_id} ({order_to_process.order_type} for {order_to_process.details.get('item_name') or order_to_process.details.get('structure_type')})") # DEBUG
+
+        can_approve = True; missing_notes = []; stale_concerns = False
         req_res = order_to_process.details.get("required_resources", {})
         if req_res:
+            print(f"DEBUG: {self.name} (Manager) checking resources for {order_to_process.order_id}: {req_res}") # DEBUG
             for resource, req_qty in req_res.items():
                 avail = world.ledger.get_total_resource_count(resource)
                 for sp_name_key in world.ledger.records.get(resource, {}).keys():
@@ -518,14 +720,43 @@ class Character:
         elif inv_val < quota: self.current_goal = "Gather Stone"
         else: self.current_goal = "Initiate Hauling"; self.hauling_info = {"resource": "Stone"}
         if self.current_goal != "Perform Stonemason Duties": self.decide_action(world)
+
     def _execute_initiate_hauling(self, world: 'World'):
-        if not self.hauling_info: self.current_goal=self.job_default_goal() or "Idle"; return
+        print(f"DEBUG_HAUL_INIT: {self.name} starting _execute_initiate_hauling. Hauling info: {self.hauling_info}") # DEBUG
+        if not self.hauling_info:
+            print(f"DEBUG_HAUL_INIT: {self.name} no hauling info. Goal to default/Idle.") # DEBUG
+            self.current_goal=self.job_default_goal() or "Idle"; return
         res=self.hauling_info.get("resource")
-        if not res or self.inventory.get(res,0)==0:self.current_goal=self.job_default_goal() or "Idle";self.hauling_info=None;self.decide_action(world);return
-        qty=self.inventory.get(res,0);sps=[s_obj for s_obj in world.get_stockpiles_for_resource(res)if s_obj.has_space_for(res,1)]
-        if not sps:self.current_goal="Wander"; return
-        sp_chosen=sps[0];self.hauling_info["target_stockpile_name"]=sp_chosen.name;self.hauling_info["quantity_to_haul"]=qty
-        self.current_goal="Haul Resource to Stockpile";self.decide_action(world)
+        print(f"DEBUG_HAUL_INIT: {self.name} hauling resource: {res}") # DEBUG
+        if not res or self.inventory.get(res,0)==0:
+            print(f"DEBUG_HAUL_INIT: {self.name} resource {res} not in inventory or no res. Goal to default/Idle. Inv: {self.inventory}") # DEBUG
+            self.current_goal=self.job_default_goal() or "Idle";self.hauling_info=None; return # Removed decide_action(world)
+
+        qty=self.inventory.get(res,0)
+        # Get stockpiles that allow the resource AND have space for the quantity being hauled
+        sps=[s_obj for s_obj in world.stockpiles if s_obj.is_allowed(res) and s_obj.has_space_for(res,qty)]
+        print(f"DEBUG_HAUL_INIT: {self.name} looking for stockpile for {qty} {res}. Initial sps count: {len(sps)}. SPs: {[s.name for s in sps]}") # DEBUG
+
+        if not sps:
+            # If it's a tool and no specific stockpile was found, try the ToolShed explicitly if it allows it.
+            if BLUEPRINTS.get(res, {}).get("type") == "Tool":
+                print(f"DEBUG_HAUL_INIT: {res} is a tool. Explicitly checking ToolShed.") # DEBUG
+                tool_shed = world.get_stockpile_by_name("ToolShed")
+                if tool_shed and tool_shed.is_allowed(res) and tool_shed.has_space_for(res,qty):
+                    sps = [tool_shed]
+                    print(f"DEBUG_HAUL_INIT: Found ToolShed for {res}.") # DEBUG
+
+            if not sps: # Still no stockpile after checking specific + ToolShed fallback
+                print(f"{self.name} wants to haul {qty} {res} but no suitable stockpile found. Will Wander.")
+                self.current_goal="Wander"; return
+
+        sp_chosen=sps[0] # Could be more sophisticated in choosing (e.g. closest, most space)
+        self.hauling_info["target_stockpile_name"]=sp_chosen.name
+        self.hauling_info["quantity_to_haul"]=qty
+        self.current_goal="Haul Resource to Stockpile"
+        print(f"DEBUG_HAUL_INIT: {self.name} chose stockpile {sp_chosen.name} for {qty} {res}. Goal set to: {self.current_goal}") # DEBUG
+        # self.decide_action(world) # Not needed here, current_goal change is enough for next tick
+
     def _execute_haul_resource(self, world: 'World'):
         if not self.hauling_info: self.current_goal = self.job_default_goal() or "Idle"; return
         sp_name=self.hauling_info.get("target_stockpile_name");res=self.hauling_info.get("resource")
@@ -613,40 +844,101 @@ class Character:
         can_look_for_wo = self.current_goal in [None, "Idle", "Wander"] or \
                           (self.job in ["Master Craftsman", "Expedition Leader", "Manager"] and self.current_goal in ["Assess Production Needs", "Oversee Expedition", "Manage Work Orders", "Idle", None])
 
-        if can_look_for_wo and not self.active_work_order_id:
-            if self.skills:
-                approved_orders = world.get_approved_craft_orders()
-                if approved_orders:
-                    for order in approved_orders:
-                        if order.assigned_to is None:
+        if can_look_for_wo and not self.active_work_order_id and not self.active_build_order_id: # Ensure no active build order either
+            # Try to claim a CRAFT order first
+            if self.skills: # Character needs some skills to take on craft orders
+                approved_craft_orders = world.get_approved_craft_orders()
+                if approved_craft_orders:
+                    for order in approved_craft_orders:
+                        if order.assigned_to is None: # Unassigned
                             item_name = order.details.get("item_name")
                             if item_name and item_name in BLUEPRINTS:
-                                required_skill = BLUEPRINTS[item_name].get("job_skill_needed")
-                                if required_skill and self.skills.get(required_skill, 0) > 0:
+                                required_skill_type = BLUEPRINTS[item_name].get("job_skill_needed") # e.g. "Carpentry"
+                                if required_skill_type and self.skills.get(required_skill_type, 0) > 0:
                                     order.status = "InProgress"; order.assigned_to = self.name
                                     self._reset_crafting_state(); self.active_work_order_id = order.order_id
                                     self.current_goal = "Execute Craft Order"; self.workshop_location = (self.x, self.y)
-                                    self.add_memory(f"Claimed WO {order.order_id} for {item_name}.")
-                                    print(f"{self.name} CLAIMED Work Order {order.order_id} ({item_name}) skill: {required_skill}.")
-                                    self._execute_craft_order(world); return  # Start immediately
+                                    self.add_memory(f"Claimed Craft WO {order.order_id} for {item_name}.")
+                                    print(f"{self.name} CLAIMED Craft Work Order {order.order_id} ({item_name}) skill: {required_skill_type}.")
+                                    self._execute_craft_order(world); return # IMPORTANT: return after claiming and starting
 
-        # 3. Job-Specific Goal Setting if idle/wandering and no WO was claimed
-        if self.current_goal in [None, "Idle", "Wander"]:
-            self.current_goal = self.job_default_goal()
+            # If no CRAFT order was claimed, try to claim a BUILD order
+            if not self.active_work_order_id and not self.active_build_order_id: # Re-check, as craft order might have been taken
+                if self.job == "Builder" or self.skills.get("Construction", 0) > 0:
+                    build_orders = world.get_approved_build_orders() # Use the new method
+
+                    if build_orders:
+                        order_to_take = build_orders[0]
+                        structure_bp_name = order_to_take.details.get("structure_type")
+                        if structure_bp_name and structure_bp_name in STRUCTURE_BLUEPRINTS: # Use direct import
+                            bp = STRUCTURE_BLUEPRINTS[structure_bp_name]
+                        req_skill_dict = bp.get("required_skill", {})
+                        can_build = True
+                        if req_skill_dict:
+                            for skill_name, level_needed in req_skill_dict.items():
+                                if self.skills.get(skill_name, 0) < level_needed:
+                                    can_build = False; break
+
+                        if can_build:
+                            order_to_take.status = "InProgress"; order_to_take.assigned_to = self.name
+                            self._reset_building_state(); self.active_build_order_id = order_to_take.order_id
+                            self.current_building_project = structure_bp_name
+                            self.building_site_target = order_to_take.details.get("location")
+                            self.current_goal = "Execute Build Order"
+                            self.add_memory(f"Claimed Build WO {order_to_take.order_id} for {structure_bp_name} at {self.building_site_target}.")
+                            print(f"{self.name} CLAIMED Build Work Order {order_to_take.order_id} ({structure_bp_name} at {self.building_site_target}).")
+                            self._execute_build_order(world); return # Start immediately
+
+
+        # 3. Check for Needs-Driven Goals (like Socializing)
+        # This should come before falling back to default job goal if idle.
+        if self.current_goal in [None, "Idle", "Wander"] and not self.active_work_order_id and not self.active_build_order_id:
+            # Check Social Need
+            social_need_threshold = 20 # Example threshold
+            if self.needs.get("Social", 50) < social_need_threshold:
+                # Trait influences on deciding to socialize
+                can_socialize_based_on_trait = True
+                if "Loner" in self.traits:
+                    if random.random() < 0.75: # 75% chance a Loner will NOT socialize even if need is low
+                        can_socialize_based_on_trait = False
+
+                if can_socialize_based_on_trait:
+                    # Higher chance for Outgoing characters if their need isn't critically low yet
+                    if "Outgoing" in self.traits and self.needs.get("Social", 50) < (social_need_threshold + 15):
+                         if random.random() < 0.5: # 50% chance for Outgoing to socialize a bit earlier
+                            self.current_goal = "Socialize"
+                            # self.decide_action(world) # Re-evaluate to execute Socialize
+                            # No, don't recurse here. Let the main goal execution part handle it.
+                    elif "Outgoing" not in self.traits or random.random() < 0.2: # Non-outgoing or less chance for outgoing if need not critical
+                        self.current_goal = "Socialize"
+
+            # If Socialize wasn't chosen, then fall back to job default goal
+            if not self.current_goal or self.current_goal in [None, "Idle", "Wander"]: # Check if goal was set to Socialize
+                 self.current_goal = self.job_default_goal()
+
 
         # 4. Execute Current Goal
+        # Handle multi-tick goals that were set directly (like Execute Build/Craft Order)
+        if self.current_goal == "Execute Craft Order" and self.active_work_order_id: # Already handled at top
+            pass # self._execute_craft_order(world) was called if this was just set
+        elif self.current_goal == "Execute Build Order" and self.active_build_order_id:
+            self._execute_build_order(world); return
+
+
         if self.current_goal == "Assess Production Needs": self._execute_assess_production_needs(world); return
-        elif self.current_goal == "Manage Subordinates": self._execute_manage_subordinates(world); return # New
-        elif self.current_goal == "Manage Work Orders": self._execute_manage_work_orders_as_part_of_supervision(world); return # Retain for direct WO management if ever set
+        elif self.current_goal == "Manage Subordinates": self._execute_manage_subordinates(world); return
+        elif self.current_goal == "Manage Work Orders": self._execute_manage_work_orders_as_part_of_supervision(world); return
         elif self.current_goal == "Maintain Ledger": self._execute_maintain_ledger(world); return
         elif self.current_goal == "Count Stockpile": self._execute_count_stockpile(world); return
         elif self.current_goal == "Perform Woodcutter Duties": self._execute_perform_woodcutter_duties(world); return
         elif self.current_goal == "Perform Stonemason Duties": self._execute_perform_stonemason_duties(world); return
+        elif self.current_goal == "Perform Builder Duties": self._execute_perform_builder_duties(world); return # New
         elif self.current_goal == "Initiate Hauling": self._execute_initiate_hauling(world); return
         elif self.current_goal == "Haul Resource to Stockpile": self._execute_haul_resource(world); return
         elif self.current_goal == "Gather Wood": self._execute_gather_wood(world); return
         elif self.current_goal == "Gather Stone": self._execute_gather_stone(world); return
         elif self.current_goal == "Oversee Expedition": self._execute_oversee_expedition(world); return
+        elif self.current_goal == "Socialize": self._execute_socialize(world); return
 
         # 5. Fallback to Wander/Idle
         if self.current_goal is None or self.current_goal == "Idle":
@@ -659,6 +951,435 @@ class Character:
         # print(f"Warning: {self.name} has unhandled goal '{self.current_goal}'. Setting to Idle.")
         # self.current_goal = "Idle"
         return
+
+    def _execute_socialize(self, world: 'World'):
+        task_def = JOB_TASK_DEFINITIONS.get("Socialize")
+        if not task_def:
+            print(f"CRITICAL: 'Socialize' task definition not found for {self.name}.")
+            self.current_goal = "Idle"; return
+
+        socialize_duration = task_def.get("base_time_per_yield", 5)
+
+        # Targeting Logic (Simplified for now)
+        if not hasattr(self, 'socialize_target_name') or not self.socialize_target_name:
+            potential_targets = []
+            for char in world.characters:
+                if char.name == self.name: continue
+                # Basic proximity check (e.g., within 5 tiles)
+                if abs(char.x - self.x) + abs(char.y - self.y) <= 5:
+                    # Avoid targeting those with very poor relationships, unless specific traits dictate otherwise (e.g. "Confrontational")
+                    if self.get_relationship_score(char.name) > -75: # Example threshold
+                        potential_targets.append(char)
+
+            if not potential_targets:
+                self.add_memory("Wanted to socialize, but no one suitable was nearby.")
+                self.current_goal = "Idle" # Or Wander
+                # Consider a small penalty to social need for failed attempt
+                self.needs["Social"] = max(0, self.needs.get("Social", 50) - 2)
+                return
+
+            # Pick a target (e.g., random, or closest, or best relationship)
+            # For now, random among suitable.
+            target_char = random.choice(potential_targets)
+            self.socialize_target_name = target_char.name
+            self.socialize_target_location = (target_char.x, target_char.y) # Store initial target loc
+            self.task_work_progress = 0 # Reset progress for new interaction
+            self.add_memory(f"Decided to try and socialize with {self.socialize_target_name}.")
+            print(f"{self.name} is attempting to socialize with {self.socialize_target_name}.")
+
+        # Ensure target still exists and is valid
+        target_character_obj = None
+        for char_obj_check in world.characters:
+            if char_obj_check.name == self.socialize_target_name:
+                target_character_obj = char_obj_check
+                break
+
+        if not target_character_obj:
+            self.add_memory(f"Target {self.socialize_target_name} for socialization is no longer available.")
+            self.current_goal = "Idle"
+            self.socialize_target_name = None
+            self.task_work_progress = 0
+            return
+
+        # Movement: Move towards target if not adjacent (or on same tile)
+        # Using a simple adjacency check for interaction
+        if abs(self.x - target_character_obj.x) + abs(self.y - target_character_obj.y) > 1 : # Not adjacent or same tile
+            # Update target location if they moved
+            self.socialize_target_location = (target_character_obj.x, target_character_obj.y)
+            self.move_towards(self.socialize_target_location[0], self.socialize_target_location[1], world)
+            # Check if target moved too far or became invalid during approach
+            if abs(self.x - target_character_obj.x) + abs(self.y - target_character_obj.y) > 7: # Target moved too far
+                 self.add_memory(f"{self.socialize_target_name} moved too far away to socialize.")
+                 self.current_goal = "Idle"; self.socialize_target_name = None; self.task_work_progress = 0; return
+            return # Still moving
+
+        # Interaction Phase (once adjacent or on same tile)
+        # print(f"DEBUG: {self.name} is now close enough to {target_character_obj.name} to socialize. Progress: {self.task_work_progress}/{socialize_duration}")
+        self.task_work_progress += 1
+
+        if self.task_work_progress >= socialize_duration:
+            # --- Determine Interaction Outcome ---
+            base_change_initiator = random.randint(1, 3)
+            base_change_target = random.randint(0, 2)
+
+            # Initiator's trait effects
+            if "Friendly" in self.traits: base_change_initiator += 2
+            if "Grumpy" in self.traits: base_change_initiator -= 2
+            if "Charismatic" in self.traits: base_change_initiator = int(base_change_initiator * 1.5)
+
+            # Target's trait effects on how they perceive initiator
+            if "Friendly" in target_character_obj.traits: base_change_initiator += 1 # They are more receptive
+            if "Grumpy" in target_character_obj.traits: base_change_initiator -= 1 # They are less receptive
+
+            # Existing relationship influence
+            initiator_rel_to_target = self.get_relationship_score(target_character_obj.name)
+            if initiator_rel_to_target > 50: base_change_initiator += 2
+            elif initiator_rel_to_target < -50: base_change_initiator -= 5 # High chance of bad outcome
+
+            # Modify relationships
+            interaction_description = "a neutral chat"
+            if base_change_initiator > 3: interaction_description = "a pleasant chat"
+            elif base_change_initiator < 0: interaction_description = "an awkward/tense interaction"
+
+            self.modify_relationship(target_character_obj.name, base_change_initiator, world, reason=f"Had {interaction_description} with them.")
+            # Target's perception of the interaction (could be different)
+            # For simplicity now, let's make target's change a fraction of initiator's, influenced by their own traits
+            target_rel_change = base_change_target
+            if "Grumpy" in target_character_obj.traits: target_rel_change -=1
+            if "Friendly" in target_character_obj.traits: target_rel_change +=1
+            if self.get_relationship_score(target_character_obj.name) < -50 : target_rel_change -=2 # If target dislikes initiator a lot
+
+            target_character_obj.modify_relationship(self.name, target_rel_change, world, reason=f"They had {interaction_description} with me.")
+
+            # Memories
+            self.add_memory(f"Socialized with {target_character_obj.name}. It was {interaction_description}.")
+            target_character_obj.add_memory(f"{self.name} socialized with me. It was {interaction_description}.")
+            print(f"{self.name} finished socializing with {target_character_obj.name}. Rel change for {self.name}: {base_change_initiator}, for {target_character_obj.name}: {target_rel_change}")
+
+            # Update Social Need
+            self.needs["Social"] = min(100, self.needs.get("Social", 50) + random.randint(15, 30)) # Significant boost
+            target_character_obj.needs["Social"] = min(100, target_character_obj.needs.get("Social", 50) + random.randint(10, 20))
+
+            # Dialogue Snippets
+            dialogue_context_key = "social_chat_neutral" # Default
+            if base_change_initiator > 3: dialogue_context_key = "social_chat_positive"
+            elif base_change_initiator < 0: dialogue_context_key = "social_chat_negative"
+
+            if config.USE_LLM:
+                # Initiator's perspective/utterance
+                initiator_dialogue = generate_dialogue(self.name, target_character_obj.name, f"{dialogue_context_key}_initiator", world, self.personality, self.traits, target_character_obj.personality, target_character_obj.traits, initiator_rel_to_target)
+                self.add_memory(f"Said to {target_character_obj.name}: \"{initiator_dialogue}\"")
+                target_character_obj.add_memory(f"Heard from {self.name}: \"{initiator_dialogue}\"")
+
+                # Target's perspective/response (could be a separate call or inferred)
+                # For simplicity, let's assume a brief response could also be generated or templated
+                # target_response = generate_dialogue(target_character_obj.name, self.name, f"{dialogue_context_key}_target_response", world, ...)
+                # target_character_obj.add_memory(f"Replied to {self.name}: \"{target_response}\"")
+                # self.add_memory(f"Heard from {target_character_obj.name}: \"{target_response}\"")
+            else:
+                # Simple template if LLM is off
+                placeholder_dialogue = f"Exchanged pleasantries with {target_character_obj.name}."
+                if dialogue_context_key == "social_chat_negative":
+                    placeholder_dialogue = f"Had a tense exchange with {target_character_obj.name}."
+                elif dialogue_context_key == "social_chat_positive":
+                    placeholder_dialogue = f"Had a nice chat with {target_character_obj.name}."
+                self.add_memory(f"[LLM Off] {placeholder_dialogue}")
+                target_character_obj.add_memory(f"[LLM Off] {placeholder_dialogue}")
+
+
+            # Reset for next potential socialization
+            self.current_goal = "Idle" # Or back to job_default_goal
+            self.socialize_target_name = None
+            self.task_work_progress = 0
+        else:
+            # Interaction ongoing, check if target is still valid and willing
+            if abs(self.x - target_character_obj.x) + abs(self.y - target_character_obj.y) > 2 or \
+               (target_character_obj.current_goal not in ["Socialize", "Idle", "Wander", None] and not target_character_obj.active_work_order_id): # Target moved or got busy
+                self.add_memory(f"Social interaction with {self.socialize_target_name} was cut short.")
+                print(f"{self.name}'s social interaction with {self.socialize_target_name} cut short.")
+                self.current_goal = "Idle"
+                self.socialize_target_name = None
+                self.task_work_progress = 0
+                # Smaller social need recovery for incomplete interaction
+                self.needs["Social"] = min(100, self.needs.get("Social", 50) + random.randint(1,5))
+
+
+    def _execute_perform_builder_duties(self, world: 'World'):
+        if self.job != "Builder" and self.skills.get("Construction", 0) == 0 : # Must be a builder or have construction skill
+            self.current_goal = self.job_default_goal() or "Idle"
+            return
+
+        if not self.active_build_order_id:
+            # Try to claim a build order (logic is already in decide_action, so this might just set to Idle if none found)
+            # For now, if no active order, let decide_action try to pick one up next tick or set to Idle.
+            # If we want proactive searching, it would mirror the logic in decide_action's WO claiming section.
+            self.current_goal = "Idle" # Will re-evaluate in decide_action
+            return
+        else: # Has an active build order
+            self.current_goal = "Execute Build Order"
+            # self.decide_action(world) # Let main loop call _execute_build_order
+
+    def _execute_fetch_resource_for_build(self, world: 'World'):
+        if not self.resource_to_fetch:
+            # This case should ideally be handled by the caller ensuring resource_to_fetch is set.
+            # If it's None, it means we believe we have this item, or can't get it.
+            return
+
+        res_name = self.resource_to_fetch["name"]
+        # Quantity in self.resource_to_fetch is the *remaining amount needed for this resource type for the project*
+        quantity_needed_for_project_for_this_type = self.resource_to_fetch["quantity"]
+
+        if quantity_needed_for_project_for_this_type <= 0: # Already gathered enough of this type
+            self.resource_to_fetch = None
+            return
+
+        # Determine stockpile
+        target_sp_name = self.resource_to_fetch.get("target_stockpile_name")
+        sp_to_fetch = world.get_stockpile_by_name(target_sp_name) if target_sp_name else None
+
+        if not sp_to_fetch or sp_to_fetch.inventory.get(res_name, 0) == 0:
+            # Find a new stockpile if current one is invalid or empty for this resource
+            suitable_sps = [sp for sp in world.get_stockpiles_for_resource(res_name) if sp.inventory.get(res_name, 0) > 0]
+            if not suitable_sps:
+                print(f"{self.name} needs {res_name} for building, but none in any stockpiles. Waiting.")
+                # Don't clear resource_to_fetch, still need it. Character will pause.
+                return
+            sp_to_fetch = suitable_sps[0]
+            self.resource_to_fetch["target_stockpile_name"] = sp_to_fetch.name
+
+        # Move to stockpile
+        spot = (sp_to_fetch.rect[0], sp_to_fetch.rect[1])
+        if (self.x, self.y) != spot:
+            self.move_towards(spot[0], spot[1], world)
+            return
+
+        # At stockpile: try to take items
+        max_can_carry_this_trip = self.max_inventory_items - self.get_inventory_load()
+
+        # How much to take: minimum of what's needed for this type for project, what's available in SP, and what char can carry now
+        qty_to_attempt_take = min(quantity_needed_for_project_for_this_type,
+                                  sp_to_fetch.inventory.get(res_name,0),
+                                  max_can_carry_this_trip)
+
+        if qty_to_attempt_take <= 0:
+            # Cannot take any. Either full, or SP is empty for this item (should have been caught earlier unless race condition).
+            # If full (max_can_carry_this_trip == 0), the main build logic should transition to going to site.
+            # For now, this function's job is done for this tick if it can't pick up.
+            # The self.resource_to_fetch remains, indicating the need is still there.
+            return
+
+        s, qty_taken = sp_to_fetch.remove_item(res_name, qty_to_attempt_take)
+        if s and qty_taken > 0:
+            self.inventory[res_name] = self.inventory.get(res_name, 0) + qty_taken
+            self.add_memory(f"Fetched {qty_taken} {res_name} from {sp_to_fetch.name} for building.")
+
+            # Reduce the overall remaining quantity needed for this resource type
+            self.resource_to_fetch["quantity"] -= qty_taken
+            if self.resource_to_fetch["quantity"] <= 0:
+                self.resource_to_fetch = None # All of this specific resource type has been gathered for the project
+        # If failed to take or took 0, self.resource_to_fetch remains, will retry or be re-evaluated.
+
+
+    def _execute_build_order(self, world: 'World'):
+        current_time_str = str(world.game_time.current_total_ticks) if world.game_time else "N/A_TIME"
+        print(f"TOP_DEBUG {self.name} tick {current_time_str}: Goal='{self.current_goal}', BuildWO='{self.active_build_order_id}', Pos:({self.x},{self.y}), TargetSite:{self.building_site_target}, MatsGathered:{self.materials_gathered_for_build}, InvLoad:{self.get_inventory_load()}/{self.max_inventory_items}, ResToFetch:{self.resource_to_fetch}")
+
+        if not self.active_build_order_id or not self.current_building_project or not self.building_site_target:
+            self._reset_building_state(); self.current_goal = self.job_default_goal() or "Idle"; return
+
+        order = world.get_work_order_by_id(self.active_build_order_id)
+        if not order or order.status != "InProgress" or order.assigned_to != self.name:
+            self._reset_building_state(); self.current_goal = self.job_default_goal() or "Idle"; return
+
+        structure_blueprint_name = order.details["structure_type"]
+        structure_bp = STRUCTURE_BLUEPRINTS.get(structure_blueprint_name)
+        if not structure_bp:
+            print(f"Error: Unknown structure blueprint {structure_blueprint_name} for WO {order.order_id}.")
+            order.status = "Denied"; order.denial_reason = f"Unknown structure blueprint {structure_blueprint_name}"
+            self._reset_building_state(); self.current_goal = "Idle"; return
+
+        required_resources_total = structure_bp["required_resources"]
+
+        # 1. Material Gathering Phase
+        if not self.materials_gathered_for_build:
+            # A. Are we currently trying to fetch something specific?
+            if self.resource_to_fetch:
+                # If inventory is full, stop fetching this specific item for now and allow logic to proceed.
+                # This might mean going to the site if other conditions determine that.
+                if self.get_inventory_load() >= self.max_inventory_items:
+                    # print(f"DEBUG: {self.name} is full while self.resource_to_fetch is {self.resource_to_fetch['name']}. Clearing to allow site move.")
+                    self.resource_to_fetch = None
+                    # Fall through to re-evaluate overall needs / decide to move to site
+                else:
+                    self._execute_fetch_resource_for_build(world) # Try to fetch
+                    # If still actively fetching (e.g., moving to SP, or got some but not all of this type needed yet and not full)
+                    if self.resource_to_fetch and self.resource_to_fetch.get("name"):
+                        return # Continue fetching next tick
+                    # If self.resource_to_fetch is None here, it means all of *this type* is gathered. Fall through to check overall.
+
+            # B. Determine if all project materials are gathered, or what to fetch next.
+            # This block is reached if not initially fetching OR finished fetching one type OR was full and cleared self.resource_to_fetch.
+            all_project_materials_in_inventory = True
+            resource_type_to_target_next = None
+
+            for res, total_qty_needed in required_resources_total.items():
+                if self.inventory.get(res, 0) < total_qty_needed:
+                    all_project_materials_in_inventory = False
+                    resource_type_to_target_next = res # This is the next type we need to get
+                    break
+
+            if all_project_materials_in_inventory:
+                self.materials_gathered_for_build = True
+                self.resource_to_fetch = None # Ensure cleared
+                print(f"{self.name} has all materials ({self.inventory}) for {structure_blueprint_name} for WO {order.order_id}.")
+                # Fall through to site movement & work phase
+            elif resource_type_to_target_next:
+                # We need more of 'resource_type_to_target_next'.
+                # If inventory is already full, we must go to site (fall through to Phase 2).
+                if self.get_inventory_load() < self.max_inventory_items:
+                    # Not full, so set up to fetch this next resource type.
+                    # print(f"DEBUG: {self.name} needs {resource_type_to_target_next}, inventory not full. Setting fetch target.")
+                    self.resource_to_fetch = {
+                        "name": resource_type_to_target_next,
+                        "quantity": required_resources_total[resource_type_to_target_next] - self.inventory.get(resource_type_to_target_next, 0),
+                        "for_wo_id": order.order_id, "target_type": "build"
+                    }
+                    self._execute_fetch_resource_for_build(world) # Start/continue fetching it
+                    return # Done for this tick, fetching in progress.
+                # else: Inventory is full. Fall through to Phase 2 (Go to Build Site).
+                # print(f"DEBUG: {self.name} needs {resource_type_to_target_next}, but inventory IS full. Will fall through to move to site.")
+            else:
+                # This state implies not all materials are gathered, but no specific next one was identified.
+                # This could happen if required_resources_total is empty, or some logic error.
+                # Or, if all_project_materials_in_inventory was false but the loop didn't find a specific missing item.
+                print(f"Warning: {self.name} in build order ({order.order_id}), materials_gathered_for_build is False, but no specific next resource identified. Inventory: {self.inventory}. Required: {required_resources_total}")
+                # To prevent loops, if we are in this ambiguous state, and inventory is not empty, try going to site.
+                if self.get_inventory_load() > 0:
+                    pass # Fall through to attempt moving to site
+                else: # No materials and stuck, probably idle.
+                    self.current_goal = "Idle"
+                    return
+
+        # Phase 2: Go to Build Site
+        # Ensure world.game_time is available before trying to access current_total_ticks
+        current_time_str_phase2 = "N/A_TIME_P2"
+        if world.game_time:
+            current_time_str_phase2 = str(world.game_time.current_total_ticks)
+        print(f"PRINT_DEBUG: {self.name} tick {current_time_str_phase2}: Trying Phase 2. Pos:({self.x},{self.y}) Target:{self.building_site_target} FullInv:{self.get_inventory_load() >= self.max_inventory_items} MatsGathered:{self.materials_gathered_for_build} ResToFetch:{self.resource_to_fetch}")
+
+        if (self.x, self.y) != self.building_site_target:
+            self.move_towards(self.building_site_target[0], self.building_site_target[1], world)
+            return
+
+        # Phase 3: At Build Site: Find or Create Building Object & Work
+        target_building: Optional[Building] = None
+        for b in world.buildings: # Try to find existing building project at location
+            if b.location == self.building_site_target and b.structure_type == structure_blueprint_name and not b.is_operational:
+                target_building = b
+                break
+
+        if not target_building: # If building doesn't exist yet, create it (first time working on it)
+            print(f"First work on {structure_blueprint_name} at {self.building_site_target}. Creating building object.")
+            target_building = Building(
+                structure_type=structure_blueprint_name,
+                display_name=structure_bp["display_name"],
+                location=self.building_site_target,
+                size=structure_bp["size"],
+                required_resources=structure_bp["required_resources"], # For reference, actual consumption below
+                build_time=structure_bp["build_time"],
+                functionality=structure_bp.get("functionality"),
+                required_skill=structure_bp.get("required_skill")
+            )
+            world.add_building(target_building)
+
+            # Consume all resources from inventory now that work is starting at the site
+            # This is a simplification; could be incremental.
+            # This should only consume what's available, up to what's needed.
+            # And only if materials_gathered_for_build is TRUE, or if this is a partial delivery.
+            # For now, this consumes based on required_resources_total, which is wrong for partial.
+            # This needs to be smarter - consume only what's IN inventory for this trip.
+
+            # Let's change this: the Building object itself should store what it still needs.
+            # For now, the character just "works" and we assume materials are magically there if they arrived.
+            # The "Used resources" printout should reflect what's *actually used* from inventory for this work session.
+
+            # Corrected consumption: Consume what's in inventory relevant to the project
+            temp_inv_copy = self.inventory.copy() # To iterate while modifying
+            resources_consumed_this_session = {}
+            for res_name, res_needed_total in required_resources_total.items():
+                # How much does the building *still* need of this, if we were to track it on the building?
+                # For now, assume this first work session tries to use up all relevant held materials.
+                if res_name in temp_inv_copy:
+                    qty_to_use = temp_inv_copy[res_name] # Use all of this type currently held
+                    # In a more advanced model, check against building.remaining_needed[res_name]
+
+                    self.inventory[res_name] -= qty_to_use
+                    if self.inventory[res_name] <= 0:
+                        del self.inventory[res_name]
+                    resources_consumed_this_session[res_name] = qty_to_use
+
+            if resources_consumed_this_session:
+                 self.add_memory(f"Used {resources_consumed_this_session} for {structure_blueprint_name} at {self.building_site_target}.")
+                 print(f"{self.name} used resources {resources_consumed_this_session} for {structure_blueprint_name} at {self.building_site_target}. Inv: {self.inventory}")
+            else:
+                 print(f"{self.name} at build site for {structure_blueprint_name}, but no relevant materials in inventory to consume. Inv: {self.inventory}")
+
+
+        if target_building and not target_building.is_operational:
+            # Use "Construct Building" task definition for work rate
+            task_def = JOB_TASK_DEFINITIONS.get("Construct Building")
+            if not task_def:
+                print(f"CRITICAL: 'Construct Building' task definition not found for {self.name}.")
+                self.current_goal = "Idle"; return
+
+            # Apply work (progress gain can be modified by traits/skills later)
+            # For now, simple base_yield from task_def
+            progress_this_tick = task_def.get("base_yield", 1)
+
+            # TODO: Add trait effects on construction speed (Diligent, Lazy, Focused)
+            # Similar to _execute_generic_task or _execute_craft_order
+
+            target_building.work_on(progress_this_tick)
+            self.add_memory(f"Worked on {target_building.display_name} (+{progress_this_tick} progress). Total: {target_building.current_progress}/{target_building.build_time}")
+            # print(f"{self.name} worked on {target_building.display_name} (+{progress_this_tick}). Prog: {target_building.current_progress}/{target_building.build_time}")
+
+
+            if target_building.is_operational:
+                order.status = "Completed"
+                self.add_memory(f"Completed Build WO {order.order_id} for {target_building.display_name}.")
+                print(f"{self.name} COMPLETED Build Work Order {order.order_id} for {target_building.display_name} at {target_building.location}.")
+                self._reset_building_state()
+                # Check if all materials were truly gathered, if not, this is an issue.
+                # For now, assume if building is operational, all materials must have been used.
+                self.materials_gathered_for_build = True # Ensure this is set if somehow missed
+                self.current_goal = self.job_default_goal() or "Idle"
+                # Make character move off the construction site to allow others or clear space
+                if self.building_site_target:
+                    # Attempt to move to an adjacent free tile
+                    adj_free_tile = None
+                    for dx_try, dy_try in [(0, -1), (0, 1), (-1, 0), (1, 0)]: # Check adjacent N, S, W, E
+                        check_x, check_y = self.building_site_target[0] + dx_try, self.building_site_target[1] + dy_try
+                        # Check if tile is within bounds and not a blocking type
+                        if 0 <= check_x < world.grid_size[0] and 0 <= check_y < world.grid_size[1] and \
+                           world.grid[check_x][check_y] not in ["Mountain", "Water"] and \
+                           not world.get_characters_at_location(check_x, check_y):
+                             # Also ensure it's not part of the building itself
+                            is_part_of_building = any( (check_x, check_y) == b_tile for b_obj in world.buildings if b_obj.location == self.building_site_target for b_tile in b_obj.get_tiles_occupied())
+                            if not is_part_of_building: # Check if the proposed move-to tile is part of any building at the site.
+                                adj_free_tile = (check_x, check_y)
+                                break
+                    if adj_free_tile:
+                        self.move_towards(adj_free_tile[0], adj_free_tile[1], world)
+                    else:
+                        pass
+                return
+        elif target_building and target_building.is_operational:
+            print(f"Error: Building {target_building.display_name} for WO {order.order_id} is already operational but order not complete?")
+            order.status = "Completed"
+            self._reset_building_state()
+            self.current_goal = self.job_default_goal() or "Idle"
+            return
+
     # --- END OF DECIDE_ACTION and HELPER _execute_ METHODS ---
 
     # --- Management Actions ---

@@ -8,8 +8,8 @@ class WorkOrder:
         self.order_id: str = f"wo_{uuid.uuid4().hex[:8]}" # Unique ID
         self.order_type: str = order_type  # e.g., "CraftItem", "BuildStructure"
         self.details: Dict[str, Any] = details
-        # e.g., {"item_name": "Wooden Chair", "quantity": 5, "required_resources": {"Wood": 25}}
-        # e.g., {"structure_type": "Workshop", "location": (x,y), "required_resources": {"Wood": 20, "Stone": 10}}
+        # For "CraftItem": {"item_name": "Wooden Chair", "quantity": 5, "required_resources": {"Wood": 25}}
+        # For "BuildStructure": {"structure_type": "small_workshop", "location": (x,y), "required_resources": {...}, "size": (w,h), "build_time": B_T}
 
         self.priority: int = priority
         self.status: str = "Pending"  # Pending, Approved, Denied, InProgress, Completed, Cancelled

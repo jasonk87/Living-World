@@ -39,7 +39,8 @@ BLUEPRINTS = {
         "tool_type": "Pickaxe",
         "max_durability": 150,
         "description": "A durable pickaxe for efficient mining.",
-        "craft_time_per_unit": 15
+        "craft_time_per_unit": 15,
+        "required_workshop_type": "small_workshop" # Requires a Small Workshop
     }
     # Add other items as needed, e.g., "Wooden Shield", "Stone Hammer"
 }
@@ -68,6 +69,20 @@ JOB_TASK_DEFINITIONS = {
         "base_yield": 1,
         "base_time_per_yield": 6
     },
+    "Construct Building": { # Generic task for working on any building
+        "required_tool_type": None, # Could add "Hammer" later
+        "skill_used": "Construction",
+        "resource_produced": None, # Does not directly produce a portable resource
+        "base_yield": 1, # Represents 1 unit of "build progress"
+        "base_time_per_yield": 1 # How many ticks to apply 1 unit of build progress (can be modified by skill/traits)
+    },
+    "Socialize": {
+        "required_tool_type": None,
+        "skill_used": None, # Could add a "Social" skill later
+        "resource_produced": None,
+        "base_yield": 1, # Represents one successful social interaction "unit"
+        "base_time_per_yield": 5 # Ticks to complete one social interaction
+    },
     # Future task examples:
     # "Till Soil": {"required_tool_type": "Hoe", "skill_used": "Farming", "resource_produced": "Tilled Plot"},
     # "Construct Wall Segment": {"required_tool_type": "Hammer", "skill_used": "Construction", "resource_produced": "Wall Section"},
@@ -76,3 +91,32 @@ JOB_TASK_DEFINITIONS = {
 
 # It might also be useful to define tool types if they have specific properties beyond what's in blueprints
 # For now, tool_type in BLUEPRINTS and required_tool_type in JOB_TASK_DEFINITIONS serve this.
+
+STRUCTURE_BLUEPRINTS = {
+    "wooden_hut": {
+        "display_name": "Wooden Hut",
+        "size": (2, 2), # width, height
+        "required_resources": {"Wood": 30},
+        "build_time": 50, # Amount of "work"
+        "functionality": {"provides_shelter": 1}, # Can shelter 1 person
+        "required_skill": {"Construction": 1}, # Skill and level needed
+        "map_char_initial": "h.", # Under construction
+        "map_char_complete": "H"   # Completed
+    },
+    "small_workshop": {
+        "display_name": "Small Workshop",
+        "size": (3, 2), # width, height
+        "required_resources": {"Wood": 50, "Stone": 20},
+        "build_time": 100,
+        "functionality": {"allows_crafting_category": ["Basic Tools", "Simple Furniture"]}, # Categories of items craftable here
+        "required_skill": {"Construction": 3},
+        "map_char_initial": "w.", # Under construction
+        "map_char_complete": "W"   # Completed
+    },
+    "construction_site": { # A generic site, perhaps for displaying build orders on map before construction starts
+        "display_name": "Construction Site",
+        "size": (1,1), # Placeholder size, actual building size will be used when creating the Building object
+        "map_char_initial": "X", # Character to display on map for a planned construction
+        "map_char_complete": "X" # Should not complete, really, it's a placeholder visual
+    }
+}

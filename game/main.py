@@ -4,13 +4,9 @@ from .world import World
 from .time import Time
 from .stockpile import Stockpile
 from .work_order import WorkOrder
-from .data import BLUEPRINTS, JOB_TASK_DEFINITIONS
+from .data import BLUEPRINTS, JOB_TASK_DEFINITIONS # Removed unused STRUCTURE_BLUEPRINTS for this test
 from . import config
 import random
-
-def set_reporting_line(supervisor: Character, subordinate: Character):
-    subordinate.set_supervisor(supervisor.name)
-    supervisor.add_subordinate(subordinate.name)
 
 def main():
     print("--- Game Configuration ---")
@@ -18,136 +14,95 @@ def main():
     print("--------------------------")
 
     ticks_per_day = 10
-    days_per_season = 3
+    days_per_season = 10 # Longer season for more social time
     game_time_obj = Time(ticks_per_day=ticks_per_day)
     game_world = World(grid_size=(10, 10), game_time_ref=game_time_obj)
 
-    # Stockpiles
-    tool_shed = Stockpile(name="ToolShed", x=2, y=1, width=1, height=1,
-                          allowed_resources=["Stone Axe", "Stone Pickaxe"], total_capacity=10)
-    game_world.add_stockpile(tool_shed)
-    tool_shed.add_item("Stone Axe", 1)
-    game_world.ledger.update_stockpile_record(tool_shed.name, tool_shed.inventory, game_time_obj.current_day)
-    print(f"Pre-stocked {tool_shed.name} with 1 Stone Axe. Ledger updated.")
-
-    wood_stockpile = Stockpile(name="WoodPile", x=0, y=3, width=1, height=1,
-                               allowed_resources=["Wood"], capacity_per_resource=50)
-    game_world.add_stockpile(wood_stockpile)
-    game_world.ledger.update_stockpile_record(wood_stockpile.name, wood_stockpile.inventory, game_time_obj.current_day)
-
-    # Resources in world
-    forest_loc = (0,0); game_world.set_tile(0,0,"Forest"); game_world.add_resource("Wood", forest_loc)
-    forest_loc2 = (0,1); game_world.set_tile(0,1,"Forest"); game_world.add_resource("Wood", forest_loc2)
-    rock_loc = (8,8); game_world.set_tile(8,8,"Rocks"); game_world.add_resource("Stone", rock_loc)
-    game_world.set_tile(1,1,"Grass")
+    # Clear any pre-existing stockpiles or resources if needed for a clean test
+    game_world.stockpiles.clear()
+    game_world.resources.clear()
+    game_world.buildings.clear()
 
 
-    # Characters
-    gimli = Character(name="Gimli", personality="determined", traits=["Strong", "Resourceful"], job="Woodcutter", x=1,y=1,
-                      skills={"Woodcutting":7},
-                      needs={"Wood":5}, max_inventory_items=5, current_goal=None)
+    # --- Character Setup for Social Interaction Test ---
+    print("\n--- Character Setup (Social Interaction Test) ---")
 
-    elara = Character(name="Elara", personality="observant", traits=["Quiet"], job="Bookkeeper", x=4,y=4, skills={}, max_inventory_items=1, current_goal=None)
+    social_test_chars = []
 
-    # --- Character Setup for Phase 3 Testing: Trait-based Task Performance ---
+    char1 = Character(name="Alice", personality="Outgoing", traits=["Friendly", "Charismatic"],
+                      job="Idle", x=3,y=3, skills={}, needs={'Social': 15})
+    game_world.add_character(char1)
+    social_test_chars.append(char1)
+    print(f"  Added: {char1.name} (Traits: {char1.traits}, SocialNeed: {char1.needs.get('Social')}) at ({char1.x},{char1.y})")
 
-    # Remove Phase 2 characters for cleaner logs, or keep them if combined testing is desired.
-    # For now, let's remove Phase 2 specific characters to focus on task performance traits.
-    phase2_chars = [char for char in game_world.characters if "_P2" in char.name or "Boris_" in char.name or "Flora_" in char.name]
-    for p2c in phase2_chars:
-        if p2c in game_world.characters: game_world.remove_character(p2c)
-    if gimli in game_world.characters: game_world.remove_character(gimli)
-    if elara in game_world.characters: game_world.remove_character(elara)
+    char2 = Character(name="Bob", personality="Grumpy", traits=["Loner", "Grumpy"],
+                      job="Idle", x=4,y=3, skills={}, needs={'Social': 10})
+    game_world.add_character(char2)
+    social_test_chars.append(char2)
+    print(f"  Added: {char2.name} (Traits: {char2.traits}, SocialNeed: {char2.needs.get('Social')}) at ({char2.x},{char2.y})")
 
+    char3 = Character(name="Charlie", personality="Neutral", traits=[],
+                      job="Idle", x=3,y=4, skills={}, needs={'Social': 25}) # Starts a bit higher
+    game_world.add_character(char3)
+    social_test_chars.append(char3)
+    print(f"  Added: {char3.name} (Traits: {char3.traits}, SocialNeed: {char3.needs.get('Social')}) at ({char3.x},{char3.y})")
 
-    # Worker Set 1: Woodcutters
-    woody_normal = Character(name="Woody_Normal", personality="neutral", traits=[], job="Woodcutter", x=1,y=1, skills={"Woodcutting":5}, needs={"Wood":20})
-    woody_lazy = Character(name="Woody_Lazy", personality="laid-back", traits=["Lazy"], job="Woodcutter", x=1,y=2, skills={"Woodcutting":5}, needs={"Wood":20})
-    woody_diligent = Character(name="Woody_Diligent", personality="hard-working", traits=["Diligent"], job="Woodcutter", x=1,y=3, skills={"Woodcutting":5}, needs={"Wood":20})
-    woody_strong = Character(name="Woody_Strong", personality="robust", traits=["Strong"], job="Woodcutter", x=1,y=4, skills={"Woodcutting":5}, needs={"Wood":20})
-    woody_focused_lazy = Character(name="Woody_FocusedLazy", personality="intense", traits=["Focused", "Lazy"], job="Woodcutter", x=1,y=5, skills={"Woodcutting":5}, needs={"Wood":20}) # Focused should override Lazy
-
-    game_world.add_character(woody_normal)
-    game_world.add_character(woody_lazy)
-    game_world.add_character(woody_diligent)
-    game_world.add_character(woody_strong)
-    game_world.add_character(woody_focused_lazy)
-
-    # Worker Set 2: Bookkeepers
-    booky_normal = Character(name="Booky_Normal", personality="neutral", traits=[], job="Bookkeeper", x=3,y=1)
-    booky_careless = Character(name="Booky_Careless", personality="absent-minded", traits=["Careless"], job="Bookkeeper", x=3,y=2)
-
-    game_world.add_character(booky_normal)
-    game_world.add_character(booky_careless)
-
-    # Ensure there's at least one stockpile with some items for Bookkeepers to (mis)count
-    if not wood_stockpile.inventory: # Add some items if empty for consistent testing
-        wood_stockpile.add_item("Wood", 10) # So bookkeepers have something to count.
-        game_world.ledger.update_stockpile_record(wood_stockpile.name, wood_stockpile.inventory, game_time_obj.current_day)
+    # Make sure some ground is walkable
+    for r in range(2,6):
+        for c in range(2,6):
+            game_world.set_tile(r,c,"Grass")
 
 
-    print(f"\n--- Character Setup (Phase 3 - Task Performance Traits) ---")
-    for char in [woody_normal, woody_lazy, woody_diligent, woody_strong, woody_focused_lazy, booky_normal, booky_careless]:
-        print(f"  {char.name} (Job: {char.job}, Traits: {char.traits}, Personality: {char.personality})")
-    print(f"Initial Wood in {wood_stockpile.name}: {wood_stockpile.inventory.get('Wood',0)}")
-
-    print("\n--- Simulation: Trait-Driven Task Performance ---")
-    max_simulation_days = 5 # Shorter sim, focus on task differences over a few days
+    print(f"\n--- Simulation: Social Interaction Test ---")
+    max_simulation_days = 7 # Shorter simulation focused on social interactions
     last_season_change_day = game_time_obj.current_day
     running = True; current_total_ticks = 0
-
-    # Store initial inventory/ledger state for comparison if needed, or rely on prints
-    initial_ledger_wood = game_world.ledger.get_total_resource_count("Wood")
-
 
     while running:
         new_day = game_time_obj.tick()
         current_total_ticks +=1
 
         header_printed_this_tick = False
-        def print_tick_header():
+        def print_tick_header(): # Simple closure for tick header
             nonlocal header_printed_this_tick
             if not header_printed_this_tick:
-                print(f"\nTick {current_total_ticks} | {game_time_obj} | {game_world.season}, {game_world.weather}")
+                # print(f"\nTick {current_total_ticks} | {game_time_obj} | {game_world.season}, {game_world.weather}")
                 header_printed_this_tick = True
-
-        # --- Log specific trait-triggered events ---
-        # This requires characters to log memories when traits trigger, which they now do.
-        # We can iterate memories or just observe print statements from character methods.
 
         for char_to_act in list(game_world.characters):
             if char_to_act not in game_world.characters: continue
 
-            # Store pre-action state for logging trait effects
-            pre_action_inv = char_to_act.inventory.copy()
-            pre_action_tool_dur = char_to_act.equipped_tool['durability'] if char_to_act.equipped_tool else None
-
-            char_to_act.decide_action(game_world) # This is where traits will affect actions
-
-            # Log changes potentially due to traits
-            if char_to_act.job == "Woodcutter":
-                wood_gathered_this_tick = char_to_act.inventory.get("Wood", 0) - pre_action_inv.get("Wood", 0)
-                if wood_gathered_this_tick > 0 : # Implicitly logs yield differences
-                    pass # Already printed by _execute_generic_task
-
-            if char_to_act.equipped_tool and pre_action_tool_dur is not None:
-                if char_to_act.equipped_tool['durability'] < pre_action_tool_dur -1 : # More than 1 durability lost
-                    print_tick_header()
-                    print(f"  TOOL WEAR: {char_to_act.name}'s {char_to_act.equipped_tool['name']} lost {pre_action_tool_dur - char_to_act.equipped_tool['durability']} durability (Traits: {char_to_act.traits}).")
+            # Optional: Print per-tick character state for deep debugging social choices
+            # print_tick_header()
+            # print(f"  - {char_to_act.name} (Pos:({char_to_act.x},{char_to_act.y}), Goal: {char_to_act.current_goal}, Social: {char_to_act.needs.get('Social')})")
+            char_to_act.decide_action(game_world)
 
 
         if new_day:
-            print(f"*** NEW DAY: Day {game_time_obj.current_day}. Weather: {game_world.weather}, Season: {game_world.season} ***")
+            print(f"\n*** NEW DAY: Day {game_time_obj.current_day}. Weather: {game_world.weather}, Season: {game_world.season} ***")
+
             for char_daily_reset in game_world.characters:
+                # Social Need Decay
+                if 'Social' in char_daily_reset.needs:
+                    char_daily_reset.needs['Social'] = max(0, char_daily_reset.needs['Social'] - random.randint(3,7)) # Randomize decay slightly
+
+                # Reset goal if idle and not already trying to socialize
                 if char_daily_reset.current_goal in ["Wander", None, "Idle"] and \
                    not char_daily_reset.active_work_order_id and \
-                   char_daily_reset.job != "Unemployed":
+                   not char_daily_reset.active_build_order_id and \
+                   char_daily_reset.job != "Unemployed": # and char_daily_reset.current_goal != "Socialize": # Avoid interrupting an ongoing attempt
                     char_daily_reset.current_goal = char_daily_reset.job_default_goal()
 
-            # Daily status print for task performance characters
-            for char_status in [woody_normal, woody_lazy, woody_diligent, woody_strong, woody_focused_lazy, booky_normal, booky_careless]:
+
+            # Daily status print for test characters
+            for char_status in social_test_chars:
                 if char_status in game_world.characters:
-                     print(f"  {char_status.name} (Job: {char_status.job}, Traits: {char_status.traits}): Goal='{char_status.current_goal}', Inv: {char_status.inventory.get('Wood',0)} Wood. Tool: {char_status.equipped_tool['name'] if char_status.equipped_tool else 'None'}")
+                    rel_scores = {name: score for name, score in char_status.relationships.items() if name in [c.name for c in social_test_chars]}
+                    print(f"  {char_status.name} (Pos:({char_status.x},{char_status.y}), Goal='{char_status.current_goal}', SocialNeed: {char_status.needs.get('Social', 50):.0f}, Relationships: {rel_scores})")
+                    # Print last few memories related to socialization
+                    social_mems = [mem for mem in char_status.memory if "ocializ" in mem or "chat" in mem or "exchange" in mem or "relationship" in mem][-3:]
+                    for mem in social_mems:
+                        print(f"    Mem: {mem}")
 
 
             if (game_time_obj.current_day - last_season_change_day) >= days_per_season:
@@ -160,10 +115,18 @@ def main():
 
     print("\n--- Final State ---")
     print(f"Final Time: {game_time_obj}")
-    for char_final in game_world.characters:
-        print(char_final)
-    print(f"ToolShed Final: {tool_shed}")
-    print(f"WoodPile Final: {wood_stockpile}")
+    for char_final in social_test_chars:
+        if char_final in game_world.characters:
+            print(f"\n{char_final}")
+            print(f"  Final Needs: {char_final.needs}")
+            print(f"  Relationships:")
+            for other_char_name, score in char_final.relationships.items():
+                 if other_char_name in [c.name for c in social_test_chars]: # Only show relationships with other test chars
+                    print(f"    - With {other_char_name}: {score}")
+            print(f"  Recent Social Memories:")
+            social_mems = [mem for mem in char_final.memory if "ocializ" in mem or "chat" in mem or "exchange" in mem or "relationship" in mem][-5:]
+            for mem in social_mems:
+                print(f"    - {mem}")
 
 if __name__ == "__main__":
     main()
