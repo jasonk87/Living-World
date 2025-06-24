@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, List, Optional, Tuple, Dict
 from .stockpile import Stockpile
 from .ledger import Ledger
 from .time import Time
-from .work_order import WorkOrder # Add this
+from .work_order import WorkOrder
 
 if TYPE_CHECKING:
     from .character import Character
@@ -22,7 +22,7 @@ class World:
         self.stockpiles: List[Stockpile] = []
         self.ledger: Ledger = Ledger()
         self.game_time: Optional[Time] = game_time_ref
-        self.work_orders: List[WorkOrder] = [] # Added this line
+        self.work_orders: List[WorkOrder] = []
 
     def __str__(self):
         return f"World(Size: {self.grid_size}, Season: {self.season}, Chars: {len(self.characters)}, SPs: {len(self.stockpiles)}, WOs: {len(self.work_orders)})"
@@ -102,10 +102,22 @@ class World:
     def add_work_order(self, work_order: WorkOrder):
         if work_order not in self.work_orders:
             self.work_orders.append(work_order)
-            # print(f"World: Added new Work Order: {work_order.order_id} - {work_order.details.get('item_name') or work_order.details.get('structure_type') }") # Reduce noise
 
     def get_pending_work_orders(self) -> List[WorkOrder]:
         pending = [wo for wo in self.work_orders if wo.status == "Pending"]
-        # Sort by priority (lower number = higher priority), then by creation_day (older first)
         pending.sort(key=lambda wo: (wo.priority, wo.creation_day))
         return pending
+
+    def get_approved_craft_orders(self) -> List[WorkOrder]: # New method
+        approved = [
+            wo for wo in self.work_orders
+            if wo.status == "Approved" and wo.order_type == "CraftItem" and wo.assigned_to is None
+        ]
+        approved.sort(key=lambda wo: (wo.priority, wo.creation_day))
+        return approved
+
+    def get_work_order_by_id(self, order_id: str) -> Optional[WorkOrder]: # New method
+        for wo in self.work_orders:
+            if wo.order_id == order_id:
+                return wo
+        return None
