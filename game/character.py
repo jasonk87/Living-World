@@ -23,7 +23,16 @@ class Character:
                  job: Optional[str] = None,
                  max_inventory_items: int = 10,
                  rank: str = "Worker"): # Added rank parameter
-        self.name = name; self.personality = personality; self.traits = traits; self.skills = skills
+        self.name = name; self.personality = personality; self.traits = traits
+        # Initialize skills with new structure
+        self.skills: Dict[str, Dict[str, Any]] = {}
+        for skill_name, level in skills.items(): # Convert initial skills
+            self.skills[skill_name] = {
+                "level": level,
+                "experience": 0.0,
+                "exp_to_next_level": self._calculate_exp_for_level(level)
+            }
+
         self.x = x; self.y = y; self.inventory = {}; self.memory = [];
         self.needs = needs if needs else {}
         if 'Social' not in self.needs: # Ensure 'Social' need is present
@@ -58,6 +67,13 @@ class Character:
         self.current_task_def_name: Optional[str] = None
         self._mc_item_check_idx: int = 0
         self.status_effects: List[Dict[str, Any]] = [] # For events & challenges
+
+    def _calculate_exp_for_level(self, level: int) -> float:
+        """Calculates the experience needed to reach the next level."""
+        # Example formula: 100 * (current_level ^ 1.2) or 100 * 1.5^(level-1)
+        if level == 0: return 50 # Special case for level 0 to 1
+        return float(int(100 * (level ** 1.2)))
+
 
     def _reset_crafting_state(self):
         self.active_work_order_id = None; self.materials_gathered_for_wo = False
@@ -199,6 +215,13 @@ class Character:
         work_speed_modifier = self.get_status_modifier("work_speed_multiplier", 1.0)
         current_progress_gain *= work_speed_modifier
 
+        # Apply skill level modifier to progress gain
+        skill_name_for_task = task_def.get("skill_used")
+        if skill_name_for_task:
+            skill_level = self.skills.get(skill_name_for_task, {}).get("level", 0)
+            # Ensure current_progress_gain is float before multiplication if it might be int
+            current_progress_gain = float(current_progress_gain) * (1 + skill_level * 0.05) # 5% increase per level
+
         is_lazy_this_tick = False
 
         if "Lazy" in self.traits and not "Focused" in self.traits:
@@ -272,6 +295,13 @@ class Character:
                 if self.equipped_tool["durability"] <= 0:
                     self.add_memory(f"{self.equipped_tool['name']} broke!"); print(f"Oh no! {self.name}'s {self.equipped_tool['name']} BROKE!")
                     self.unequip_tool()
+
+            # Grant skill experience
+            if task_def.get("skill_used") and actual_yield_taken > 0 : # Only grant XP if skill is used and yield was positive
+                # XP amount could be based on base_yield, task difficulty, etc.
+                xp_gained = 5.0 * actual_yield_taken # Example: 5 XP per unit yielded
+                self._grant_skill_experience(task_def["skill_used"], xp_gained, world)
+
         return True
 
     def _execute_craft_order(self, world: 'World'):
@@ -383,6 +413,12 @@ class Character:
             work_speed_modifier = self.get_status_modifier("work_speed_multiplier", 1.0)
             current_crafting_progress_gain *= work_speed_modifier
 
+            # Apply skill level modifier to crafting progress gain
+            crafting_skill_name = blueprint.get("job_skill_needed")
+            if crafting_skill_name:
+                skill_level = self.skills.get(crafting_skill_name, {}).get("level", 0)
+                current_crafting_progress_gain = float(current_crafting_progress_gain) * (1 + skill_level * 0.05) # 5% increase per level
+
             is_slacking_craft = False
 
             if "Lazy" in self.traits and not "Focused" in self.traits:
@@ -413,6 +449,12 @@ class Character:
 
                 # Add item to inventory
                 self.inventory[item_name] = self.inventory.get(item_name, 0) + 1
+
+                # Grant skill experience for crafting
+                if blueprint.get("job_skill_needed"):
+                    # XP amount could be based on item complexity (e.g. craft_time_per_unit or resource cost)
+                    xp_gained = float(blueprint.get("craft_time_per_unit", 5)) # Example: XP = craft time
+                    self._grant_skill_experience(blueprint["job_skill_needed"], xp_gained, world)
 
                 # Apply crafting output bonuses from events (e.g., for tools)
                 # This is a bit simplified; ideally, the item itself would store its properties and bonuses would modify those upon creation.
@@ -1408,14 +1450,28 @@ class Character:
 
             # Apply work (progress gain can be modified by traits/skills later)
             # For now, simple base_yield from task_def
-            progress_this_tick = task_def.get("base_yield", 1)
+            progress_this_tick = float(task_def.get("base_yield", 1)) # Start as float for multipliers
 
-            # TODO: Add trait effects on construction speed (Diligent, Lazy, Focused)
-            # Similar to _execute_generic_task or _execute_craft_order
+            # Apply character status effect modifiers (e.g., "Sick" reduces work speed)
+            work_speed_modifier = self.get_status_modifier("work_speed_multiplier", 1.0)
+            progress_this_tick *= work_speed_modifier
 
-            target_building.work_on(progress_this_tick)
-            self.add_memory(f"Worked on {target_building.display_name} (+{progress_this_tick} progress). Total: {target_building.current_progress}/{target_building.build_time}")
-            # print(f"{self.name} worked on {target_building.display_name} (+{progress_this_tick}). Prog: {target_building.current_progress}/{target_building.build_time}")
+            # Apply Construction skill level modifier
+            construction_skill_level = self.skills.get("Construction", {}).get("level", 0)
+            progress_this_tick *= (1 + construction_skill_level * 0.05) # 5% increase per level
+
+            # TODO: Add trait effects on construction speed (Diligent, Lazy, Focused) - can further modify progress_this_tick
+            # Similar to _execute_generic_task or _execute_craft_order. For now, skill and status are main drivers.
+
+            actual_progress_applied = target_building.work_on(progress_this_tick) # work_on should return actual progress
+
+            # Grant Construction XP based on actual progress made
+            if actual_progress_applied > 0:
+                # Ensure "Construction" skill exists or is initialized by _grant_skill_experience
+                self._grant_skill_experience("Construction", float(actual_progress_applied) * 1.0, world) # Example: 1 XP per unit of progress
+
+            self.add_memory(f"Worked on {target_building.display_name} (+{actual_progress_applied:.1f} progress). Total: {target_building.current_progress:.1f}/{target_building.build_time}")
+            # print(f"{self.name} worked on {target_building.display_name} (+{actual_progress_applied:.1f}). Prog: {target_building.current_progress:.1f}/{target_building.build_time}")
 
 
             if target_building.is_operational:
@@ -1669,6 +1725,46 @@ class Character:
 
         # Example: If a supervisor reviews poorly, supervisor's relationship to subordinate might not change much,
         # but subordinate's relationship to supervisor likely worsens. This would be handled by the calling function.
+
+    def _grant_skill_experience(self, skill_name: str, amount: float, world: 'World'):
+        """Grants experience to a skill and checks for level up."""
+        if skill_name not in self.skills:
+            # If character doesn't have the skill, initialize it at level 0
+            self.skills[skill_name] = {
+                "level": 0,
+                "experience": 0.0,
+                "exp_to_next_level": self._calculate_exp_for_level(0)
+            }
+
+        self.skills[skill_name]["experience"] += amount
+        # self.add_memory(f"Gained {amount:.1f} XP in {skill_name} (Total: {self.skills[skill_name]['experience']:.1f}/{self.skills[skill_name]['exp_to_next_level']}).") # Can be spammy
+        print(f"DEBUG_XP: {self.name} gained {amount:.1f} XP in {skill_name}. Total: {self.skills[skill_name]['experience']:.1f}/{self.skills[skill_name]['exp_to_next_level']:.0f}")
+
+        # _check_skill_level_up will be implemented in Step 2 and called here
+        self._check_skill_level_up(skill_name, world)
+
+    def _check_skill_level_up(self, skill_name: str, world: 'World'):
+        """Checks if a skill has enough experience to level up, and handles the level-up."""
+        if skill_name not in self.skills:
+            return # Should not happen if _grant_skill_experience initializes it
+
+        # Loop to handle multiple level-ups from a single XP gain
+        while self.skills[skill_name]["experience"] >= self.skills[skill_name]["exp_to_next_level"]:
+            current_level = self.skills[skill_name]["level"]
+            exp_needed = self.skills[skill_name]["exp_to_next_level"]
+
+            self.skills[skill_name]["level"] += 1
+            self.skills[skill_name]["experience"] -= exp_needed # Carry over excess
+
+            new_level = self.skills[skill_name]["level"]
+            self.skills[skill_name]["exp_to_next_level"] = self._calculate_exp_for_level(new_level)
+
+            level_up_message = f"{self.name}'s {skill_name} skill increased to level {new_level}!"
+            self.add_memory(level_up_message)
+            if world: # world might be None in some testing contexts, though unlikely here
+                world.add_event_log_message(level_up_message) # Log globally
+            print(level_up_message) # Also print to console for immediate visibility during testing
+
 
     def apply_status_effect(self, status_data: Dict[str, Any], world: 'World'):
         """Applies a status effect to the character."""

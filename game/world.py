@@ -33,10 +33,15 @@ class World:
         return f"World(Size: {self.grid_size}, Season: {self.season}, Chars: {len(self.characters)}, SPs: {len(self.stockpiles)}, Buildings: {len(self.buildings)}, WOs: {len(self.work_orders)})"
 
     def add_event_log_message(self, message: str):
-        timestamp = f"D{self.game_time.current_day} T{self.game_time.current_tick}" # Use current_tick
-        full_message = f"[{timestamp}] EVENT: {message}"
+        if not self.game_time: # Should not happen if game_time is initialized properly
+            timestamp = "[NoTime]"
+        else:
+            timestamp = f"D{self.game_time.current_day} T{self.game_time.current_tick}"
+
+        full_message = f"[{timestamp}] {message}" # Removed "EVENT: " prefix, message should be self-contained
         self.event_log.append(full_message)
-        print(full_message) # Also print to console for immediate visibility
+        # Console print removed, UI will handle display
+        # print(full_message)
 
     def set_game_time(self, game_time_obj: Time):
         if not self.game_time: self.game_time = game_time_obj

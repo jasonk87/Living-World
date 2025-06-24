@@ -33,7 +33,12 @@ class Building:
                 self.is_operational = True
                 print(f"{self.display_name} at {self.location} is now complete and operational!")
                 return True
-        return self.is_operational
+        if actual_progress_made > 0 and not self.is_operational and self.current_progress >= self.build_time:
+             self.current_progress = self.build_time
+             self.is_operational = True
+             print(f"{self.display_name} at {self.location} is now complete and operational!")
+
+        return actual_progress_made # Return the actual progress made
 
     def get_tiles_occupied(self) -> list[Tuple[int, int]]:
         """Returns a list of (x,y) tuples for all tiles occupied by the building."""

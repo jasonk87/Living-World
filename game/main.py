@@ -9,13 +9,171 @@ from .events_data import EVENT_DEFINITIONS
 from .event_manager import EventManager
 from . import config
 import random
+import curses # Import curses
 
-def main():
-    print("--- Game Configuration ---")
-    print(f"USE_LLM: {config.USE_LLM if hasattr(config, 'USE_LLM') else 'Not Set'}")
-    print("--------------------------")
+def main_simulation(stdscr): # Renamed main to main_simulation, takes stdscr
+    # Curses setup
+    curses.curs_set(0) # Hide cursor
+    stdscr.nodelay(True) # Non-blocking input
+    stdscr.timeout(100) # Timeout for getch() in ms, affects tick rate (e.g., 100ms = 10 FPS max for UI updates)
 
-    ticks_per_day = 10
+    height, width = stdscr.getmaxyx()
+
+    # Define window dimensions
+    world_view_height = height - 10 # Reserve 10 lines for log and potentially status bar
+    world_view_width = int(width * 0.6) # 60% for world view
+    info_panel_width = width - world_view_width
+    log_height = 10
+
+    # Create windows
+    world_win = curses.newwin(world_view_height, world_view_width, 0, 0)
+    info_win = curses.newwin(height, info_panel_width, 0, world_view_width) # Full height for info panel
+    log_win = curses.newwin(log_height, world_view_width, world_view_height, 0) # Log window below world view
+
+    # Placeholder draw functions for now
+    def draw_world_view(win, world: World, current_cursor_x: int, current_cursor_y: int): # Added cursor params
+        win.clear()
+        win.box()
+        win.addstr(0, 2, "World View")
+
+        # Draw grid and entities
+        for r_idx in range(world.grid_size[0]): # r_idx is effectively y
+            for c_idx in range(world.grid_size[1]): # c_idx is effectively x
+                char_to_draw = "."
+
+                # Bounds check for drawing area within the window
+                draw_y, draw_x = r_idx + 1, c_idx + 1 # +1 for border offset
+                if draw_y >= world_view_height -1 or draw_x >= world_view_width -1 : continue
+
+                # Determine character to draw based on game state
+                chars_at_loc = world.get_characters_at_location(c_idx, r_idx) # World uses (x,y)
+                if chars_at_loc:
+                    char_to_draw = chars_at_loc[0].name[0]
+                else:
+                    tile_content = world.get_tile(c_idx, r_idx) # World uses (x,y)
+                    if tile_content == "Forest": char_to_draw = "F"
+                    elif tile_content == "Rocks": char_to_draw = "R"
+                    elif tile_content == "Water": char_to_draw = "~"
+                    elif tile_content == "Mountain": char_to_draw = "^"
+                    elif tile_content != "Grass": # Likely a building part
+                         char_to_draw = tile_content
+
+                # Draw the character, highlight if it's the cursor position
+                attributes = curses.A_NORMAL
+                if c_idx == current_cursor_x and r_idx == current_cursor_y:
+                    attributes = curses.A_REVERSE # Highlight cursor
+
+                try:
+                    win.addch(draw_y, draw_x, char_to_draw, attributes)
+                except curses.error:
+                    pass
+        win.refresh()
+
+    def draw_char_info_view(win, entity_details: Optional[Dict[str, Any]], world: World): # New function
+        win.clear()
+        win.box()
+        win.addstr(0, 2, "Entity Information")
+
+        if entity_details:
+            y_offset = 2
+            max_width = info_panel_width - 4 # Account for box and padding
+
+            def add_info_line(text, y_offset):
+                win.addstr(y_offset, 2, text[:max_width])
+                return y_offset + 1
+
+            entity_type = entity_details.get("type")
+            y_offset = add_info_line(f"Type: {entity_type}", y_offset)
+
+            if entity_type == "character":
+                char_obj = entity_details.get("object")
+                if isinstance(char_obj, Character):
+                    y_offset = add_info_line(f"Name: {char_obj.name}", y_offset)
+                    y_offset = add_info_line(f"Job: {char_obj.job}", y_offset)
+                    y_offset = add_info_line(f"Goal: {char_obj.current_goal}", y_offset)
+                    y_offset = add_info_line(f"Pos: ({char_obj.x},{char_obj.y})", y_offset)
+                    y_offset = add_info_line(f"Social Need: {char_obj.needs.get('Social', 'N/A')}", y_offset)
+                    statuses = [s['name'] for s in char_obj.status_effects]
+                    y_offset = add_info_line(f"Statuses: {', '.join(statuses) if statuses else 'None'}", y_offset)
+                    y_offset = add_info_line(f"Inventory: {sum(char_obj.inventory.values())} items", y_offset)
+                    if char_obj.relationships:
+                        y_offset = add_info_line("Relationships:", y_offset)
+                        for name, score in char_obj.relationships.items():
+                            y_offset = add_info_line(f"  - {name}: {score}", y_offset)
+                            if y_offset >= height -2 : break # Stop if out of window space
+            elif entity_type == "building":
+                b_obj = entity_details.get("object")
+                if isinstance(b_obj, Building):
+                    y_offset = add_info_line(f"Name: {b_obj.display_name}", y_offset)
+                    y_offset = add_info_line(f"Type: {b_obj.structure_type}", y_offset)
+                    y_offset = add_info_line(f"Location: {b_obj.location}", y_offset)
+                    y_offset = add_info_line(f"Progress: {b_obj.current_progress}/{b_obj.build_time}", y_offset)
+                    y_offset = add_info_line(f"Operational: {b_obj.is_operational}", y_offset)
+            elif entity_type == "tile":
+                y_offset = add_info_line(f"Coords: ({entity_details.get('x')},{entity_details.get('y')})", y_offset)
+                y_offset = add_info_line(f"Terrain: {entity_details.get('tile_type')}", y_offset)
+                if entity_details.get("resource"):
+                    y_offset = add_info_line(f"Resource: {entity_details.get('resource')}", y_offset)
+            else:
+                y_offset = add_info_line("No entity selected or unknown type.", y_offset)
+        else:
+            win.addstr(2, 2, "Move cursor (arrow keys) and press Enter to inspect.")
+
+        win.refresh()
+
+
+    def draw_ui(world, selected_entity_details=None, current_cursor_x=0, current_cursor_y=0): # Modified signature
+        log_win.clear()
+        log_win.box()
+        log_win.addstr(0, 2, "Event Log")
+        draw_log_view(log_win, world, log_height) # log_height is global in main_simulation
+
+        draw_world_view(world_win, world, current_cursor_x, current_cursor_y)
+        draw_char_info_view(info_win, selected_entity_details, world)
+
+
+    def draw_log_view(win, world: World, window_height: int):
+        # win.clear() # Clearing is done by draw_ui or at start of this func now
+        # win.box() # Boxing is done by draw_ui
+        win.addstr(0, 2, "Event Log")
+
+        max_lines = window_height - 2  # Account for box border
+        start_index = max(0, len(world.event_log) - max_lines)
+
+        for i, log_entry in enumerate(world.event_log[start_index:]):
+            if i < max_lines:
+                # Truncate long messages to fit window width
+                max_msg_width = world_view_width - 4 # Account for borders and a little padding
+                display_message = log_entry[:max_msg_width]
+                if len(log_entry) > max_msg_width:
+                    display_message = display_message[:-3] + "..."
+
+                try:
+                    win.addstr(i + 1, 1, display_message)
+                except curses.error:
+                    pass # Avoid crashing if text doesn't fit, though truncation should help
+        win.refresh()
+
+    # --- Original main() content starts here, adapted for curses ---
+    # print("--- Game Configuration ---") # Will be logged to UI later as well, or just to console before curses starts
+    # print(f"USE_LLM: {config.USE_LLM if hasattr(config, 'USE_LLM') else 'Not Set'}") # Log this before curses init
+    # print("--------------------------") # Log this before curses init
+
+    # Initial print statements should happen BEFORE curses.wrapper initializes the screen
+    # So, move them outside main_simulation or handle them differently. For now, they will just print to console before UI starts.
+
+    # --- Game World Setup ---
+    # The initial print statements about game setup will now be routed to the UI log if possible,
+    # or simply printed to console before curses UI starts.
+
+    initial_setup_messages = [] # Collect messages to potentially pass to UI log
+
+    initial_setup_messages.append("--- Initializing Game World & Event Manager ---")
+
+    ticks_per_day = 10 # Game ticks per day
+    # Note: stdscr.timeout(100) means roughly 10 UI frames/game ticks per second if game logic is fast.
+    # If ticks_per_day is 10, then a game day would pass in about 1 second of real time.
+
     days_per_season = 10
     game_time_obj = Time(ticks_per_day=ticks_per_day)
     game_world = World(grid_size=(10, 10), game_time_ref=game_time_obj)
@@ -55,107 +213,169 @@ def main():
     game_world.set_tile(0,1,"Forest"); game_world.add_resource("Wood", (0,1))
     game_world.set_tile(1,0,"Rocks"); game_world.add_resource("Stone", (1,0))
 
-    # Characters
-    event_test_chars = []
+    # Characters for Skill Progression Test
+    event_test_chars = [] # Re-using this list name for convenience
+
+    # Eva - Woodcutter, starts at level 1 Woodcutting
     char1 = Character(name="Eva", personality="Stoic", traits=[],
-                      job="Woodcutter", x=2,y=2, skills={"Woodcutting": 5}, needs={'Social': 70, "Wood": 10})
+                      job="Woodcutter", x=2,y=2, skills={"Woodcutting": 1},
+                      needs={'Social': 50, "Wood": 20}) # Increased Wood need to encourage more work
     game_world.add_character(char1)
     event_test_chars.append(char1)
-    print(f"  Added: {char1.name} (Job: {char1.job}) at ({char1.x},{char1.y})")
+    initial_setup_messages.append(f"  Added: {char1.name} (Job: {char1.job}, Woodcutting Lvl: {char1.skills.get('Woodcutting',{}).get('level',0)}) at ({char1.x},{char1.y})")
 
+    # Liam - Stonemason, starts at level 1 Mining
     char2 = Character(name="Liam", personality="Optimistic", traits=["Diligent"],
-                      job="Stonemason", x=3,y=2, skills={"Mining": 5}, needs={'Social': 70, "Stone": 10})
+                      job="Stonemason", x=3,y=2, skills={"Mining": 1},
+                      needs={'Social': 50, "Stone": 20}) # Increased Stone need
     game_world.add_character(char2)
     event_test_chars.append(char2)
-    print(f"  Added: {char2.name} (Job: {char2.job}) at ({char2.x},{char2.y})")
+    initial_setup_messages.append(f"  Added: {char2.name} (Job: {char2.job}, Mining Lvl: {char2.skills.get('Mining',{}).get('level',0)}) at ({char2.x},{char2.y})")
 
-    # Add a crafter to test tool crafting event
-    # To test tool crafting event, we need a workshop and resources for a tool
-    # For simplicity, we'll skip building the workshop in this test and assume one exists if needed by a blueprint.
-    # Or, use a tool that doesn't require a workshop. Let's use Stone Axe.
+    # Crafty - Will craft Stone Axes, starts at level 0 Stonemasonry (to see it initialized)
     char3 = Character(name="Crafty", personality="Inventive", traits=[],
-                      job="Stonemasonry", x=4,y=2, skills={"Stonemasonry": 5}, needs={'Social': 70})
+                      job="Stonemasonry", x=4,y=2, skills={}, # Starts with no Stonemasonry skill explicitly
+                      needs={'Social': 50})
     game_world.add_character(char3)
     event_test_chars.append(char3)
-    # Pre-give Crafty resources for a Stone Axe (Stone:2, Wood:1) to simplify test
-    char3.inventory["Stone"] = 2
-    char3.inventory["Wood"] = 1
-    print(f"  Added: {char3.name} (Job: {char3.job}) at ({char3.x},{char3.y}), pre-stocked for Stone Axe.")
+    # Pre-give Crafty resources for a Stone Axe
+    char3.inventory["Stone"] = 20 # Enough for multiple axes
+    char3.inventory["Wood"] = 10
+    initial_setup_messages.append(f"  Added: {char3.name} (Job: {char3.job}, Stonemasonry Lvl: {char3.skills.get('Stonemasonry',{}).get('level',0)}) at ({char3.x},{char3.y}), pre-stocked for Stone Axes.")
 
-
-    print(f"\n--- Simulation: Event Test ---")
-    max_simulation_days = 20 # Run for a bit longer to see events
-    last_season_change_day = game_time_obj.current_day
-    running = True; current_total_ticks = 0
-
-    # Assign a task to Crafty to make a Stone Axe
+    # Initial Work Order for Crafty
     stone_axe_wo = WorkOrder(
         order_type="CraftItem",
         details={"item_name": "Stone Axe", "quantity": 1, "required_resources": BLUEPRINTS["Stone Axe"]["required_resources"]},
         creation_day=1, priority=1
     )
-    stone_axe_wo.status = "Approved" # Set status after creation
-    stone_axe_wo.assigned_to = char3.name # Assign after creation
+    stone_axe_wo.status = "Approved"
+    stone_axe_wo.assigned_to = char3.name
     game_world.add_work_order(stone_axe_wo)
     char3.active_work_order_id = stone_axe_wo.order_id
-    char3.current_goal = "Execute Craft Order" # Start Crafty on the WO
+    char3.current_goal = "Execute Craft Order"
+
+    initial_setup_messages.append("--- Simulation: Skill Progression Test ---")
+    max_simulation_days = 15 # Adjusted for skill progression
+    last_season_change_day = game_time_obj.current_day
+    running = True; current_total_ticks = 0
+
+    # UI state variables
+    selected_entity_details: Optional[Dict[str, Any]] = None
+    cursor_y, cursor_x = 0, 0
+    game_paused = False
+
+    # Initial messages for UI log - these will be shown by the UI log window
+    # The direct print() calls before this function are for pre-curses console output.
+    game_world.add_event_log_message("--- Game Configuration ---")
+    game_world.add_event_log_message(f"USE_LLM: {config.USE_LLM if hasattr(config, 'USE_LLM') else 'Not Set'}")
+    # game_world.add_event_log_message("--------------------------") # Redundant with console
+    game_world.add_event_log_message(f"ToolShed stocked.")
+    game_world.add_event_log_message(f"WoodStore & StoneStore added.")
+    game_world.add_event_log_message("--- Characters Initialized ---")
+    for char_init_log in event_test_chars: # Use the list of test characters
+        game_world.add_event_log_message(f"  {char_init_log.name} ({char_init_log.job}) at ({char_init_log.x},{char_init_log.y})")
+    game_world.add_event_log_message("--- Simulation Starting ---")
 
 
+    # Main simulation loop
     while running:
-        new_day = game_time_obj.tick()
-        current_total_ticks +=1
+        # Input handling
+        key = stdscr.getch()
 
-        # Process active events (per tick)
-        event_manager.process_active_events() # world_ref is accessed via self.world_ref
-
-        for char_to_act in list(game_world.characters):
-            if char_to_act not in game_world.characters: continue
-            char_to_act.process_status_effects(game_world) # Process statuses before action
-            char_to_act.decide_action(game_world)
-
-        if new_day:
-            print(f"\n*** NEW DAY: Day {game_time_obj.current_day}. Weather: {game_world.weather}, Season: {game_world.season} ***")
-
-            # Check for new event triggers (daily)
-            event_manager.check_triggers() # world_ref is accessed via self.world_ref
-
-            for char_daily_reset in game_world.characters:
-                # Daily Social Need Decay (example, can be expanded for other needs)
-                if 'Social' in char_daily_reset.needs:
-                    social_decay_base = 5
-                    # Example: 'Loner' trait might make social need decay slower if alone, or faster if forced to be social.
-                    # For now, simple decay.
-                    char_daily_reset.needs['Social'] = max(0, char_daily_reset.needs['Social'] - random.randint(3,7))
-
-                # Reset goal if idle and not already trying to socialize or on a WO
-                if char_daily_reset.current_goal in ["Wander", None, "Idle"] and \
-                   not char_daily_reset.active_work_order_id and \
-                   not char_daily_reset.active_build_order_id and \
-                   char_daily_reset.job != "Unemployed":
-                    char_daily_reset.current_goal = char_daily_reset.job_default_goal()
-
-            # Display Active World Effects for testing
-            if game_world.active_world_effects:
-                print("  Active World Effects:")
-                for key, effect_info in game_world.active_world_effects.items():
-                    expires_in_ticks = effect_info.get('expires_tick', 0) - current_total_ticks
-                    print(f"    - {key}: {effect_info.get('multiplier') or effect_info.get('bonus_details')} (expires in ~{expires_in_ticks / ticks_per_day:.1f} days)")
-
-            # Daily status print for test characters
-            for char_status in event_test_chars:
-                if char_status in game_world.characters:
-                    status_names = [s['name'] for s in char_status.status_effects]
-                    print(f"  {char_status.name} (Pos:({char_status.x},{char_status.y}), Goal='{char_status.current_goal}', Social: {char_status.needs.get('Social', 50):.0f}, Statuses: {status_names}, Inv: {sum(char_status.inventory.values())})")
-
-            if (game_time_obj.current_day - last_season_change_day) >= days_per_season:
-                game_world.advance_season()
-                last_season_change_day = game_time_obj.current_day
-
-        if game_time_obj.current_day > max_simulation_days:
-            print(f"\nSimulation reached max days ({max_simulation_days}).")
+        if key == ord('q'):
             running = False
+            game_world.add_event_log_message("Quit command received. Shutting down.")
+        elif key == ord('p'):
+            game_paused = not game_paused
+            game_world.add_event_log_message("SIMULATION " + ("PAUSED" if game_paused else "RESUMED"))
+        elif not game_paused: # Only process game-altering input if not paused
+            if key == curses.KEY_UP:
+                cursor_y = max(0, cursor_y - 1)
+            elif key == curses.KEY_DOWN:
+                cursor_y = min(game_world.grid_size[0] - 1, cursor_y + 1)
+            elif key == curses.KEY_LEFT:
+                cursor_x = max(0, cursor_x - 1)
+            elif key == curses.KEY_RIGHT:
+                cursor_x = min(game_world.grid_size[1] - 1, cursor_x + 1)
+            elif key == ord('\n') or key == curses.KEY_ENTER: # Select / Inspect
+                chars_at_cursor = game_world.get_characters_at_location(cursor_x, cursor_y) # Note: world grid is (row,col) -> (y,x) but cursor is (x,y)
+                if chars_at_cursor:
+                    selected_entity_details = {"type": "character", "name": chars_at_cursor[0].name, "object": chars_at_cursor[0]}
+                    game_world.add_event_log_message(f"Selected character: {chars_at_cursor[0].name}")
+                else:
+                    building_at_cursor = game_world.get_building_at(cursor_x, cursor_y)
+                    if building_at_cursor:
+                         selected_entity_details = {"type": "building", "name": building_at_cursor.display_name, "object": building_at_cursor}
+                         game_world.add_event_log_message(f"Selected building: {building_at_cursor.display_name}")
+                    else:
+                        tile_info = game_world.get_tile(cursor_x,cursor_y)
+                        resource_at_tile = None
+                        for res_name, locs in game_world.resources.items():
+                            if (cursor_x, cursor_y) in locs:
+                                resource_at_tile = res_name
+                                break
+                        selected_entity_details = {"type": "tile", "x": cursor_x, "y": cursor_y, "tile_type": tile_info, "resource": resource_at_tile}
+                        game_world.add_event_log_message(f"Selected tile ({cursor_x},{cursor_y}): {tile_info}" + (f" ({resource_at_tile})" if resource_at_tile else ""))
 
-    print("\n--- Final State ---")
+        # --- Game Logic Tick ---
+        if not game_paused and running:
+            new_day = game_time_obj.tick()
+            current_total_ticks +=1
+
+            event_manager.process_active_events()
+
+            for char_to_act in list(game_world.characters):
+                if char_to_act not in game_world.characters: continue
+                char_to_act.process_status_effects(game_world)
+                char_to_act.decide_action(game_world)
+
+            if new_day:
+                game_world.add_event_log_message(f"*** NEW DAY: Day {game_time_obj.current_day}. Weather: {game_world.weather}, Season: {game_world.season} ***")
+                event_manager.check_triggers()
+
+                for char_daily_reset in game_world.characters:
+                    if 'Social' in char_daily_reset.needs:
+                        char_daily_reset.needs['Social'] = max(0, char_daily_reset.needs['Social'] - random.randint(3,7))
+                    if char_daily_reset.current_goal in ["Wander", None, "Idle"] and \
+                       not char_daily_reset.active_work_order_id and \
+                       not char_daily_reset.active_build_order_id and \
+                       char_daily_reset.job != "Unemployed":
+                        char_daily_reset.current_goal = char_daily_reset.job_default_goal()
+
+                if game_world.active_world_effects:
+                    log_msg_world_effects = "Active World Effects:"
+                    for key_eff, effect_info in game_world.active_world_effects.items():
+                        expires_in_ticks = effect_info.get('expires_tick', 0) - current_total_ticks
+                        log_msg_world_effects += f"\n    - {key_eff}: {effect_info.get('multiplier') or effect_info.get('bonus_details')} (expires ~{expires_in_ticks / ticks_per_day:.1f}d)"
+                    game_world.add_event_log_message(log_msg_world_effects)
+
+                # Log character skills daily for testing skill progression
+                for char_status in event_test_chars: # 'event_test_chars' is now our skill test characters
+                    if char_status in game_world.characters:
+                        skills_summary_list = []
+                        for skill_name, data in char_status.skills.items():
+                            skills_summary_list.append(f"{skill_name} L{data['level']}({data['experience']:.0f}/{data['exp_to_next_level']:.0f})")
+                        skills_summary = ", ".join(skills_summary_list) if skills_summary_list else "None"
+
+                        # This log is for console debugging during this phase, will be replaced by UI display
+                        # game_world.add_event_log_message(
+                        #    f"  SKILLS_DEBUG: {char_status.name}: [{skills_summary}]")
+
+                if (game_time_obj.current_day - last_season_change_day) >= days_per_season:
+                    game_world.advance_season()
+                    last_season_change_day = game_time_obj.current_day
+
+            if game_time_obj.current_day > max_simulation_days:
+                game_world.add_event_log_message(f"Simulation reached max days ({max_simulation_days}).")
+                running = False
+
+        # --- UI Update ---
+        # Pass cursor_x, cursor_y to draw_ui, and it will pass to draw_world_view
+        draw_ui(game_world, selected_entity_details, cursor_x, cursor_y)
+
+    # --- End of main simulation loop ---
+    # Final state prints will go to console after curses ends.
     print(f"Final Time: {game_time_obj}")
     for char_final in event_test_chars:
         if char_final in game_world.characters:
@@ -172,4 +392,4 @@ def main():
         print(log_entry)
 
 if __name__ == "__main__":
-    main()
+    curses.wrapper(main_simulation)
