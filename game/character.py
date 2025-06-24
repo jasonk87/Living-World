@@ -1,5 +1,5 @@
 # game/character.py
-from typing import TYPE_CHECKING, Optional, Dict, List, Tuple
+from typing import TYPE_CHECKING, Optional, Dict, List, Tuple, Any # Added Any
 import random
 from .llm_integration import generate_dialogue
 from .stockpile import Stockpile
@@ -57,6 +57,7 @@ class Character:
         self.goal_before_fetching_tool: Optional[str] = None
         self.current_task_def_name: Optional[str] = None
         self._mc_item_check_idx: int = 0
+        self.status_effects: List[Dict[str, Any]] = [] # For events & challenges
 
     def _reset_crafting_state(self):
         self.active_work_order_id = None; self.materials_gathered_for_wo = False
@@ -192,12 +193,17 @@ class Character:
             self.current_goal = "Fetch Tool"; self.tool_to_fetch_type = tool_type; self.task_work_progress = 0; return False
 
         # --- Trait Effects on Progress ---
-        current_progress_gain = 1
+        current_progress_gain = 1 # Base progress per tick for this task type
+
+        # Apply character status effect modifiers (e.g., "Sick" reduces work speed)
+        work_speed_modifier = self.get_status_modifier("work_speed_multiplier", 1.0)
+        current_progress_gain *= work_speed_modifier
+
         is_lazy_this_tick = False
 
         if "Lazy" in self.traits and not "Focused" in self.traits:
             if random.random() < 0.25: # 25% chance to be lazy
-                current_progress_gain = 0
+                current_progress_gain = 0 # Overrides other progress gains for this tick if lazy
                 is_lazy_this_tick = True
                 self.add_memory(f"Felt lazy and decided to slack off for a bit while working on '{task_name}'.")
 
@@ -222,11 +228,22 @@ class Character:
             base_yield_amount = task_def.get("base_yield",1)
 
             # Trait Effect on Yield (e.g., Strong)
-            final_yield_amount = base_yield_amount
+            final_yield_amount = float(base_yield_amount) # Start with float for multipliers
             if "Strong" in self.traits and res_prod in ["Wood", "Stone", "Iron Ore"]: # Assuming Strong applies to these
                 if random.random() < 0.20: # 20% chance for +1 bonus
                     final_yield_amount += 1
                     self.add_memory(f"Put my strength into '{task_name}' and got a bit extra {res_prod}.")
+
+            # Apply world event yield modifiers
+            if res_prod: # Check if the task actually produces a resource
+                modifier_key = f"yield_multiplier_{res_prod}"
+                world_event_modifier = world.active_world_effects.get(modifier_key)
+                if world_event_modifier and world.game_time.current_total_ticks < world_event_modifier.get("expires_tick", 0):
+                    final_yield_amount *= world_event_modifier.get("multiplier", 1.0)
+                    # self.add_memory(f"Benefited from '{world_event_modifier.get('event_id', 'world event')}' yielding more {res_prod}.")
+                    # This memory might be too spammy, log event globally.
+
+            final_yield_amount = int(round(final_yield_amount)) # Convert to int after all multipliers
 
             can_add_to_inv = self.max_inventory_items - self.get_inventory_load()
             actual_yield_taken = min(final_yield_amount, can_add_to_inv)
@@ -234,8 +251,9 @@ class Character:
             if actual_yield_taken > 0 and res_prod:
                 self.inventory[res_prod] = self.inventory.get(res_prod,0) + actual_yield_taken
                 tool_name_mem = self.equipped_tool['name'] if self.equipped_tool else 'hands'
-                self.add_memory(f"Task '{task_name}': got {actual_yield_taken} {res_prod} (base: {base_yield_amount}) with {tool_name_mem}.")
-                print(f"{self.name} task '{task_name}' yielded {actual_yield_taken} {res_prod} (base: {base_yield_amount}).")
+                event_bonus_info = f" (event mult: x{world.active_world_effects.get(modifier_key, {}).get('multiplier', 1.0):.2f})" if world_event_modifier and world.game_time.current_total_ticks < world_event_modifier.get("expires_tick",0) else ""
+                self.add_memory(f"Task '{task_name}': got {actual_yield_taken} {res_prod} (base: {base_yield_amount}{event_bonus_info}) with {tool_name_mem}.")
+                print(f"{self.name} task '{task_name}' yielded {actual_yield_taken} {res_prod} (base: {base_yield_amount}{event_bonus_info}).")
             elif final_yield_amount > 0: # Tried to yield something but inventory was full
                  print(f"{self.name} inventory full for {task_name} (tried to yield {final_yield_amount} {res_prod}).")
 
@@ -359,7 +377,12 @@ class Character:
             craft_time_per_unit = blueprint.get("craft_time_per_unit", 5)
 
             # --- Trait Effects on Crafting Progress ---
-            current_crafting_progress_gain = 1
+            current_crafting_progress_gain = 1 # Base progress
+
+            # Apply character status effect modifiers (e.g., "Sick" reduces work speed)
+            work_speed_modifier = self.get_status_modifier("work_speed_multiplier", 1.0)
+            current_crafting_progress_gain *= work_speed_modifier
+
             is_slacking_craft = False
 
             if "Lazy" in self.traits and not "Focused" in self.traits:
@@ -387,7 +410,30 @@ class Character:
                 for res, req_qty_per_unit in blueprint["required_resources"].items():
                     self.inventory[res] -= req_qty_per_unit
                     if self.inventory[res] <= 0: self.inventory.pop(res,None)
-                self.inventory[item_name] = self.inventory.get(item_name, 0) + 1 ; self.add_memory(f"Crafted 1 {item_name} for WO {order.order_id}.")
+
+                # Add item to inventory
+                self.inventory[item_name] = self.inventory.get(item_name, 0) + 1
+
+                # Apply crafting output bonuses from events (e.g., for tools)
+                # This is a bit simplified; ideally, the item itself would store its properties and bonuses would modify those upon creation.
+                # For now, if it's a tool, we check for durability bonus.
+                # This part is tricky because inventory just stores counts. Tools with varying durability need richer representation.
+                # For now, let's assume the *next* tool of this type equipped gets this bonus, which is not ideal.
+                # A proper fix would involve changing how tools are stored/tracked.
+                # SHORT TERM: We can log that a bonus *would* apply.
+                item_type = blueprint.get("type") # e.g., "Tool", "Furniture"
+                if item_type:
+                    modifier_key = f"craft_bonus_{item_type}"
+                    world_event_modifier = world.active_world_effects.get(modifier_key)
+                    if world_event_modifier and world.game_time.current_total_ticks < world_event_modifier.get("expires_tick", 0):
+                        bonus_details = world_event_modifier.get("bonus_details", {})
+                        if "durability_multiplier" in bonus_details and blueprint.get("type") == "Tool":
+                            bonus_mult = bonus_details["durability_multiplier"]
+                            self.add_memory(f"Crafted {item_name} with potential event bonus (x{bonus_mult:.1f} durability) due to '{world_event_modifier.get('event_id', 'world event')}'.")
+                            print(f"{self.name} crafted {item_name} with potential x{bonus_mult:.1f} durability bonus from event.")
+                        # Other bonuses like quality, etc. could be handled here
+
+                self.add_memory(f"Crafted 1 {item_name} for WO {order.order_id}.")
                 print(f"{self.name} CRAFTED 1 {item_name}. Inv has: {self.inventory.get(item_name,0)}/{item_qty_total} for WO {order.order_id}.")
                 self.crafting_progress = 0; self.materials_gathered_for_wo = False
                 if self.inventory.get(item_name,0) >= item_qty_total:
@@ -722,29 +768,29 @@ class Character:
         if self.current_goal != "Perform Stonemason Duties": self.decide_action(world)
 
     def _execute_initiate_hauling(self, world: 'World'):
-        print(f"DEBUG_HAUL_INIT: {self.name} starting _execute_initiate_hauling. Hauling info: {self.hauling_info}") # DEBUG
+        # print(f"DEBUG_HAUL_INIT: {self.name} starting _execute_initiate_hauling. Hauling info: {self.hauling_info}") # DEBUG
         if not self.hauling_info:
-            print(f"DEBUG_HAUL_INIT: {self.name} no hauling info. Goal to default/Idle.") # DEBUG
+            # print(f"DEBUG_HAUL_INIT: {self.name} no hauling info. Goal to default/Idle.") # DEBUG
             self.current_goal=self.job_default_goal() or "Idle"; return
         res=self.hauling_info.get("resource")
-        print(f"DEBUG_HAUL_INIT: {self.name} hauling resource: {res}") # DEBUG
+        # print(f"DEBUG_HAUL_INIT: {self.name} hauling resource: {res}") # DEBUG
         if not res or self.inventory.get(res,0)==0:
-            print(f"DEBUG_HAUL_INIT: {self.name} resource {res} not in inventory or no res. Goal to default/Idle. Inv: {self.inventory}") # DEBUG
+            # print(f"DEBUG_HAUL_INIT: {self.name} resource {res} not in inventory or no res. Goal to default/Idle. Inv: {self.inventory}") # DEBUG
             self.current_goal=self.job_default_goal() or "Idle";self.hauling_info=None; return # Removed decide_action(world)
 
         qty=self.inventory.get(res,0)
         # Get stockpiles that allow the resource AND have space for the quantity being hauled
         sps=[s_obj for s_obj in world.stockpiles if s_obj.is_allowed(res) and s_obj.has_space_for(res,qty)]
-        print(f"DEBUG_HAUL_INIT: {self.name} looking for stockpile for {qty} {res}. Initial sps count: {len(sps)}. SPs: {[s.name for s in sps]}") # DEBUG
+        # print(f"DEBUG_HAUL_INIT: {self.name} looking for stockpile for {qty} {res}. Initial sps count: {len(sps)}. SPs: {[s.name for s in sps]}") # DEBUG
 
         if not sps:
             # If it's a tool and no specific stockpile was found, try the ToolShed explicitly if it allows it.
             if BLUEPRINTS.get(res, {}).get("type") == "Tool":
-                print(f"DEBUG_HAUL_INIT: {res} is a tool. Explicitly checking ToolShed.") # DEBUG
+                # print(f"DEBUG_HAUL_INIT: {res} is a tool. Explicitly checking ToolShed.") # DEBUG
                 tool_shed = world.get_stockpile_by_name("ToolShed")
                 if tool_shed and tool_shed.is_allowed(res) and tool_shed.has_space_for(res,qty):
                     sps = [tool_shed]
-                    print(f"DEBUG_HAUL_INIT: Found ToolShed for {res}.") # DEBUG
+                    # print(f"DEBUG_HAUL_INIT: Found ToolShed for {res}.") # DEBUG
 
             if not sps: # Still no stockpile after checking specific + ToolShed fallback
                 print(f"{self.name} wants to haul {qty} {res} but no suitable stockpile found. Will Wander.")
@@ -754,7 +800,7 @@ class Character:
         self.hauling_info["target_stockpile_name"]=sp_chosen.name
         self.hauling_info["quantity_to_haul"]=qty
         self.current_goal="Haul Resource to Stockpile"
-        print(f"DEBUG_HAUL_INIT: {self.name} chose stockpile {sp_chosen.name} for {qty} {res}. Goal set to: {self.current_goal}") # DEBUG
+        # print(f"DEBUG_HAUL_INIT: {self.name} chose stockpile {sp_chosen.name} for {qty} {res}. Goal set to: {self.current_goal}") # DEBUG
         # self.decide_action(world) # Not needed here, current_goal change is enough for next tick
 
     def _execute_haul_resource(self, world: 'World'):
@@ -839,33 +885,61 @@ class Character:
         # if other_chars_here and self.current_goal in ["Wander", "Idle", None] and not self.active_work_order_id :
         #     self.interact(other_chars_here[0], world); return
 
-        # 2. Opportunistic Work Order Claiming
-        # Check if character is available (idle, wandering, or their job allows picking up WOs) and has no active WO
+        # 2. Opportunistic Work Order Claiming / Resuming
+        # Check if character is available (idle, wandering, or their job allows picking up WOs)
         can_look_for_wo = self.current_goal in [None, "Idle", "Wander"] or \
                           (self.job in ["Master Craftsman", "Expedition Leader", "Manager"] and self.current_goal in ["Assess Production Needs", "Oversee Expedition", "Manage Work Orders", "Idle", None])
 
-        if can_look_for_wo and not self.active_work_order_id and not self.active_build_order_id: # Ensure no active build order either
-            # Try to claim a CRAFT order first
-            if self.skills: # Character needs some skills to take on craft orders
-                approved_craft_orders = world.get_approved_craft_orders()
-                if approved_craft_orders:
-                    for order in approved_craft_orders:
-                        if order.assigned_to is None: # Unassigned
+        if can_look_for_wo:
+            # First, check if there's an InProgress or Approved order already assigned to this character that they dropped
+            if not self.active_work_order_id and not self.active_build_order_id: # Only if not already on one
+                resumed_order = False
+                for order in world.work_orders:
+                    if order.assigned_to == self.name and order.status in ["InProgress", "Approved"]:
+                        if order.order_type == "CraftItem":
+                            if order.status == "Approved": # Set to InProgress if resuming an Approved order
+                                order.status = "InProgress"
+                            self.active_work_order_id = order.order_id
+                            self.current_goal = "Execute Craft Order"
+                            # self.workshop_location might need reset or re-evaluation here if resuming
+                            # For now, _execute_craft_order handles workshop finding.
+                            self.add_memory(f"Resuming Craft WO {order.order_id} for {order.details.get('item_name')}.")
+                            print(f"{self.name} RESUMING Craft Work Order {order.order_id} ({order.details.get('item_name')}).")
+                            self._execute_craft_order(world); resumed_order = True; break
+                        elif order.order_type == "BuildStructure":
+                            if order.status == "Approved": # Set to InProgress
+                                order.status = "InProgress"
+                            self.active_build_order_id = order.order_id
+                            self.current_building_project = order.details.get("structure_type")
+                            self.building_site_target = order.details.get("location")
+                            self.current_goal = "Execute Build Order"
+                            self.add_memory(f"Resuming Build WO {order.order_id} for {order.details.get('structure_type')}.")
+                            print(f"{self.name} RESUMING Build Work Order {order.order_id} ({order.details.get('structure_type')}).")
+                            self._execute_build_order(world); resumed_order = True; break
+                if resumed_order: return
+
+            # If no order resumed, try to claim a NEW Craft order
+            if not self.active_work_order_id and not self.active_build_order_id: # Still no active WO
+                if self.skills:
+                    approved_craft_orders = world.get_approved_craft_orders() # These are unassigned
+                    if approved_craft_orders:
+                        for order in approved_craft_orders:
+                            # No need to check order.assigned_to is None, as get_approved_craft_orders handles it
                             item_name = order.details.get("item_name")
                             if item_name and item_name in BLUEPRINTS:
-                                required_skill_type = BLUEPRINTS[item_name].get("job_skill_needed") # e.g. "Carpentry"
+                                required_skill_type = BLUEPRINTS[item_name].get("job_skill_needed")
                                 if required_skill_type and self.skills.get(required_skill_type, 0) > 0:
                                     order.status = "InProgress"; order.assigned_to = self.name
                                     self._reset_crafting_state(); self.active_work_order_id = order.order_id
                                     self.current_goal = "Execute Craft Order"; self.workshop_location = (self.x, self.y)
                                     self.add_memory(f"Claimed Craft WO {order.order_id} for {item_name}.")
                                     print(f"{self.name} CLAIMED Craft Work Order {order.order_id} ({item_name}) skill: {required_skill_type}.")
-                                    self._execute_craft_order(world); return # IMPORTANT: return after claiming and starting
+                                    self._execute_craft_order(world); return
 
-            # If no CRAFT order was claimed, try to claim a BUILD order
-            if not self.active_work_order_id and not self.active_build_order_id: # Re-check, as craft order might have been taken
+            # If no CRAFT order was claimed or resumed, try to claim a NEW BUILD order
+            if not self.active_work_order_id and not self.active_build_order_id:
                 if self.job == "Builder" or self.skills.get("Construction", 0) > 0:
-                    build_orders = world.get_approved_build_orders() # Use the new method
+                    build_orders = world.get_approved_build_orders() # These are unassigned
 
                     if build_orders:
                         order_to_take = build_orders[0]
@@ -1181,8 +1255,8 @@ class Character:
 
 
     def _execute_build_order(self, world: 'World'):
-        current_time_str = str(world.game_time.current_total_ticks) if world.game_time else "N/A_TIME"
-        print(f"TOP_DEBUG {self.name} tick {current_time_str}: Goal='{self.current_goal}', BuildWO='{self.active_build_order_id}', Pos:({self.x},{self.y}), TargetSite:{self.building_site_target}, MatsGathered:{self.materials_gathered_for_build}, InvLoad:{self.get_inventory_load()}/{self.max_inventory_items}, ResToFetch:{self.resource_to_fetch}")
+        # current_time_str = str(world.game_time.current_total_ticks) if world.game_time else "N/A_TIME" # DEBUG
+        # print(f"TOP_DEBUG {self.name} tick {current_time_str}: Goal='{self.current_goal}', BuildWO='{self.active_build_order_id}', Pos:({self.x},{self.y}), TargetSite:{self.building_site_target}, MatsGathered:{self.materials_gathered_for_build}, InvLoad:{self.get_inventory_load()}/{self.max_inventory_items}, ResToFetch:{self.resource_to_fetch}") # DEBUG
 
         if not self.active_build_order_id or not self.current_building_project or not self.building_site_target:
             self._reset_building_state(); self.current_goal = self.job_default_goal() or "Idle"; return
@@ -1595,3 +1669,80 @@ class Character:
 
         # Example: If a supervisor reviews poorly, supervisor's relationship to subordinate might not change much,
         # but subordinate's relationship to supervisor likely worsens. This would be handled by the calling function.
+
+    def apply_status_effect(self, status_data: Dict[str, Any], world: 'World'):
+        """Applies a status effect to the character."""
+        # Check if a similar status effect is already active; potentially refresh or stack, or ignore.
+        # For now, let's assume they don't stack if the same name. Refresh duration.
+        status_name = status_data.get("status_name")
+        if not status_name:
+            print(f"Error: apply_status_effect called for {self.name} without status_name.")
+            return
+
+        existing_status = None
+        for i, se in enumerate(self.status_effects):
+            if se.get("name") == status_name:
+                existing_status = se
+                # Refresh duration if new duration is longer or it's a non-timed status being re-applied
+                new_duration_days = status_data.get("duration_days", 0)
+                new_duration_ticks = new_duration_days * world.game_time.ticks_per_day
+
+                current_remaining = existing_status.get("duration_remaining_ticks", 0)
+                if new_duration_ticks > current_remaining or new_duration_ticks == 0: # 0 duration could mean indefinite until removed by another event
+                    existing_status["duration_remaining_ticks"] = new_duration_ticks
+                    existing_status["modifiers"] = status_data.get("modifiers", {}) # Update modifiers too
+                    self.add_memory(f"Status '{status_name}' was refreshed/updated.")
+                    print(f"{self.name}'s status '{status_name}' refreshed. Duration ticks: {new_duration_ticks}")
+                return # Status refreshed/updated
+
+        # If not existing, add new status effect
+        duration_days = status_data.get("duration_days", 0)
+        new_status = {
+            "name": status_name,
+            "duration_remaining_ticks": duration_days * world.game_time.ticks_per_day,
+            "modifiers": status_data.get("modifiers", {}), # e.g., {"work_speed_multiplier": 0.8}
+            "applied_tick": world.game_time.current_total_ticks
+        }
+        self.status_effects.append(new_status)
+        self.add_memory(f"Affected by '{status_name}'.")
+        print(f"{self.name} is now affected by '{status_name}' for {duration_days} days (Modifiers: {new_status['modifiers']}).")
+
+    def process_status_effects(self, world: 'World'):
+        """Processes active status effects, applies them, and removes expired ones. Called each tick."""
+        effects_to_remove = []
+        for status in self.status_effects:
+            status["duration_remaining_ticks"] -= 1
+            # If duration_remaining_ticks was calculated from a positive duration_days, it should expire.
+            # Indefinite statuses (if duration_days was 0 or not specified leading to 0 duration_ticks)
+            # would need another mechanism to be removed, or rely on duration_ticks being set to a very large number initially.
+            # For now, any status with a tick counter reaching zero will be removed.
+            if status["duration_remaining_ticks"] <= 0:
+                effects_to_remove.append(status)
+                self.add_memory(f"Status '{status['name']}' has worn off.")
+                print(f"{self.name}'s status '{status['name']}' has worn off.")
+            else:
+                # Apply ongoing effects of the status (e.g., need decay multipliers)
+                modifiers = status.get("modifiers", {})
+                if "social_need_decay_multiplier" in modifiers and 'Social' in self.needs:
+                    # This is tricky, decay usually happens daily. This implies per-tick or needs adjustment
+                    # For now, let's assume daily decay is handled in main loop, and this can augment it if needed
+                    # Or, this modifier is read by the daily decay logic.
+                    pass
+                if "energy_decay_multiplier" in modifiers and 'Energy' in self.needs: # Assuming an 'Energy' need
+                    # Example: self.needs['Energy'] = max(0, self.needs['Energy'] - (1 * modifiers["energy_decay_multiplier"]))
+                    pass
+
+
+        for eff in effects_to_remove:
+            self.status_effects.remove(eff)
+
+    def get_status_modifier(self, modifier_key: str, default_value: float = 1.0) -> float:
+        """Gets a combined modifier value from all active status effects."""
+        # E.g., get_status_modifier("work_speed_multiplier") might return 0.8 if Sick.
+        # If multiple effects modify the same key, how they stack (multiplicative, additive, take worst) needs decision.
+        # For now, let's assume multiplicative, starting from default_value.
+        current_value = default_value
+        for status in self.status_effects:
+            if modifier_key in status.get("modifiers", {}):
+                current_value *= status["modifiers"][modifier_key]
+        return current_value

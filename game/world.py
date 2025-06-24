@@ -26,9 +26,17 @@ class World:
         self.ledger: Ledger = Ledger()
         self.game_time: Optional[Time] = game_time_ref
         self.work_orders: List[WorkOrder] = []
+        self.event_log: List[str] = [] # For logging event messages
+        self.active_world_effects: Dict[str, Any] = {} # For global event effects like resource yield multipliers
 
     def __str__(self):
         return f"World(Size: {self.grid_size}, Season: {self.season}, Chars: {len(self.characters)}, SPs: {len(self.stockpiles)}, Buildings: {len(self.buildings)}, WOs: {len(self.work_orders)})"
+
+    def add_event_log_message(self, message: str):
+        timestamp = f"D{self.game_time.current_day} T{self.game_time.current_tick}" # Use current_tick
+        full_message = f"[{timestamp}] EVENT: {message}"
+        self.event_log.append(full_message)
+        print(full_message) # Also print to console for immediate visibility
 
     def set_game_time(self, game_time_obj: Time):
         if not self.game_time: self.game_time = game_time_obj
@@ -195,3 +203,75 @@ class World:
             if wo.order_id == order_id:
                 return wo
         return None
+
+    def apply_event_effects(self, event_instance: 'ActiveEvent'):
+        """Applies the effects of a triggered event."""
+        from .event_manager import ActiveEvent # Local import for type hint
+
+        print(f"DEBUG: Applying effects for event: {event_instance.event_id} - {event_instance.description}")
+        for effect_data in event_instance.effects:
+            effect_type = effect_data.get("type")
+
+            if effect_type == "add_character_status":
+                target_char_name = event_instance.instance_data.get("target_character_name")
+                if target_char_name:
+                    target_char = next((c for c in self.characters if c.name == target_char_name), None)
+                    if target_char:
+                        target_char.apply_status_effect(effect_data, self)
+                    else:
+                        print(f"Warning: Could not find target character {target_char_name} for status effect from event {event_instance.event_id}")
+                else: # Should be a global character effect, or target all. For now, assume targeted events specify target via instance_data
+                    print(f"Warning: Effect 'add_character_status' for event {event_instance.event_id} needs a target character.")
+
+            elif effect_type == "modify_resource_yield":
+                resource_type = effect_data.get("resource_type")
+                multiplier = effect_data.get("multiplier", 1.0)
+                duration_days = effect_data.get("duration_days", 0)
+                if resource_type and duration_days > 0:
+                    # Store this modifier in the world, to be checked by resource gathering tasks
+                    # Key could be f"yield_modifier_{resource_type}"
+                    modifier_key = f"yield_multiplier_{resource_type}"
+                    self.active_world_effects[modifier_key] = {
+                        "multiplier": multiplier,
+                        "expires_tick": self.game_time.current_total_ticks + (duration_days * self.game_time.ticks_per_day),
+                        "event_id": event_instance.event_id # To know which event caused it for removal
+                    }
+                    self.add_event_log_message(f"Yield for {resource_type} is now x{multiplier} for {duration_days} days (due to {event_instance.description}).")
+
+            elif effect_type == "modify_crafting_output":
+                item_type = effect_data.get("item_type") # e.g., "Tool"
+                bonus = effect_data.get("bonus", {}) # e.g., {"durability_multiplier": 1.2}
+                duration_days = effect_data.get("duration_days", 0)
+                if item_type and bonus and duration_days > 0:
+                    modifier_key = f"craft_bonus_{item_type}"
+                    self.active_world_effects[modifier_key] = {
+                        "bonus_details": bonus,
+                        "expires_tick": self.game_time.current_total_ticks + (duration_days * self.game_time.ticks_per_day),
+                        "event_id": event_instance.event_id
+                    }
+                    self.add_event_log_message(f"Crafting for {item_type}s might have bonuses for {duration_days} days (due to {event_instance.description}).")
+
+            # Add more effect handlers here
+            else:
+                print(f"Warning: Unknown or unhandled effect type '{effect_type}' for event {event_instance.event_id}")
+
+    def expire_event_effects(self, event_instance: 'ActiveEvent'):
+        """Removes effects of an expired event from the world state."""
+        from .event_manager import ActiveEvent # Local import for type hint
+
+        print(f"DEBUG: Expiring effects for event: {event_instance.event_id} - {event_instance.description}")
+        # Remove global world effects tied to this event_instance.event_id
+        effects_to_remove_keys = []
+        for key, effect_details in self.active_world_effects.items():
+            if effect_details.get("event_id") == event_instance.event_id:
+                effects_to_remove_keys.append(key)
+
+        for key in effects_to_remove_keys:
+            removed_effect = self.active_world_effects.pop(key)
+            self.add_event_log_message(f"World effect '{key}' (bonus: {removed_effect.get('multiplier') or removed_effect.get('bonus_details')}) from event '{event_instance.description}' has expired.")
+            print(f"World effect '{key}' from event '{event_instance.description}' expired.")
+
+        # Character status effects are managed by Character.process_status_effects based on their own duration.
+        # If an event ending needs to explicitly remove a status it applied regardless of status duration,
+        # that would need specific logic here or a different effect type.
+        # For now, status effects time out on their own.
