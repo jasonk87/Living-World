@@ -24,19 +24,35 @@ class Character:
                  max_inventory_items: int = 10,
                  rank: str = "Worker"): # Added rank parameter
         self.name = name; self.personality = personality; self.traits = traits
+
         # Initialize skills with new structure
         self.skills: Dict[str, Dict[str, Any]] = {}
-        for skill_name, level in skills.items(): # Convert initial skills
-            self.skills[skill_name] = {
-                "level": level,
-                "experience": 0.0,
-                "exp_to_next_level": self._calculate_exp_for_level(level)
-            }
+        if skills: # Ensure skills is not None before iterating
+            for skill_name, level in skills.items(): # Convert initial skills
+                self.skills[skill_name] = {
+                    "level": level,
+                    "experience": 0.0,
+                    "exp_to_next_level": self._calculate_exp_for_level(level)
+                }
 
         self.x = x; self.y = y; self.inventory = {}; self.memory = [];
+
+        # Needs System
         self.needs = needs if needs else {}
-        if 'Social' not in self.needs: # Ensure 'Social' need is present
-            self.needs['Social'] = 50 # Default social need
+        default_needs = {
+            "Hunger": 100, "Thirst": 100, "Energy": 100,
+            "Social": 50, "Comfort": 50
+        }
+        for need_name, default_value in default_needs.items():
+            if need_name not in self.needs:
+                self.needs[need_name] = default_value
+
+        self.max_needs: Dict[str, int] = {
+            "Hunger": 100, "Thirst": 100, "Energy": 100,
+            "Social": 100, "Comfort": 100
+        }
+        self.mood: int = 50 # Range 0-100, 50 is neutral
+
         self.current_goal = current_goal
         self.relationships = {}; self.job = job; self.max_inventory_items = max_inventory_items
         self.hauling_info: Optional[Dict] = None
@@ -90,13 +106,14 @@ class Character:
     def __str__(self):
         build_wo_info = f", BuildWO: {self.active_build_order_id}" if self.active_build_order_id else ""
         base_info = (f"Character(Name: {self.name}, Rank: {self.rank}, Job: {self.job}, Pos: ({self.x},{self.y}), Goal: {self.current_goal}, CraftWO: {self.active_work_order_id}{build_wo_info}, Load: {self.get_inventory_load()}/{self.max_inventory_items})")
+        needs_summary = f"Needs(H:{self.needs.get('Hunger',0)} T:{self.needs.get('Thirst',0)} E:{self.needs.get('Energy',0)} S:{self.needs.get('Social',0)}) Mood:{self.mood}"
         supervisor_info = f"  Supervisor: {self.supervisor_name if self.supervisor_name else 'None'}"
         subordinates_info = f"  Subordinates: {len(self.subordinates_names)}"
         performance_info = f"  Performance: {self.performance_rating} (Warnings: {self.warning_count}, Last Review: Day {self.last_performance_review_day if self.last_performance_review_day is not None else 'N/A'})"
         equipped_tool_info = "None";
         if self.equipped_tool: equipped_tool_info = f"{self.equipped_tool['name']} ({self.equipped_tool['durability']}/{self.equipped_tool['max_durability']})"
         tool_info_str = f"  Equipped Tool: {equipped_tool_info}"
-        return f"{base_info}\n{supervisor_info}; {subordinates_info}\n{performance_info}\n{tool_info_str}"
+        return f"{base_info}\n  {needs_summary}\n{supervisor_info}; {subordinates_info}\n{performance_info}\n{tool_info_str}"
     def set_supervisor(self, s: Optional[str]): self.supervisor_name=s
     def add_subordinate(self, s: str): self.subordinates_names.append(s) if s not in self.subordinates_names else None
     def remove_subordinate(self, s: str): self.subordinates_names.remove(s) if s in self.subordinates_names else None

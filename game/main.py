@@ -350,17 +350,20 @@ def main_simulation(stdscr): # Renamed main to main_simulation, takes stdscr
                         log_msg_world_effects += f"\n    - {key_eff}: {effect_info.get('multiplier') or effect_info.get('bonus_details')} (expires ~{expires_in_ticks / ticks_per_day:.1f}d)"
                     game_world.add_event_log_message(log_msg_world_effects)
 
-                # Log character skills daily for testing skill progression
-                for char_status in event_test_chars: # 'event_test_chars' is now our skill test characters
+                # Log character skills daily for testing skill progression AND general status
+                for char_status in event_test_chars:
                     if char_status in game_world.characters:
+                        status_names = [s['name'] for s in char_status.status_effects]
                         skills_summary_list = []
                         for skill_name, data in char_status.skills.items():
                             skills_summary_list.append(f"{skill_name} L{data['level']}({data['experience']:.0f}/{data['exp_to_next_level']:.0f})")
                         skills_summary = ", ".join(skills_summary_list) if skills_summary_list else "None"
 
-                        # This log is for console debugging during this phase, will be replaced by UI display
-                        # game_world.add_event_log_message(
-                        #    f"  SKILLS_DEBUG: {char_status.name}: [{skills_summary}]")
+                        game_world.add_event_log_message(
+                            f"  STATUS: {char_status.name} (Pos:({char_status.x},{char_status.y}), Goal='{char_status.current_goal}', "
+                            f"Needs(H:{char_status.needs.get('Hunger',0)} T:{char_status.needs.get('Thirst',0)} E:{char_status.needs.get('Energy',0)} S:{char_status.needs.get('Social',0)} C:{char_status.needs.get('Comfort',0)}) Mood:{char_status.mood}, "
+                            f"Statuses: {status_names}, Inv: {sum(char_status.inventory.values())}, Skills: [{skills_summary}])"
+                        )
 
                 if (game_time_obj.current_day - last_season_change_day) >= days_per_season:
                     game_world.advance_season()
