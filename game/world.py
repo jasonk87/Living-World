@@ -223,6 +223,27 @@ class World:
                     target_char = next((c for c in self.characters if c.name == target_char_name), None)
                     if target_char:
                         target_char.apply_status_effect(effect_data, self)
+                        # Add to affected list if not already present
+                        if target_char.name not in event_instance.affected_character_names:
+                            event_instance.affected_character_names.append(target_char.name)
+
+                        # Apply shared experience relationship modifier
+                        # This character (target_char) just got affected.
+                        # Check against all *other* already affected characters for this event instance.
+                        for other_affected_char_name in event_instance.affected_character_names:
+                            if other_affected_char_name != target_char.name:
+                                other_char_obj = self.get_character_by_name(other_affected_char_name)
+                                if other_char_obj:
+                                    # Simple +1 for shared experience, could be configured per event later
+                                    relationship_change = 1
+                                    reason = f"experienced '{event_instance.description}' alongside {other_char_obj.name}"
+                                    target_char.modify_relationship(other_char_obj.name, relationship_change, self, reason=reason)
+
+                                    reason_other = f"experienced '{event_instance.description}' alongside {target_char.name}"
+                                    other_char_obj.modify_relationship(target_char.name, relationship_change, self, reason=reason_other)
+                                    # Avoid spamming logs for this, or make it a rarer memory.
+                                    # target_char.add_memory(f"Shared event '{event_instance.description}' with {other_char_obj.name}, rel +{relationship_change}.")
+                                    # other_char_obj.add_memory(f"Shared event '{event_instance.description}' with {target_char.name}, rel +{relationship_change}.")
                     else:
                         print(f"Warning: Could not find target character {target_char_name} for status effect from event {event_instance.event_id}")
                 else: # Should be a global character effect, or target all. For now, assume targeted events specify target via instance_data

@@ -23,6 +23,7 @@ class ActiveEvent:
     triggered_for_targets: Optional[List[str]] = None # e.g., character names for targeted events
     # Store any specific state for this instance of the event, e.g. which resource is boosted
     instance_data: Dict[str, Any] = field(default_factory=dict)
+    affected_character_names: List[str] = field(default_factory=list) # New field
 
 
 class EventManager:
