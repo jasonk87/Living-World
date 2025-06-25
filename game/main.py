@@ -264,15 +264,21 @@ def main_simulation(stdscr): # Renamed main to main_simulation, takes stdscr
                                      # For simplicity in setup, let's give her one and set durability low.
     # We will set tool durability after she equips it. Or, create a custom low-dura tool.
     # For now, let's assume she'll grab one from ToolShed and it will break naturally or we can adjust durability later.
+    # To make tool break more predictable for testing:
+    # 1. Eva fetches a Stone Axe.
+    # 2. After she equips it, we'll manually set its durability very low.
+    # This requires a small change to the main loop or a delayed setup function.
+    # For now, we'll rely on natural (but perhaps slow) tool breakage or assume manual adjustment during a hypothetical test run.
 
     game_world.add_character(char1)
     event_test_chars.append(char1)
     initial_setup_messages.append(f"  Added: {char1.name} (Job: {char1.job}, Woodcutting Lvl 4, Empathetic) at ({char1.x},{char1.y}). Will test skill-up & tool break.")
 
     # Liam - Now a Builder, to observe reactions. Add "Grumpy" to test negative tool break reaction.
+    # Positioned at (2,1), Eva is at (2,2). Liam is 1 tile away.
     char2_needs = {"Hunger": 85, "Thirst": 70, "Energy": 95, "Social": 55, "Comfort": 65, "Stone": 5}
     char2 = Character(name="Liam", personality="Optimistic", traits=["Diligent", "Grumpy"], # Added Grumpy
-                      job="Builder", x=2,y=1, skills={"Mining": 1, "Construction": 1}, # Moved closer to Eva
+                      job="Builder", x=2,y=1, skills={"Mining": 1, "Construction": 1},
                       needs=char2_needs)
 
     # Manager Character

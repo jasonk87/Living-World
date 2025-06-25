@@ -109,11 +109,19 @@ class Character:
         needs_summary = f"Needs(H:{self.needs.get('Hunger',0)} T:{self.needs.get('Thirst',0)} E:{self.needs.get('Energy',0)} S:{self.needs.get('Social',0)} C:{self.needs.get('Comfort',0)}) Mood:{self.mood}"
         supervisor_info = f"  Supervisor: {self.supervisor_name if self.supervisor_name else 'None'}"
         subordinates_info = f"  Subordinates: {len(self.subordinates_names)}"
+        relationships_info_list = []
+        if self.relationships:
+            for name, score in self.relationships.items():
+                # Attempt to get state; requires world access if get_relationship_state needs it,
+                # or passing world to __str__ which is awkward.
+                # For simplicity in __str__, we'll just show score. State can be checked via method.
+                relationships_info_list.append(f"{name}: {score}")
+        relationships_str = f"  Relationships: {', '.join(relationships_info_list) if relationships_info_list else 'None'}"
         performance_info = f"  Performance: {self.performance_rating} (Warnings: {self.warning_count}, Last Review: Day {self.last_performance_review_day if self.last_performance_review_day is not None else 'N/A'})"
         equipped_tool_info = "None";
         if self.equipped_tool: equipped_tool_info = f"{self.equipped_tool['name']} ({self.equipped_tool['durability']}/{self.equipped_tool['max_durability']})"
         tool_info_str = f"  Equipped Tool: {equipped_tool_info}"
-        return f"{base_info}\n  {needs_summary}\n{supervisor_info}; {subordinates_info}\n{performance_info}\n{tool_info_str}"
+        return f"{base_info}\n  {needs_summary}\n{supervisor_info}; {subordinates_info}\n{relationships_str}\n{performance_info}\n{tool_info_str}"
 
     def set_supervisor(self, s: Optional[str]): self.supervisor_name=s
     def add_subordinate(self, s: str): self.subordinates_names.append(s) if s not in self.subordinates_names else None
@@ -1063,8 +1071,8 @@ class Character:
 
         return
 
-# Make sure to import SOCIAL_INTERACTION_DEFINITIONS from .data
-from .data import BLUEPRINTS, JOB_TASK_DEFINITIONS, STRUCTURE_BLUEPRINTS, SOCIAL_INTERACTION_DEFINITIONS
+# Make sure to import SOCIAL_INTERACTION_DEFINITIONS and RELATIONSHIP_STATES from .data
+from .data import BLUEPRINTS, JOB_TASK_DEFINITIONS, STRUCTURE_BLUEPRINTS, SOCIAL_INTERACTION_DEFINITIONS, RELATIONSHIP_STATES
 
 class Character:
     # ... (previous code) ...
@@ -1102,28 +1110,50 @@ class Character:
             self.socialize_target_location = (target_char.x, target_char.y)
             self.social_interaction_progress = 0
 
-            # Choose an interaction type
-            valid_interactions = []
+            # Choose an interaction type based on relationship state and other factors
+            relationship_state_with_target = self.get_relationship_state(target_char.name)
+
+            possible_interactions = []
             for key, definition in SOCIAL_INTERACTION_DEFINITIONS.items():
                 preconditions = definition.get("preconditions", {})
                 passes_preconditions = True
+
+                # Check basic preconditions from definition (e.g. target mood, item requirements - not fully implemented yet)
                 if "target_mood_less_than" in preconditions and target_char.mood >= preconditions["target_mood_less_than"]:
                     passes_preconditions = False
                 if "relationship_less_than" in preconditions and self.get_relationship_score(target_char.name) >= preconditions["relationship_less_than"]:
                     passes_preconditions = False
-                # Add more precondition checks here (e.g., item requirements)
+
+                # Filter by relationship state compatibility (example)
+                allowed_states = preconditions.get("allowed_relationship_states")
+                forbidden_states = preconditions.get("forbidden_relationship_states")
+
+                if allowed_states and relationship_state_with_target not in allowed_states:
+                    passes_preconditions = False
+                if forbidden_states and relationship_state_with_target in forbidden_states:
+                    passes_preconditions = False
 
                 if passes_preconditions:
-                    valid_interactions.append(key)
+                    # Add weight based on relationship state (simple example)
+                    weight = 1 # Default weight
+                    if key == "OfferEncouragement" and relationship_state_with_target in ["Friendly", "Close Friend", "Ally"]:
+                        weight = 3
+                    if key == "LightArgument" and relationship_state_with_target in ["Disliked", "Hostile", "Nemesis"]:
+                        weight = 3
+                    elif key == "LightArgument" and relationship_state_with_target in ["Friendly", "Close Friend", "Ally"]:
+                         weight = 0.2 # Less likely to argue with friends
 
-            if not valid_interactions: # Should always have GenericSocialize if others fail
-                self.current_social_interaction_key = "GenericSocialize"
+                    if weight > 0:
+                        possible_interactions.extend([key] * int(weight * 10)) # Multiply weight for random.choice
+
+            if not possible_interactions:
+                self.current_social_interaction_key = "GenericSocialize" # Fallback
             else:
-                self.current_social_interaction_key = random.choice(valid_interactions)
+                self.current_social_interaction_key = random.choice(possible_interactions)
 
             chosen_interaction_def = SOCIAL_INTERACTION_DEFINITIONS.get(self.current_social_interaction_key)
             if chosen_interaction_def:
-                 self.add_memory(f"Decided to '{chosen_interaction_def['display_name']}' with {self.socialize_target_name}.")
+                 self.add_memory(f"Decided to '{chosen_interaction_def['display_name']}' with {self.socialize_target_name} (Rel: {relationship_state_with_target}).")
             else: # Should not happen if GenericSocialize is a fallback
                  self.add_memory(f"Error: Could not find interaction definition for {self.current_social_interaction_key}.")
                  self.current_goal = self.job_default_goal() or "Idle"; return
@@ -1453,6 +1483,14 @@ class Character:
         new_score = max(-100, min(100, current_score + value_change))
         self.relationships[target_char_name] = new_score
         if reason: self.add_memory(f"Rel with {target_char_name} -> {new_score} ({value_change:+}). Reason: {reason}")
+
+    def get_relationship_state(self, target_char_name: str) -> str:
+        """Returns the descriptive state of the relationship with the target character."""
+        score = self.get_relationship_score(target_char_name)
+        for state_name, min_score, max_score in RELATIONSHIP_STATES:
+            if min_score <= score <= max_score:
+                return state_name
+        return "Unknown" # Should not be reached if ranges are comprehensive
 
     def _grant_skill_experience(self, skill_name: str, amount: float, world: 'World'): # Unchanged
         if skill_name not in self.skills:

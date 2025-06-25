@@ -242,3 +242,15 @@ SOCIAL_INTERACTION_DEFINITIONS = {
     #     "description_template": "{initiator_name} shared a meal with {target_name}."
     # },
 }
+
+RELATIONSHIP_STATES = [
+    # (State Name, Min Score, Max Score) - Ordered by score for easy lookup
+    ("Nemesis", -100, -76),
+    ("Hostile", -75, -51),
+    ("Disliked", -50, -26),
+    ("Neutral", -25, 25),
+    ("Acquaintance", 26, 50),
+    ("Friendly", 51, 75),
+    ("Close Friend", 76, 90),
+    ("Ally", 91, 100)
+]
