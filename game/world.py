@@ -207,6 +207,43 @@ class World:
             self.furniture.append(furniture_item)
             # print(f"Added furniture: {furniture_item.display_name} at ({furniture_item.x},{furniture_item.y})")
 
+    def can_place_furniture(self, furniture_item_name: str, x: int, y: int, size: Tuple[int,int]) -> bool:
+        """Checks if a piece of furniture can be placed at the given location."""
+        from .data import BLUEPRINTS # Local import to access blueprint for item details if needed, though size is passed
+
+        # Check bounds and obstructions for all tiles the furniture would occupy
+        for r_offset in range(size[1]):  # height
+            for c_offset in range(size[0]):  # width
+                check_x, check_y = x + c_offset, y + r_offset
+
+                if not (0 <= check_x < self.grid_size[0] and 0 <= check_y < self.grid_size[1]):
+                    # print(f"Placement check: Out of bounds for {furniture_item_name} at ({check_x},{check_y})")
+                    return False # Out of bounds
+
+                # Check for existing buildings
+                if self.get_building_at(check_x, check_y):
+                    # print(f"Placement check: Obstructed by building for {furniture_item_name} at ({check_x},{check_y})")
+                    return False
+
+                # Check for other furniture
+                if self.get_furniture_at(check_x, check_y):
+                    # print(f"Placement check: Obstructed by other furniture for {furniture_item_name} at ({check_x},{check_y})")
+                    return False
+
+                # Check if base tile is suitable (e.g., not Water or Mountain)
+                # Note: self.grid[x][y] is base terrain, self.get_tile() also considers overlays.
+                # We should check the base terrain from self.grid.
+                base_tile = self.grid[check_x][check_y] # Direct grid access for base terrain
+                if base_tile in ["Water", "Mountain"]: # Add other non-placeable terrains if any
+                    # print(f"Placement check: Unsuitable terrain '{base_tile}' for {furniture_item_name} at ({check_x},{check_y})")
+                    return False
+
+        # TODO: Add more rules:
+        # - Must be placed inside a specific building type (e.g. bed in a "House" building)
+        # - Cannot block doorways or critical paths (more complex pathfinding check)
+
+        return True
+
     def get_furniture_at(self, x: int, y: int) -> Optional[Furniture]:
         """Returns the furniture object at a given coordinate, if any."""
         for item in self.furniture:

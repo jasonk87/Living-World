@@ -206,12 +206,13 @@ def main_simulation(stdscr): # Renamed main to main_simulation, takes stdscr
     print(f"Added StoneStore stockpile.")
 
     # General Store for consumables
-    general_store = Stockpile(name="GeneralStore", x=2, y=3, width=1, height=1, allowed_resources=["FoodRation", "CleanWater"], total_capacity=100)
+    general_store = Stockpile(name="GeneralStore", x=2, y=3, width=1, height=1, allowed_resources=["FoodRation", "CleanWater", "Plant Fiber"], total_capacity=100)
     game_world.add_stockpile(general_store)
     general_store.add_item("FoodRation", 20)
     general_store.add_item("CleanWater", 20)
+    general_store.add_item("Plant Fiber", 20) # Stock Plant Fiber
     game_world.ledger.update_stockpile_record(general_store.name, general_store.inventory, game_time_obj.current_day)
-    initial_setup_messages.append(f"Added GeneralStore stockpile, stocked with Food and Water.")
+    initial_setup_messages.append(f"Added GeneralStore stockpile, stocked with Food, Water, and Plant Fiber.")
 
 
     # Add some Furniture beds for resting test
@@ -296,40 +297,61 @@ def main_simulation(stdscr): # Renamed main to main_simulation, takes stdscr
     event_test_chars.append(char2)
     initial_setup_messages.append(f"  Added: {char2.name} (Job: {char2.job}, Supervisor: {char2.supervisor_name}, Skills: Mining L{char2.skills.get('Mining',{}).get('level',0)}, Construction L{char2.skills.get('Construction',{}).get('level',0)}) at ({char2.x},{char2.y})")
 
-    # Crafty - Will craft Stone Axes, starts at level 0 Stonemasonry (to see it initialized)
+    # Crafty - Now a Carpenter, will craft a Wooden Bed.
     char3_needs = {"Hunger": 90, "Thirst": 80, "Energy": 85, "Social": 50, "Comfort": 60}
+    # Give Crafty Carpentry skill
+    crafty_skills = {"Stonemasonry": {"level": 0, "experience": 0}, "Carpentry": {"level": 1, "experience": 0}}
     char3 = Character(name="Crafty", personality="Inventive", traits=[],
-                      job="Stonemasonry", x=4,y=2, skills={},
+                      job="Carpenter", x=4,y=2, skills=crafty_skills,
                       needs=char3_needs)
-    char3.set_supervisor(manager_char.name) # Assign Bossman as supervisor
+    char3.set_supervisor(manager_char.name)
     manager_char.add_subordinate(char3.name)
     game_world.add_character(char3)
     event_test_chars.append(char3)
-    # Pre-give Crafty resources for a Stone Axe
-    char3.inventory["Stone"] = 20 # Enough for multiple axes
-    char3.inventory["Wood"] = 10
-    initial_setup_messages.append(f"  Added: {char3.name} (Job: {char3.job}, Supervisor: {char3.supervisor_name}) at ({char3.x},{char3.y}), pre-stocked for Stone Axes.")
 
-    # Initial Work Order for Crafty
-    stone_axe_wo = WorkOrder(
-        order_type="CraftItem",
-        details={"item_name": "Stone Axe", "quantity": 1, "required_resources": BLUEPRINTS["Stone Axe"]["required_resources"]},
-        creation_day=1, priority=1
-    )
-    stone_axe_wo.status = "Approved"
-    stone_axe_wo.assigned_to = char3.name
-    game_world.add_work_order(stone_axe_wo)
-    char3.active_work_order_id = stone_axe_wo.order_id
-    char3.current_goal = "Execute Craft Order"
+    # Resources for Wooden Bed: {"Wood": 15, "Plant Fiber": 5}
+    # Add Plant Fiber resource and stockpile if it doesn't exist. For now, pre-stock Crafty.
+    # Assuming WoodStore can store Wood. We need a source or stockpile for Plant Fiber.
+    # Let's create a simple plant fiber source tile and have a character gather it, or just give it to Crafty.
+    # For simplicity of this test step, give directly to Crafty.
+    char3.inventory["Wood"] = 20
+    char3.inventory["Plant Fiber"] = 10
+    initial_setup_messages.append(f"  Added: {char3.name} (Job: Carpenter, Supervisor: {char3.supervisor_name}, Carpentry Lvl 1) at ({char3.x},{char3.y}), pre-stocked for Wooden Bed.")
+
+    # Initial Work Order for Crafty to make a Wooden Bed
+    wooden_bed_bp_craft = BLUEPRINTS.get("Wooden Bed")
+    if wooden_bed_bp_craft:
+        bed_wo = WorkOrder(
+            order_type="CraftItem",
+            details={"item_name": "Wooden Bed", "quantity": 1, "required_resources": wooden_bed_bp_craft["required_resources"]},
+            creation_day=1, priority=1
+        )
+        bed_wo.status = "Approved"
+        bed_wo.assigned_to = char3.name
+        game_world.add_work_order(bed_wo)
+        char3.active_work_order_id = bed_wo.order_id # Set active WO
+        char3.current_goal = "Execute Craft Order" # Set goal
+        initial_setup_messages.append(f"  Assigned Craft WO for Wooden Bed to {char3.name}.")
+
+    # Setup initial relationships for testing states
+    if char1 and char2: # Eva and Liam
+        char1.relationships[char2.name] = 60  # Friendly
+        char2.relationships[char1.name] = 60  # Friendly
+        initial_setup_messages.append(f"  Set Eva & Liam relationship to Friendly (60).")
+    if char3 and manager_char: # Crafty and Bossman
+        char3.relationships[manager_char.name] = -40 # Disliked
+        manager_char.relationships[char3.name] = -40 # Disliked
+        initial_setup_messages.append(f"  Set Crafty & Bossman relationship to Disliked (-40).")
+
 
     # Initial Build Order for Liam (Builder)
     hut_bp = STRUCTURE_BLUEPRINTS.get("wooden_hut")
     if hut_bp:
-        build_site_loc = (6,1) # Ensure this location is clear and valid
-        # Clear the location for building to avoid conflicts with pre-built beds if any overlap
-        # For simplicity, we assume (6,1) is clear or we'd add logic to find a clear spot.
+        build_site_loc = (6,1)
         # Ensure resources are available for the hut
-        wood_stockpile_test.add_item("Wood", hut_bp["required_resources"].get("Wood", 30) + 10) # Add enough wood
+        needed_wood_for_hut = hut_bp["required_resources"].get("Wood", 0)
+        if wood_stockpile_test.inventory.get("Wood", 0) < needed_wood_for_hut:
+             wood_stockpile_test.add_item("Wood", needed_wood_for_hut - wood_stockpile_test.inventory.get("Wood", 0) + 5) # Add enough + a bit more
         game_world.ledger.update_stockpile_record(wood_stockpile_test.name, wood_stockpile_test.inventory, game_time_obj.current_day)
 
         hut_build_wo = WorkOrder(
@@ -419,6 +441,33 @@ def main_simulation(stdscr): # Renamed main to main_simulation, takes stdscr
             current_total_ticks +=1
 
             event_manager.process_active_events()
+
+            # Check if Crafty finished the bed, if so, create a PlaceFurniture WO for Liam
+            # This is a simplified way to chain WOs for testing
+            if bed_wo and bed_wo.status == "Completed" and char3.inventory.get("Wooden Bed", 0) > 0:
+                # Check if a placement order already exists to avoid duplicates
+                place_order_exists = any(wo.order_type == "PlaceFurniture" and wo.details.get("item_name") == "Wooden Bed" for wo in game_world.work_orders)
+                if not place_order_exists:
+                    target_place_loc = (4,4) # Example location
+                    # Ensure Liam has the bed to place it (manual transfer for test)
+                    if char3.inventory.get("Wooden Bed", 0) > 0:
+                        char3.inventory["Wooden Bed"] -= 1
+                        if char3.inventory["Wooden Bed"] == 0: del char3.inventory["Wooden Bed"]
+
+                        char2.inventory["Wooden Bed"] = char2.inventory.get("Wooden Bed", 0) + 1
+                        initial_setup_messages.append(f"  Manually moved Wooden Bed from Crafty to Liam for placement test.")
+
+                        place_bed_wo = WorkOrder(
+                            order_type="PlaceFurniture",
+                            details={"item_name": "Wooden Bed", "target_location": target_place_loc},
+                            creation_day=game_time_obj.current_day, priority=2
+                        )
+                        place_bed_wo.status = "Approved" # Auto-approve for testing
+                        # No need to assign; Liam (Builder) should pick it up via decide_action
+                        game_world.add_work_order(place_bed_wo)
+                        initial_setup_messages.append(f"  Created PlaceFurniture WO for Wooden Bed at {target_place_loc}.")
+                        # To prevent this block from running repeatedly after transfer
+                        bed_wo = None # Nullify to stop re-triggering this specific WO creation logic
 
             for char_to_act in list(game_world.characters):
                 if char_to_act not in game_world.characters: continue

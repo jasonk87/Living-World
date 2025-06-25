@@ -1033,6 +1033,21 @@ class Character:
                         self.building_site_target = order_to_take.details.get("location")
                         self.current_goal = "Execute Build Order"; self.add_memory(f"Claimed Build WO {order_to_take.order_id}."); self.decide_action(world); return
 
+            if not self.active_work_order_id and not self.active_build_order_id: # Claim NEW PlaceFurniture
+                if self.job == "Builder": # For now, only Builders can place furniture
+                    place_orders = [wo for wo in world.work_orders if wo.order_type == "PlaceFurniture" and wo.status == "Approved" and wo.assigned_to is None]
+                    if place_orders:
+                        order_to_take = place_orders[0] # Simple: take first available
+                        # Check if character has the item to place (basic check, could be more robust)
+                        item_to_place = order_to_take.details.get("item_name")
+                        if item_to_place and self.inventory.get(item_to_place, 0) > 0:
+                            order_to_take.status = "InProgress"; order_to_take.assigned_to = self.name
+                            self.active_work_order_id = order_to_take.order_id # Use active_work_order_id for this too
+                            self.current_goal = "Place Furniture"
+                            self.add_memory(f"Claimed PlaceFurniture WO {order_to_take.order_id} for {item_to_place}.")
+                            self.decide_action(world); return
+                        # else: self.add_memory(f"Wanted to place {item_to_place} for WO {order_to_take.order_id} but don't have it.")
+
         # --- 3. Less Critical Needs & Default Job Goal (if not doing critical/WO) ---
         if self.current_goal in [None, "Idle", "Wander"] or \
            (self.current_goal == self.job_default_goal() and self.job_default_goal() == "Idle"):
@@ -1074,6 +1089,13 @@ class Character:
         elif self.current_goal == "Gather Stone": self._execute_gather_stone(world); return
         elif self.current_goal == "Oversee Expedition": self._execute_oversee_expedition(world); return
         elif self.current_goal == "Socialize": self._execute_socialize(world); return
+        elif self.current_goal == "Place Furniture": # New Goal Dispatch
+            if self.active_work_order_id: # Should be set when goal is chosen
+                self._execute_place_furniture(world, self.active_work_order_id)
+            else: # Should not happen if logic is correct
+                self.add_memory("Error: Goal is Place Furniture but no active_work_order_id.")
+                self.current_goal = self.job_default_goal() or "Idle"
+            return
 
         # --- 5. Fallback to Wander/Idle ---
         if self.current_goal is None or self.current_goal == "Idle":
@@ -1607,3 +1629,85 @@ class Character:
 
             # if observer_reaction_logged:
             #    self.add_memory(f"{observer.name} noticed my {event_type}.") # Optional: self observes observer's reaction
+
+    def _execute_place_furniture(self, world: 'World', work_order_id: str):
+        order = world.get_work_order_by_id(work_order_id)
+        if not order or order.order_type != "PlaceFurniture" or order.assigned_to != self.name:
+            self.add_memory(f"Invalid or unassigned 'PlaceFurniture' work order: {work_order_id}")
+            self.current_goal = self.job_default_goal() or "Idle"
+            return
+
+        details = order.details
+        item_name_to_place = details.get("item_name")
+        target_location = details.get("target_location")
+
+        if not item_name_to_place or not target_location:
+            self.add_memory(f"Invalid details for PlaceFurniture WO: {work_order_id}. Missing item_name or target_location.")
+            order.status = "Failed"; order.denial_reason = "Invalid WO details"
+            self.current_goal = self.job_default_goal() or "Idle"
+            return
+
+        # 1. Check if character has the item
+        if self.inventory.get(item_name_to_place, 0) <= 0:
+            # TODO: Implement fetching furniture from a stockpile if not in inventory.
+            # For now, assume it must be in inventory.
+            self.add_memory(f"Tried to place {item_name_to_place} for WO {work_order_id}, but don't have it.")
+            # order.status = "Pending"; # Or "Failed" if no fetching logic planned soon
+            # For now, let's keep it simple and assume failure if not in inventory
+            order.status = "Failed"; order.denial_reason = f"Item {item_name_to_place} not in inventory."
+            self.current_goal = self.job_default_goal() or "Idle"
+            return
+
+        # 2. Move to target location (top-left of where furniture will be placed)
+        if (self.x, self.y) != target_location:
+            self.move_towards(target_location[0], target_location[1], world)
+            return # Still moving
+
+        # 3. At location, attempt to place
+        furniture_bp = BLUEPRINTS.get(item_name_to_place)
+        if not furniture_bp or furniture_bp.get("type") != "Furniture":
+            self.add_memory(f"Cannot place {item_name_to_place}: not a valid furniture blueprint. WO: {work_order_id}")
+            order.status = "Failed"; order.denial_reason = f"Invalid furniture blueprint for {item_name_to_place}"
+            self.current_goal = self.job_default_goal() or "Idle"
+            return
+
+        # For now, using a simplified can_place check. Next step will enhance world.can_place_furniture
+        can_place = True
+        furniture_size = furniture_bp.get("size", (1,1))
+        for r_offset in range(furniture_size[1]):
+            for c_offset in range(furniture_size[0]):
+                check_x, check_y = target_location[0] + c_offset, target_location[1] + r_offset
+                if world.get_building_at(check_x, check_y) or world.get_furniture_at(check_x, check_y):
+                    can_place = False; break
+            if not can_place: break
+
+        # A more robust check using a dedicated world method would be:
+        # if not world.can_place_furniture(item_name_to_place, target_location[0], target_location[1], furniture_bp.get("size",(1,1))):
+
+        if can_place:
+            self.inventory[item_name_to_place] -= 1
+            if self.inventory[item_name_to_place] <= 0:
+                del self.inventory[item_name_to_place]
+
+            new_furniture = Furniture(
+                item_name=item_name_to_place,
+                display_name=furniture_bp.get("description", item_name_to_place),
+                x=target_location[0],
+                y=target_location[1],
+                functionality=furniture_bp.get("functionality", {}),
+                size=furniture_bp.get("size", (1,1)),
+                map_char=furniture_bp.get("map_char", 'f')
+                # parent_building_id could be set here if we had that info in WO
+            )
+            world.add_furniture(new_furniture)
+            self.add_memory(f"Successfully placed {item_name_to_place} at {target_location} for WO {work_order_id}.")
+            order.status = "Completed"
+            self.current_goal = self.job_default_goal() or "Idle"
+        else:
+            self.add_memory(f"Failed to place {item_name_to_place} at {target_location} for WO {work_order_id}: location obstructed.")
+            order.status = "Failed"; order.denial_reason = "Location obstructed" # Or "Pending" if retries are possible
+            self.current_goal = self.job_default_goal() or "Idle"
+
+        # Reset active work order ID from character if it was this one
+        if self.active_work_order_id == work_order_id and order.status in ["Completed", "Failed"]:
+             self.active_work_order_id = None
