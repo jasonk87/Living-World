@@ -16,6 +16,7 @@ def main_simulation(stdscr): # Renamed main to main_simulation, takes stdscr
     curses.curs_set(0) # Hide cursor
     stdscr.nodelay(True) # Non-blocking input
     stdscr.timeout(100) # Timeout for getch() in ms, affects tick rate (e.g., 100ms = 10 FPS max for UI updates)
+    stdscr.keypad(True) # Enable keypad mode for special keys like arrow keys
 
     height, width = stdscr.getmaxyx()
 
@@ -204,9 +205,41 @@ def main_simulation(stdscr): # Renamed main to main_simulation, takes stdscr
     game_world.ledger.update_stockpile_record(stone_stockpile_test.name, stone_stockpile_test.inventory, game_time_obj.current_day)
     print(f"Added StoneStore stockpile.")
 
+    # General Store for consumables
+    general_store = Stockpile(name="GeneralStore", x=2, y=3, width=1, height=1, allowed_resources=["FoodRation", "CleanWater"], total_capacity=100)
+    game_world.add_stockpile(general_store)
+    general_store.add_item("FoodRation", 20)
+    general_store.add_item("CleanWater", 20)
+    game_world.ledger.update_stockpile_record(general_store.name, general_store.inventory, game_time_obj.current_day)
+    initial_setup_messages.append(f"Added GeneralStore stockpile, stocked with Food and Water.")
 
-    # Setup for Event Testing
-    print("\n--- Character Setup (Event Test) ---")
+
+    # Add some beds for resting test
+    bed_blueprint = STRUCTURE_BLUEPRINTS.get("simple_bed")
+    if bed_blueprint:
+        bed1_loc = (5,1)
+        bed1 = Building(structure_type="simple_bed", display_name=bed_blueprint["display_name"],
+                        location=bed1_loc, size=bed_blueprint["size"],
+                        required_resources={}, build_time=0, # Pre-built
+                        functionality=bed_blueprint["functionality"])
+        bed1.current_progress = bed_blueprint["build_time"] # Mark as fully built
+        bed1.is_operational = True
+        game_world.add_building(bed1)
+        initial_setup_messages.append(f"Added pre-built Simple Bed at {bed1_loc}.")
+
+        bed2_loc = (5,3) # Another bed, different location
+        bed2 = Building(structure_type="simple_bed", display_name=bed_blueprint["display_name"],
+                        location=bed2_loc, size=bed_blueprint["size"],
+                        required_resources={}, build_time=0, # Pre-built
+                        functionality=bed_blueprint["functionality"])
+        bed2.current_progress = bed_blueprint["build_time"]
+        bed2.is_operational = True
+        game_world.add_building(bed2)
+        initial_setup_messages.append(f"Added pre-built Simple Bed at {bed2_loc}.")
+
+
+    # Setup for Event Testing (Now also Need Fulfillment Testing)
+    print("\n--- Character Setup (Need Fulfillment & Event Test) ---")
 
     # Add some resources for gathering tasks to test yield events
     game_world.set_tile(0,0,"Forest"); game_world.add_resource("Wood", (0,0))
@@ -217,25 +250,28 @@ def main_simulation(stdscr): # Renamed main to main_simulation, takes stdscr
     event_test_chars = [] # Re-using this list name for convenience
 
     # Eva - Woodcutter, starts at level 1 Woodcutting
+    char1_needs = {"Hunger": 80, "Thirst": 75, "Energy": 90, "Social": 60, "Comfort": 70, "Wood": 20}
     char1 = Character(name="Eva", personality="Stoic", traits=[],
                       job="Woodcutter", x=2,y=2, skills={"Woodcutting": 1},
-                      needs={'Social': 50, "Wood": 20}) # Increased Wood need to encourage more work
+                      needs=char1_needs)
     game_world.add_character(char1)
     event_test_chars.append(char1)
     initial_setup_messages.append(f"  Added: {char1.name} (Job: {char1.job}, Woodcutting Lvl: {char1.skills.get('Woodcutting',{}).get('level',0)}) at ({char1.x},{char1.y})")
 
     # Liam - Stonemason, starts at level 1 Mining
+    char2_needs = {"Hunger": 85, "Thirst": 70, "Energy": 95, "Social": 55, "Comfort": 65, "Stone": 20}
     char2 = Character(name="Liam", personality="Optimistic", traits=["Diligent"],
                       job="Stonemason", x=3,y=2, skills={"Mining": 1},
-                      needs={'Social': 50, "Stone": 20}) # Increased Stone need
+                      needs=char2_needs)
     game_world.add_character(char2)
     event_test_chars.append(char2)
     initial_setup_messages.append(f"  Added: {char2.name} (Job: {char2.job}, Mining Lvl: {char2.skills.get('Mining',{}).get('level',0)}) at ({char2.x},{char2.y})")
 
     # Crafty - Will craft Stone Axes, starts at level 0 Stonemasonry (to see it initialized)
+    char3_needs = {"Hunger": 90, "Thirst": 80, "Energy": 85, "Social": 50, "Comfort": 60}
     char3 = Character(name="Crafty", personality="Inventive", traits=[],
-                      job="Stonemasonry", x=4,y=2, skills={}, # Starts with no Stonemasonry skill explicitly
-                      needs={'Social': 50})
+                      job="Stonemasonry", x=4,y=2, skills={},
+                      needs=char3_needs)
     game_world.add_character(char3)
     event_test_chars.append(char3)
     # Pre-give Crafty resources for a Stone Axe
@@ -255,7 +291,7 @@ def main_simulation(stdscr): # Renamed main to main_simulation, takes stdscr
     char3.active_work_order_id = stone_axe_wo.order_id
     char3.current_goal = "Execute Craft Order"
 
-    initial_setup_messages.append("--- Simulation: Skill Progression Test ---")
+    initial_setup_messages.append("--- Simulation: Need Fulfillment & Skill Progression Test ---")
     max_simulation_days = 15 # Adjusted for skill progression
     last_season_change_day = game_time_obj.current_day
     running = True; current_total_ticks = 0
@@ -335,8 +371,20 @@ def main_simulation(stdscr): # Renamed main to main_simulation, takes stdscr
                 event_manager.check_triggers()
 
                 for char_daily_reset in game_world.characters:
+                    # Basic Needs Decay
+                    char_daily_reset.needs['Hunger'] = max(0, char_daily_reset.needs.get('Hunger', 100) - random.randint(10, 20))
+                    char_daily_reset.needs['Thirst'] = max(0, char_daily_reset.needs.get('Thirst', 100) - random.randint(15, 25))
+                    # Energy is primarily decayed by actions, but a small passive decay or cap could be added.
+                    # For now, relying on _execute_rest to recover it.
+                    char_daily_reset.needs['Comfort'] = max(0, char_daily_reset.needs.get('Comfort', 100) - random.randint(3, 7))
+
+                    # Social Need Decay (existing)
                     if 'Social' in char_daily_reset.needs:
                         char_daily_reset.needs['Social'] = max(0, char_daily_reset.needs['Social'] - random.randint(3,7))
+
+                    # Call character's own mood update logic
+                    char_daily_reset._update_mood(game_world)
+
                     if char_daily_reset.current_goal in ["Wander", None, "Idle"] and \
                        not char_daily_reset.active_work_order_id and \
                        not char_daily_reset.active_build_order_id and \

@@ -41,6 +41,18 @@ BLUEPRINTS = {
         "description": "A durable pickaxe for efficient mining.",
         "craft_time_per_unit": 15,
         "required_workshop_type": "small_workshop" # Requires a Small Workshop
+    },
+    "FoodRation": {
+        "type": "Consumable",
+        "effects": {"Hunger": 50, "Thirst": 5}, # Satisfies 50 Hunger, 5 Thirst
+        "description": "Basic sustenance, not very tasty but fills the stomach."
+        # No crafting recipe for now, assume it's found or provisioned
+    },
+    "CleanWater": {
+        "type": "Consumable",
+        "effects": {"Thirst": 40}, # Satisfies 40 Thirst
+        "description": "Potable water, essential for survival."
+        # No crafting recipe for now
     }
     # Add other items as needed, e.g., "Wooden Shield", "Stone Hammer"
 }
@@ -112,6 +124,16 @@ STRUCTURE_BLUEPRINTS = {
         "required_skill": {"Construction": 3},
         "map_char_initial": "w.", # Under construction
         "map_char_complete": "W"   # Completed
+    },
+    "simple_bed": {
+        "display_name": "Simple Bed",
+        "size": (1, 2), # width, height (a single tile bed, long shape)
+        "required_resources": {"Wood": 10, "Plant Fiber": 5}, # Added Plant Fiber as example
+        "build_time": 20,
+        "functionality": {"provides_rest_quality": 1.5, "provides_comfort": 10}, # Rest quality multiplier, comfort bonus
+        "required_skill": {"Construction": 1},
+        "map_char_initial": "b.",
+        "map_char_complete": "B"
     },
     "construction_site": { # A generic site, perhaps for displaying build orders on map before construction starts
         "display_name": "Construction Site",
