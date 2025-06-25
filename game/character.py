@@ -1045,66 +1045,184 @@ class Character:
 
         return
 
-    def _execute_socialize(self, world: 'World'): # Unchanged from previous version
-        task_def = JOB_TASK_DEFINITIONS.get("Socialize")
-        if not task_def: print(f"CRITICAL: 'Socialize' task definition not found for {self.name}."); self.current_goal = "Idle"; return
-        socialize_duration = task_def.get("base_time_per_yield", 5)
-        if not hasattr(self, 'socialize_target_name') or not self.socialize_target_name:
-            potential_targets = [char for char in world.characters if char.name != self.name and abs(char.x - self.x) + abs(char.y - self.y) <= 5 and self.get_relationship_score(char.name) > -75]
-            if not potential_targets: self.add_memory("Wanted to socialize, no one suitable nearby."); self.current_goal = "Idle"; self.needs["Social"] = max(0, self.needs.get("Social", 50) - 2) ; return
+# Make sure to import SOCIAL_INTERACTION_DEFINITIONS from .data
+from .data import BLUEPRINTS, JOB_TASK_DEFINITIONS, STRUCTURE_BLUEPRINTS, SOCIAL_INTERACTION_DEFINITIONS
+
+class Character:
+    # ... (previous code) ...
+    def __init__(self, name: str, personality: str, traits: list[str],
+                 skills: Optional[Dict[str, int]] = None,
+                 x: int = 0, y: int = 0,
+                 needs: Optional[Dict[str, int]] = None,
+                 current_goal: Optional[str] = None,
+                 job: Optional[str] = None,
+                 max_inventory_items: int = 10,
+                 rank: str = "Worker"):
+        # ... (rest of init)
+        self.socialize_target_name: Optional[str] = None
+        self.socialize_target_location: Optional[Tuple[int,int]] = None
+        self.current_social_interaction_key: Optional[str] = None # Stores the key of the chosen interaction
+        self.social_interaction_progress: int = 0
+
+
+    def _execute_socialize(self, world: 'World'):
+        if not self.socialize_target_name:
+            # Find a target
+            potential_targets = [
+                char for char in world.characters
+                if char.name != self.name and abs(char.x - self.x) + abs(char.y - self.y) <= 7 # Increased search radius slightly
+                   and self.get_relationship_score(char.name) > -80 # Avoid deep enemies for now
+            ]
+            if not potential_targets:
+                self.add_memory("Wanted to socialize, no one suitable nearby.")
+                self.current_goal = self.job_default_goal() or "Idle"
+                self.needs["Social"] = max(0, self.needs.get("Social", 50) - random.randint(1,3)) # Slight penalty for failed attempt
+                return
+
             target_char = random.choice(potential_targets)
-            self.socialize_target_name = target_char.name; self.socialize_target_location = (target_char.x, target_char.y)
-            self.task_work_progress = 0; self.add_memory(f"Decided to socialize with {self.socialize_target_name}.")
-        target_character_obj = next((c for c in world.characters if c.name == self.socialize_target_name), None)
-        if not target_character_obj: self.add_memory(f"Target {self.socialize_target_name} for socialization unavailable."); self.current_goal = "Idle"; self.socialize_target_name = None; self.task_work_progress = 0; return
-        if abs(self.x - target_character_obj.x) + abs(self.y - target_character_obj.y) > 1 :
-            self.socialize_target_location = (target_character_obj.x, target_character_obj.y)
-            self.move_towards(self.socialize_target_location[0], self.socialize_target_location[1], world)
-            if abs(self.x - target_character_obj.x) + abs(self.y - target_character_obj.y) > 7:
-                 self.add_memory(f"{self.socialize_target_name} moved too far."); self.current_goal = "Idle"; self.socialize_target_name = None; self.task_work_progress = 0; return
-            return
-        self.task_work_progress += 1
-        if self.task_work_progress >= socialize_duration:
-            base_change_initiator = random.randint(1, 3); base_change_target = random.randint(0, 2)
-            if "Friendly" in self.traits: base_change_initiator += 2
-            if "Grumpy" in self.traits: base_change_initiator -= 2
-            if "Charismatic" in self.traits: base_change_initiator = int(base_change_initiator * 1.5)
-            if "Friendly" in target_character_obj.traits: base_change_initiator += 1
-            if "Grumpy" in target_character_obj.traits: base_change_initiator -= 1
-            initiator_rel_to_target = self.get_relationship_score(target_character_obj.name)
-            if initiator_rel_to_target > 50: base_change_initiator += 2
-            elif initiator_rel_to_target < -50: base_change_initiator -= 5
-            interaction_description = "a neutral chat"
-            if base_change_initiator > 3: interaction_description = "a pleasant chat"
-            elif base_change_initiator < 0: interaction_description = "an awkward/tense interaction"
-            self.modify_relationship(target_character_obj.name, base_change_initiator, world, reason=f"Had {interaction_description} with them.")
-            target_rel_change = base_change_target
-            if "Grumpy" in target_character_obj.traits: target_rel_change -=1
-            if "Friendly" in target_character_obj.traits: target_rel_change +=1
-            if self.get_relationship_score(target_character_obj.name) < -50 : target_rel_change -=2
-            target_character_obj.modify_relationship(self.name, target_rel_change, world, reason=f"They had {interaction_description} with me.")
-            self.add_memory(f"Socialized with {target_character_obj.name}. It was {interaction_description}.")
-            target_character_obj.add_memory(f"{self.name} socialized with me. It was {interaction_description}.")
-            # print(f"{self.name} finished socializing with {target_character_obj.name}. Rel change for {self.name}: {base_change_initiator}, for {target_character_obj.name}: {target_rel_change}")
-            self.needs["Social"] = min(100, self.needs.get("Social", 50) + random.randint(15, 30))
-            target_character_obj.needs["Social"] = min(100, target_character_obj.needs.get("Social", 50) + random.randint(10, 20))
-            dialogue_context_key = "social_chat_neutral"
-            if base_change_initiator > 3: dialogue_context_key = "social_chat_positive"
-            elif base_change_initiator < 0: dialogue_context_key = "social_chat_negative"
-            if config.USE_LLM:
-                initiator_dialogue = generate_dialogue(self.name, target_character_obj.name, f"{dialogue_context_key}_initiator", world, self.personality, self.traits, target_character_obj.personality, target_character_obj.traits, initiator_rel_to_target)
-                self.add_memory(f"Said to {target_character_obj.name}: \"{initiator_dialogue}\""); target_character_obj.add_memory(f"Heard from {self.name}: \"{initiator_dialogue}\"")
+            self.socialize_target_name = target_char.name
+            self.socialize_target_location = (target_char.x, target_char.y)
+            self.social_interaction_progress = 0
+
+            # Choose an interaction type
+            valid_interactions = []
+            for key, definition in SOCIAL_INTERACTION_DEFINITIONS.items():
+                preconditions = definition.get("preconditions", {})
+                passes_preconditions = True
+                if "target_mood_less_than" in preconditions and target_char.mood >= preconditions["target_mood_less_than"]:
+                    passes_preconditions = False
+                if "relationship_less_than" in preconditions and self.get_relationship_score(target_char.name) >= preconditions["relationship_less_than"]:
+                    passes_preconditions = False
+                # Add more precondition checks here (e.g., item requirements)
+
+                if passes_preconditions:
+                    valid_interactions.append(key)
+
+            if not valid_interactions: # Should always have GenericSocialize if others fail
+                self.current_social_interaction_key = "GenericSocialize"
             else:
-                placeholder_dialogue = f"Exchanged pleasantries with {target_character_obj.name}."
-                if dialogue_context_key == "social_chat_negative": placeholder_dialogue = f"Had a tense exchange with {target_character_obj.name}."
-                elif dialogue_context_key == "social_chat_positive": placeholder_dialogue = f"Had a nice chat with {target_character_obj.name}."
-                self.add_memory(f"[LLM Off] {placeholder_dialogue}"); target_character_obj.add_memory(f"[LLM Off] {placeholder_dialogue}")
-            self.current_goal = "Idle"; self.socialize_target_name = None; self.task_work_progress = 0
-        else:
+                self.current_social_interaction_key = random.choice(valid_interactions)
+
+            chosen_interaction_def = SOCIAL_INTERACTION_DEFINITIONS.get(self.current_social_interaction_key)
+            if chosen_interaction_def:
+                 self.add_memory(f"Decided to '{chosen_interaction_def['display_name']}' with {self.socialize_target_name}.")
+            else: # Should not happen if GenericSocialize is a fallback
+                 self.add_memory(f"Error: Could not find interaction definition for {self.current_social_interaction_key}.")
+                 self.current_goal = self.job_default_goal() or "Idle"; return
+
+
+        target_character_obj = next((c for c in world.characters if c.name == self.socialize_target_name), None)
+        interaction_def = SOCIAL_INTERACTION_DEFINITIONS.get(self.current_social_interaction_key)
+
+        if not target_character_obj or not interaction_def:
+            self.add_memory(f"Socialization target {self.socialize_target_name} or interaction {self.current_social_interaction_key} became invalid.")
+            self._reset_socialization_state(); return
+
+        # Move towards target if not adjacent
+        if abs(self.x - target_character_obj.x) + abs(self.y - target_character_obj.y) > 1:
+            self.socialize_target_location = (target_character_obj.x, target_character_obj.y) # Update target location
+            self.move_towards(self.socialize_target_location[0], self.socialize_target_location[1], world)
+            # Check if target moved too far away or became unsuitable (e.g., started a critical task)
+            if abs(self.x - target_character_obj.x) + abs(self.y - target_character_obj.y) > 8 or \
+               (target_character_obj.current_goal not in ["Socialize", "Idle", "Wander", None] and not target_character_obj.active_work_order_id):
+                self.add_memory(f"{self.socialize_target_name} moved too far or got busy. Aborting '{interaction_def['display_name']}'.")
+                self._reset_socialization_state(); return
+            return # Still moving
+
+        # Adjacent: Proceed with interaction
+        self.social_interaction_progress += 1
+
+        if self.social_interaction_progress >= interaction_def.get("base_duration", 5):
+            # --- Apply Effects ---
+            # Relationship
+            rel_change_init = random.randint(interaction_def["base_relationship_change_initiator"]["min"], interaction_def["base_relationship_change_initiator"]["max"])
+            rel_change_target = random.randint(interaction_def["base_relationship_change_target"]["min"], interaction_def["base_relationship_change_target"]["max"])
+
+            # Mood
+            mood_change_init = random.randint(interaction_def["mood_effect_initiator"]["min"], interaction_def["mood_effect_initiator"]["max"])
+            mood_change_target = random.randint(interaction_def["mood_effect_target"]["min"], interaction_def["mood_effect_target"]["max"])
+
+            # Trait Modifiers
+            for modifier in interaction_def.get("trait_modifiers", []):
+                applies_to_initiator = any(trait == modifier["trait"] for trait in self.traits)
+                applies_to_target_char = any(trait == modifier["trait"] for trait in target_character_obj.traits)
+
+                # Conditional application (e.g. "if_target_mood_below")
+                condition_passes = True
+                if "if_target_mood_below" in modifier and target_character_obj.mood >= modifier["if_target_mood_below"]:
+                    condition_passes = False
+
+                if condition_passes:
+                    if modifier["target_component"] == "relationship_initiator" and applies_to_initiator : rel_change_init += modifier["value_add"]
+                    if modifier["target_component"] == "relationship_target" and applies_to_initiator : rel_change_target += modifier["value_add"] # Initiator's trait affecting target's gain
+                    if modifier["target_component"] == "relationship_target" and applies_to_target_char : rel_change_target += modifier["value_add"] # Target's trait affecting their own gain
+
+                    if modifier["target_component"] == "mood_initiator" and applies_to_initiator : mood_change_init += modifier["value_add"]
+                    if modifier["target_component"] == "mood_target" and applies_to_initiator : mood_change_target += modifier["value_add"]
+                    if modifier["target_component"] == "mood_target" and applies_to_target_char : mood_change_target += modifier["value_add"]
+
+                    # Backfire logic
+                    if "backfire_chance" in modifier and random.random() < modifier["backfire_chance"]:
+                        if (applies_to_initiator and "initiator" in modifier["target_component"]) or \
+                           (applies_to_target_char and "target" in modifier["target_component"]):
+                            self.add_memory(f"'{interaction_def['display_name']}' with {target_character_obj.name} backfired due to '{modifier['trait']}' trait!")
+                            if "backfire_effect_rel_target" in modifier and modifier["target_component"] == "relationship_target": rel_change_target += modifier["backfire_effect_rel_target"]
+                            if "backfire_effect_mood_target" in modifier and modifier["target_component"] == "mood_target": mood_change_target += modifier["backfire_effect_mood_target"]
+                            # Add other backfire effects as needed
+
+            self.modify_relationship(target_character_obj.name, rel_change_init, world, reason=f"Initiated '{interaction_def['display_name']}'")
+            target_character_obj.modify_relationship(self.name, rel_change_target, world, reason=f"Target of '{interaction_def['display_name']}'")
+
+            # Needs
+            for need, change in interaction_def.get("initiator_need_changes", {}).items():
+                self.needs[need] = min(self.max_needs.get(need, 100), max(0, self.needs.get(need, 0) + change))
+            for need, change in interaction_def.get("target_need_changes", {}).items():
+                target_character_obj.needs[need] = min(target_character_obj.max_needs.get(need, 100), max(0, target_character_obj.needs.get(need, 0) + change))
+
+            # Mood (direct effect from interaction)
+            self.mood = max(0, min(100, self.mood + mood_change_init))
+            target_character_obj.mood = max(0, min(100, target_character_obj.mood + mood_change_target))
+
+            # Final mood update call to consolidate other factors like needs
+            self._update_mood(world)
+            target_character_obj._update_mood(world)
+
+            # Logging and Dialogue
+            log_message = interaction_def.get("description_template", "{initiator_name} interacted with {target_name}.").format(initiator_name=self.name, target_name=target_character_obj.name)
+            self.add_memory(log_message)
+            target_character_obj.add_memory(log_message) # Target also remembers
+
+            dialogue_key = interaction_def.get("dialogue_context_key", "social_chat_neutral")
+            if config.USE_LLM:
+                # Pass more context if needed, like the specific interaction key
+                initiator_dialogue = generate_dialogue(self.name, target_character_obj.name, f"{dialogue_key}_initiator", world, self.personality, self.traits, target_character_obj.personality, target_character_obj.traits, self.get_relationship_score(target_character_obj.name))
+                self.add_memory(f"Said to {target_character_obj.name}: \"{initiator_dialogue}\"")
+                target_character_obj.add_memory(f"Heard from {self.name}: \"{initiator_dialogue}\"")
+            else:
+                self.add_memory(f"[LLM Off] ({interaction_def['display_name']}) with {target_character_obj.name}")
+                target_character_obj.add_memory(f"[LLM Off] ({interaction_def['display_name']}) with {self.name}")
+
+            self._reset_socialization_state()
+
+        else: # Interaction in progress, check if target is still valid/present
             if abs(self.x - target_character_obj.x) + abs(self.y - target_character_obj.y) > 2 or \
                (target_character_obj.current_goal not in ["Socialize", "Idle", "Wander", None] and not target_character_obj.active_work_order_id):
-                self.add_memory(f"Social interaction with {self.socialize_target_name} cut short."); self.current_goal = "Idle"
-                self.socialize_target_name = None; self.task_work_progress = 0; self.needs["Social"] = min(100, self.needs.get("Social", 50) + random.randint(1,5))
+                self.add_memory(f"Social interaction '{interaction_def['display_name']}' with {self.socialize_target_name} cut short.")
+                self._reset_socialization_state()
+                # Small social need recovery for the attempt
+                self.needs["Social"] = min(self.max_needs["Social"], self.needs.get("Social", 50) + random.randint(1,3))
+
+
+    def _reset_socialization_state(self):
+        self.current_goal = self.job_default_goal() or "Idle"
+        self.socialize_target_name = None
+        self.socialize_target_location = None
+        self.current_social_interaction_key = None
+        self.social_interaction_progress = 0
+        if self.current_task_def_name == "Socialize": # Ensure generic task state is also reset
+            self.current_task_def_name = None
+            self.task_work_progress = 0
+
 
     def _execute_perform_builder_duties(self, world: 'World'): # Unchanged
         if self.job != "Builder" and self.skills.get("Construction", {}).get("level",0) == 0 :
