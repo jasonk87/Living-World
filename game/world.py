@@ -4,8 +4,9 @@ from .stockpile import Stockpile
 from .ledger import Ledger
 from .time import Time
 from .work_order import WorkOrder
-from .building import Building # Added import
-from .data import STRUCTURE_BLUEPRINTS # Added import
+from .building import Building
+from .data import STRUCTURE_BLUEPRINTS
+from .furniture import Furniture # Import Furniture class
 
 if TYPE_CHECKING:
     from .character import Character
@@ -22,18 +23,19 @@ class World:
         self.weather = "Sunny"
         self.characters: List['Character'] = []
         self.stockpiles: List[Stockpile] = []
-        self.buildings: List[Building] = [] # Added list for buildings
+        self.buildings: List[Building] = []
+        self.furniture: List[Furniture] = [] # New list for furniture
         self.ledger: Ledger = Ledger()
         self.game_time: Optional[Time] = game_time_ref
         self.work_orders: List[WorkOrder] = []
-        self.event_log: List[str] = [] # For logging event messages
-        self.active_world_effects: Dict[str, Any] = {} # For global event effects like resource yield multipliers
+        self.event_log: List[str] = []
+        self.active_world_effects: Dict[str, Any] = {}
 
     def __str__(self):
-        return f"World(Size: {self.grid_size}, Season: {self.season}, Chars: {len(self.characters)}, SPs: {len(self.stockpiles)}, Buildings: {len(self.buildings)}, WOs: {len(self.work_orders)})"
+        return f"World(Size: {self.grid_size}, Season: {self.season}, Chars: {len(self.characters)}, SPs: {len(self.stockpiles)}, Buildings: {len(self.buildings)}, Furniture: {len(self.furniture)}, WOs: {len(self.work_orders)})"
 
     def add_event_log_message(self, message: str):
-        if not self.game_time: # Should not happen if game_time is initialized properly
+        if not self.game_time:
             timestamp = "[NoTime]"
         else:
             timestamp = f"D{self.game_time.current_day} T{self.game_time.current_tick}"
@@ -55,7 +57,13 @@ class World:
                 blueprint = STRUCTURE_BLUEPRINTS.get(building.structure_type)
                 if blueprint:
                     return blueprint["map_char_complete"] if building.is_operational else blueprint["map_char_initial"]
-                return "Bldg?" # Fallback if blueprint not found
+                return "B?" # Fallback if blueprint not found
+
+        # Check for furniture next
+        furniture_at_loc = self.get_furniture_at(x,y)
+        if furniture_at_loc:
+            return furniture_at_loc.map_char
+
         return self.grid[x][y]
 
 
@@ -176,6 +184,34 @@ class World:
     def get_stockpile_by_name(self, name: str) -> Optional[Stockpile]:
         for sp in self.stockpiles:
             if sp.name == name: return sp
+        return None
+
+    def add_furniture(self, furniture_item: Furniture):
+        """Adds a furniture item to the world."""
+        # Basic check for overlap with other furniture or critical structures.
+        # More advanced placement rules (e.g., inside buildings, not blocking paths) can be added.
+        new_furniture_tiles = furniture_item.get_tiles_occupied()
+        for tile_coord in new_furniture_tiles:
+            if not (0 <= tile_coord[0] < self.grid_size[0] and 0 <= tile_coord[1] < self.grid_size[1]):
+                print(f"Error: Furniture '{furniture_item.display_name}' at ({furniture_item.x},{furniture_item.y}) is out of bounds.")
+                return
+            if self.get_building_at(tile_coord[0], tile_coord[1]): # Check against buildings
+                 print(f"Error: Furniture '{furniture_item.display_name}' overlaps with a building at {tile_coord}.")
+                 return
+            existing_furniture = self.get_furniture_at(tile_coord[0], tile_coord[1])
+            if existing_furniture and existing_furniture != furniture_item : # Check against other furniture
+                 print(f"Error: Furniture '{furniture_item.display_name}' overlaps with '{existing_furniture.display_name}' at {tile_coord}.")
+                 return
+
+        if furniture_item not in self.furniture:
+            self.furniture.append(furniture_item)
+            # print(f"Added furniture: {furniture_item.display_name} at ({furniture_item.x},{furniture_item.y})")
+
+    def get_furniture_at(self, x: int, y: int) -> Optional[Furniture]:
+        """Returns the furniture object at a given coordinate, if any."""
+        for item in self.furniture:
+            if item.is_inside(x,y):
+                return item
         return None
 
     def add_work_order(self, work_order: WorkOrder):

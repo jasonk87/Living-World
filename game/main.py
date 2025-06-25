@@ -214,28 +214,30 @@ def main_simulation(stdscr): # Renamed main to main_simulation, takes stdscr
     initial_setup_messages.append(f"Added GeneralStore stockpile, stocked with Food and Water.")
 
 
-    # Add some beds for resting test
-    bed_blueprint = STRUCTURE_BLUEPRINTS.get("simple_bed")
-    if bed_blueprint:
-        bed1_loc = (5,1)
-        bed1 = Building(structure_type="simple_bed", display_name=bed_blueprint["display_name"],
-                        location=bed1_loc, size=bed_blueprint["size"],
-                        required_resources={}, build_time=0, # Pre-built
-                        functionality=bed_blueprint["functionality"])
-        bed1.current_progress = bed_blueprint["build_time"] # Mark as fully built
-        bed1.is_operational = True
-        game_world.add_building(bed1)
-        initial_setup_messages.append(f"Added pre-built Simple Bed at {bed1_loc}.")
+    # Add some Furniture beds for resting test
+    from .furniture import Furniture # Ensure Furniture class is imported
 
-        bed2_loc = (5,3) # Another bed, different location
-        bed2 = Building(structure_type="simple_bed", display_name=bed_blueprint["display_name"],
-                        location=bed2_loc, size=bed_blueprint["size"],
-                        required_resources={}, build_time=0, # Pre-built
-                        functionality=bed_blueprint["functionality"])
-        bed2.current_progress = bed_blueprint["build_time"]
-        bed2.is_operational = True
-        game_world.add_building(bed2)
-        initial_setup_messages.append(f"Added pre-built Simple Bed at {bed2_loc}.")
+    wooden_bed_bp = BLUEPRINTS.get("Wooden Bed")
+    if wooden_bed_bp and wooden_bed_bp.get("type") == "Furniture":
+        bed1_loc = (5,1)
+        bed1 = Furniture(item_name="Wooden Bed",
+                         display_name=wooden_bed_bp.get("description", "Wooden Bed"),
+                         x=bed1_loc[0], y=bed1_loc[1],
+                         functionality=wooden_bed_bp.get("functionality", {}),
+                         size=wooden_bed_bp.get("size", (1,2)),
+                         map_char=wooden_bed_bp.get("map_char", 'b'))
+        game_world.add_furniture(bed1)
+        initial_setup_messages.append(f"Placed {bed1.display_name} furniture at {bed1_loc}.")
+
+        bed2_loc = (5,4) # Adjusted y to avoid overlap if hut is 2 tiles high
+        bed2 = Furniture(item_name="Wooden Bed",
+                         display_name=wooden_bed_bp.get("description", "Wooden Bed"),
+                         x=bed2_loc[0], y=bed2_loc[1],
+                         functionality=wooden_bed_bp.get("functionality", {}),
+                         size=wooden_bed_bp.get("size", (1,2)),
+                         map_char=wooden_bed_bp.get("map_char", 'b'))
+        game_world.add_furniture(bed2)
+        initial_setup_messages.append(f"Placed {bed2.display_name} furniture at {bed2_loc}.")
 
 
     # Setup for Event Testing (Now also Need Fulfillment Testing)

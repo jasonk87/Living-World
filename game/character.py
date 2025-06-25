@@ -793,48 +793,61 @@ class Character:
             self._execute_fetch_item_for_need("CleanWater", "Seek Water", world)
 
     def _execute_rest(self, world: 'World'):
-        bed_found_at_current_pos = None
-        current_pos_building = world.get_building_at(self.x, self.y)
-        if current_pos_building and current_pos_building.structure_type == "simple_bed" and current_pos_building.is_operational:
-            bed_found_at_current_pos = current_pos_building
+        bed_furniture_at_current_pos = None
+        # Check for Furniture type bed at current location first
+        current_pos_furniture = world.get_furniture_at(self.x, self.y)
+        if current_pos_furniture and current_pos_furniture.functionality.get("is_bed"):
+            bed_furniture_at_current_pos = current_pos_furniture
 
-        if not bed_found_at_current_pos and (not self.target_bed_location or (self.x,self.y) != self.target_bed_location):
-            # Find a bed if not already at one or heading to a specific one
-            potential_beds = [b for b in world.buildings if b.structure_type == "simple_bed" and b.is_operational]
+        if not bed_furniture_at_current_pos and (not self.target_bed_location or (self.x,self.y) != self.target_bed_location):
+            # Find a suitable bed Furniture item if not already at one or heading to a specific one
+            potential_beds = [
+                f for f in world.furniture
+                if f.functionality.get("is_bed") and f.is_usable()
+            ]
             if potential_beds:
-                potential_beds.sort(key=lambda b: abs(b.location[0] - self.x) + abs(b.location[1] - self.y))
-                self.target_bed_location = potential_beds[0].location
+                # Sort by distance to find the closest bed
+                potential_beds.sort(key=lambda bed: abs(bed.x - self.x) + abs(bed.y - self.y))
+                # Target the top-left tile of the bed furniture
+                self.target_bed_location = (potential_beds[0].x, potential_beds[0].y)
             else: # No beds available
                 self.target_bed_location = None # Rest on ground
 
         energy_recovery_rate = 5.0
-        comfort_change = -0.5
-        resting_on_bed = False
+        comfort_change = -0.5 # Default for resting on ground
+        resting_on_bed_furniture = False
 
-        if self.target_bed_location: # If heading to or at a specific bed
-            target_bed_building = world.get_building_at(self.target_bed_location[0], self.target_bed_location[1])
-            if target_bed_building and target_bed_building.structure_type == "simple_bed" and target_bed_building.is_operational:
-                if target_bed_building.is_inside(self.x, self.y):
-                    resting_on_bed = True
-                    bed_found_at_current_pos = target_bed_building # Update if arrived
+        if self.target_bed_location: # If heading to or at a specific bed location
+            # Check if the target location still has a usable bed
+            target_bed_item = world.get_furniture_at(self.target_bed_location[0], self.target_bed_location[1])
+            if target_bed_item and target_bed_item.functionality.get("is_bed") and target_bed_item.is_usable():
+                # If character is on any tile occupied by the bed furniture
+                if target_bed_item.is_inside(self.x, self.y):
+                    resting_on_bed_furniture = True
+                    bed_furniture_at_current_pos = target_bed_item # Update if arrived
                 else:
+                    # Move towards the top-left tile of the bed
                     self.move_towards(self.target_bed_location[0], self.target_bed_location[1], world)
                     return
-            else: # Target bed is gone or invalid
-                self.target_bed_location = None # Will rest on ground
+            else: # Target bed is gone, invalid, or character is already there but it's not a bed
+                self.target_bed_location = None # Will rest on ground if current spot isn't a bed either
 
-        if resting_on_bed and bed_found_at_current_pos:
-            rest_quality = bed_found_at_current_pos.functionality.get("provides_rest_quality", 1.0)
-            comfort_bonus = bed_found_at_current_pos.functionality.get("provides_comfort", 0)
+        # If already at a bed (either initially or after moving to target_bed_location)
+        if not resting_on_bed_furniture and bed_furniture_at_current_pos:
+            resting_on_bed_furniture = True
+
+        if resting_on_bed_furniture and bed_furniture_at_current_pos:
+            rest_quality = bed_furniture_at_current_pos.functionality.get("provides_rest_quality", 1.0)
+            comfort_bonus = bed_furniture_at_current_pos.functionality.get("provides_comfort", 0)
             energy_recovery_rate *= rest_quality
-            comfort_change = float(comfort_bonus / 2.0) # Spread comfort bonus over a few ticks
+            comfort_change = float(comfort_bonus / 3.0) # Spread comfort bonus over a few ticks
             if not hasattr(self, '_resting_memory_set') or not self._resting_memory_set:
-                self.add_memory("Resting comfortably in a bed."); self._resting_memory_set = True
+                self.add_memory(f"Resting comfortably in a {bed_furniture_at_current_pos.display_name}."); self._resting_memory_set = True
         else: # Resting on ground
             if not hasattr(self, '_resting_memory_set') or self._resting_memory_set :
                  self.add_memory("Resting on the ground."); self._resting_memory_set = False
 
-        self.needs["Energy"] = min(self.max_needs["Energy"], self.needs["Energy"] + energy_recovery_rate)
+        self.needs["Energy"] = min(self.max_needs["Energy"], self.needs.get("Energy", 100) + energy_recovery_rate)
         self.needs["Comfort"] = min(self.max_needs["Comfort"], max(0, self.needs["Comfort"] + comfort_change))
 
         if self.needs["Energy"] >= self.max_needs["Energy"]:
@@ -1073,6 +1086,7 @@ class Character:
 
 # Make sure to import SOCIAL_INTERACTION_DEFINITIONS and RELATIONSHIP_STATES from .data
 from .data import BLUEPRINTS, JOB_TASK_DEFINITIONS, STRUCTURE_BLUEPRINTS, SOCIAL_INTERACTION_DEFINITIONS, RELATIONSHIP_STATES
+from .furniture import Furniture # Import Furniture class for _execute_rest
 
 class Character:
     # ... (previous code) ...

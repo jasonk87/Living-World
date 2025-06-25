@@ -5,7 +5,10 @@ BLUEPRINTS = {
         "job_skill_needed": "Carpentry",
         "type": "Furniture",
         "description": "A simple wooden chair for basic comfort.",
-        "craft_time_per_unit": 5
+        "craft_time_per_unit": 5,
+        "size": (1, 1),
+        "map_char": "c",
+        "functionality": {"comfort_bonus": 5, "provides_seat": True}
     },
     "Stone Axe": {
         "required_resources": {"Stone": 2, "Wood": 1}, # Cost to make a Stone Axe
@@ -26,11 +29,14 @@ BLUEPRINTS = {
         "craft_time_per_unit": 10
     },
     "Wooden Bed": {
-        "required_resources": {"Wood": 15},
+        "required_resources": {"Wood": 15, "Plant Fiber": 5}, # Added Plant Fiber from old structure blueprint
         "job_skill_needed": "Carpentry",
         "type": "Furniture",
         "description": "A basic wooden bed for improved rest.",
-        "craft_time_per_unit": 20
+        "craft_time_per_unit": 20,
+        "size": (1, 2), # Typically 1 tile wide, 2 tiles long
+        "map_char": "b",
+        "functionality": {"provides_rest_quality": 1.5, "provides_comfort": 10, "is_bed": True}
     },
     "Iron Pickaxe": { # Example of a more advanced item
         "required_resources": {"Iron Ingot": 3, "Wood": 1}, # Assuming "Iron Ingot" is a processed resource
@@ -132,9 +138,20 @@ STRUCTURE_BLUEPRINTS = {
         "build_time": 20,
         "functionality": {"provides_rest_quality": 1.5, "provides_comfort": 10}, # Rest quality multiplier, comfort bonus
         "required_skill": {"Construction": 1},
-        "map_char_initial": "b.",
-        "map_char_complete": "B"
+        "map_char_initial": "b.", # Initial character when under construction
+        "map_char_complete": "B"   # Character for the completed, operational building
     },
+    # */ # This was incorrect commenting style
+    # "simple_bed": {
+    #     "display_name": "Simple Bed",
+    #     "size": (1, 2), # width, height (a single tile bed, long shape)
+    #     "required_resources": {"Wood": 10, "Plant Fiber": 5}, # Added Plant Fiber as example
+    #     "build_time": 20,
+    #     "functionality": {"provides_rest_quality": 1.5, "provides_comfort": 10}, # Rest quality multiplier, comfort bonus
+    #     "required_skill": {"Construction": 1},
+    #     "map_char_initial": "b.",
+    #     "map_char_complete": "B"
+    # },
     "construction_site": { # A generic site, perhaps for displaying build orders on map before construction starts
         "display_name": "Construction Site",
         "size": (1,1), # Placeholder size, actual building size will be used when creating the Building object
