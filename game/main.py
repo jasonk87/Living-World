@@ -258,26 +258,38 @@ def main_simulation(stdscr): # Renamed main to main_simulation, takes stdscr
     event_test_chars.append(char1)
     initial_setup_messages.append(f"  Added: {char1.name} (Job: {char1.job}, Woodcutting Lvl: {char1.skills.get('Woodcutting',{}).get('level',0)}) at ({char1.x},{char1.y})")
 
-    # Liam - Stonemason, starts at level 1 Mining
-    char2_needs = {"Hunger": 85, "Thirst": 70, "Energy": 95, "Social": 55, "Comfort": 65, "Stone": 20}
+    # Liam - Now a Builder, starts at level 1 Mining and 1 Construction
+    char2_needs = {"Hunger": 85, "Thirst": 70, "Energy": 95, "Social": 55, "Comfort": 65, "Stone": 5} # Reduced stone personal need
     char2 = Character(name="Liam", personality="Optimistic", traits=["Diligent"],
-                      job="Stonemason", x=3,y=2, skills={"Mining": 1},
+                      job="Builder", x=3,y=2, skills={"Mining": 1, "Construction": 1},
                       needs=char2_needs)
+
+    # Manager Character
+    manager_char = Character(name="Bossman", personality="Demanding", traits=["Strict"], job="Manager", x=5,y=5, rank="Manager")
+    game_world.add_character(manager_char)
+    event_test_chars.append(manager_char)
+    initial_setup_messages.append(f"  Added: {manager_char.name} (Job: {manager_char.job}) at ({manager_char.x},{manager_char.y})")
+
+    # Assign Liam to Bossman and add to world
+    char2.set_supervisor(manager_char.name)
+    manager_char.add_subordinate(char2.name)
     game_world.add_character(char2)
     event_test_chars.append(char2)
-    initial_setup_messages.append(f"  Added: {char2.name} (Job: {char2.job}, Mining Lvl: {char2.skills.get('Mining',{}).get('level',0)}) at ({char2.x},{char2.y})")
+    initial_setup_messages.append(f"  Added: {char2.name} (Job: {char2.job}, Supervisor: {char2.supervisor_name}, Skills: Mining L{char2.skills.get('Mining',{}).get('level',0)}, Construction L{char2.skills.get('Construction',{}).get('level',0)}) at ({char2.x},{char2.y})")
 
     # Crafty - Will craft Stone Axes, starts at level 0 Stonemasonry (to see it initialized)
     char3_needs = {"Hunger": 90, "Thirst": 80, "Energy": 85, "Social": 50, "Comfort": 60}
     char3 = Character(name="Crafty", personality="Inventive", traits=[],
                       job="Stonemasonry", x=4,y=2, skills={},
                       needs=char3_needs)
+    char3.set_supervisor(manager_char.name) # Assign Bossman as supervisor
+    manager_char.add_subordinate(char3.name)
     game_world.add_character(char3)
     event_test_chars.append(char3)
     # Pre-give Crafty resources for a Stone Axe
     char3.inventory["Stone"] = 20 # Enough for multiple axes
     char3.inventory["Wood"] = 10
-    initial_setup_messages.append(f"  Added: {char3.name} (Job: {char3.job}, Stonemasonry Lvl: {char3.skills.get('Stonemasonry',{}).get('level',0)}) at ({char3.x},{char3.y}), pre-stocked for Stone Axes.")
+    initial_setup_messages.append(f"  Added: {char3.name} (Job: {char3.job}, Supervisor: {char3.supervisor_name}) at ({char3.x},{char3.y}), pre-stocked for Stone Axes.")
 
     # Initial Work Order for Crafty
     stone_axe_wo = WorkOrder(
@@ -291,7 +303,35 @@ def main_simulation(stdscr): # Renamed main to main_simulation, takes stdscr
     char3.active_work_order_id = stone_axe_wo.order_id
     char3.current_goal = "Execute Craft Order"
 
-    initial_setup_messages.append("--- Simulation: Need Fulfillment & Skill Progression Test ---")
+    # Initial Build Order for Liam (Builder)
+    hut_bp = STRUCTURE_BLUEPRINTS.get("wooden_hut")
+    if hut_bp:
+        build_site_loc = (6,1) # Ensure this location is clear and valid
+        # Clear the location for building to avoid conflicts with pre-built beds if any overlap
+        # For simplicity, we assume (6,1) is clear or we'd add logic to find a clear spot.
+        # Ensure resources are available for the hut
+        wood_stockpile_test.add_item("Wood", hut_bp["required_resources"].get("Wood", 30) + 10) # Add enough wood
+        game_world.ledger.update_stockpile_record(wood_stockpile_test.name, wood_stockpile_test.inventory, game_time_obj.current_day)
+
+        hut_build_wo = WorkOrder(
+            order_type="BuildStructure",
+            details={
+                "structure_type": "wooden_hut",
+                "location": build_site_loc,
+                "required_resources": hut_bp["required_resources"],
+                "size": hut_bp["size"],
+                "build_time": hut_bp["build_time"]
+            },
+            creation_day=1, priority=1
+        )
+        hut_build_wo.status = "Approved" # Pre-approve for testing
+        hut_build_wo.assigned_to = char2.name # Assign to Liam
+        game_world.add_work_order(hut_build_wo)
+        char2.active_build_order_id = hut_build_wo.order_id
+        char2.current_goal = "Execute Build Order"
+        initial_setup_messages.append(f"  Assigned Build WO for Wooden Hut at {build_site_loc} to {char2.name}.")
+
+    initial_setup_messages.append("--- Simulation: Relationship & Need Fulfillment Test ---")
     max_simulation_days = 15 # Adjusted for skill progression
     last_season_change_day = game_time_obj.current_day
     running = True; current_total_ticks = 0

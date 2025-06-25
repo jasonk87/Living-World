@@ -314,8 +314,23 @@ class Character:
             if not self.hauling_info and self.inventory.get(item_name, 0) > 0:
                 self.hauling_info = {"resource":item_name, "quantity":self.inventory.get(item_name,0), "for_wo_id":order.order_id, "is_crafted_item":True}
                 self.current_goal = "Initiate Hauling"; self._execute_initiate_hauling(world); return
-            elif self.hauling_info is None and self.inventory.get(item_name, 0) == 0:
-                 order.status = "Completed"; self.add_memory(f"Completed/Stocked WO {order.order_id}."); self._reset_crafting_state(); self.current_goal = self.job_default_goal() or "Idle"; return
+            elif self.hauling_info is None and self.inventory.get(item_name, 0) == 0: # WO fully complete and stocked
+                 order.status = "Completed"
+                 self.add_memory(f"Completed/Stocked WO {order.order_id} for {item_name}.")
+
+                 # Relationship boost with supervisor
+                 if self.supervisor_name:
+                     supervisor = world.get_character_by_name(self.supervisor_name)
+                     if supervisor:
+                         rng_val = random.randint(1, 3)
+                         reason_msg = f"successfully completed WO {order.order_id} ({item_name}) under their supervision"
+                         self.modify_relationship(supervisor.name, rng_val, world, reason=reason_msg)
+                         supervisor.modify_relationship(self.name, rng_val, world, reason=f"subordinate {self.name} {reason_msg}")
+                         self.add_memory(f"Relationship with supervisor {self.supervisor_name} improved by {rng_val} for completing WO {order.order_id}.")
+
+                 self._reset_crafting_state()
+                 self.current_goal = self.job_default_goal() or "Idle"
+                 return
             return
 
         if not self.materials_gathered_for_wo:
@@ -1330,7 +1345,22 @@ class Character:
                 self._grant_skill_experience("Construction", float(actual_progress_applied) * 1.0, world)
             self.add_memory(f"Worked on {target_building.display_name} (+{actual_progress_applied:.1f} prog).")
             if target_building.is_operational:
-                order.status = "Completed"; self.add_memory(f"Completed Build WO {order.order_id}."); self._reset_building_state(); self.current_goal = self.job_default_goal() or "Idle"
+                order.status = "Completed"
+                self.add_memory(f"Completed Build WO {order.order_id} for {target_building.display_name}.")
+
+                # Relationship boost with supervisor
+                if self.supervisor_name:
+                    supervisor = world.get_character_by_name(self.supervisor_name)
+                    if supervisor:
+                        rng_val = random.randint(2, 4) # Slightly more for tangible buildings
+                        reason_msg = f"completed {target_building.display_name} (WO {order.order_id}) under their supervision"
+                        self.modify_relationship(supervisor.name, rng_val, world, reason=reason_msg)
+                        supervisor.modify_relationship(self.name, rng_val, world, reason=f"subordinate {self.name} {reason_msg}")
+                        self.add_memory(f"Relationship with supervisor {self.supervisor_name} improved by {rng_val} for completing {target_building.display_name}.")
+
+                self._reset_building_state()
+                self.current_goal = self.job_default_goal() or "Idle"
+
                 if self.building_site_target: # Move off logic
                     for dx_try, dy_try in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
                         check_x, check_y = self.building_site_target[0] + dx_try, self.building_site_target[1] + dy_try
