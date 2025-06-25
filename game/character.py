@@ -295,7 +295,10 @@ class Character:
                     durability_loss += 1; self.add_memory(f"Careless with {self.equipped_tool['name']}.")
                 self.equipped_tool["durability"] -= durability_loss
                 if self.equipped_tool["durability"] <= 0:
-                    self.add_memory(f"{self.equipped_tool['name']} broke!"); self.unequip_tool()
+                    broken_tool_name = self.equipped_tool['name']
+                    self.add_memory(f"{broken_tool_name} broke!")
+                    self._broadcast_personal_event("tool_break", world, details={"tool_name": broken_tool_name})
+                    self.unequip_tool()
 
             if task_def.get("skill_used") and actual_yield_taken > 0 :
                 xp_gained = 5.0 * actual_yield_taken
@@ -1471,6 +1474,10 @@ class Character:
             if world: world.add_event_log_message(level_up_message)
             print(level_up_message)
 
+            # Broadcast major skill up event
+            if new_level % 5 == 0: # Major milestone
+                self._broadcast_personal_event("major_skill_up", world, details={"skill_name": skill_name, "new_level": new_level})
+
     def apply_status_effect(self, status_data: Dict[str, Any], world: 'World'): # Unchanged
         status_name = status_data.get("status_name")
         if not status_name: return
@@ -1503,3 +1510,48 @@ class Character:
             if modifier_key in status.get("modifiers", {}):
                 current_value *= status["modifiers"][modifier_key]
         return current_value
+
+    def _broadcast_personal_event(self, event_type: str, world: 'World', details: Optional[Dict[str, Any]] = None):
+        """Handles reactions of nearby characters to this character's significant personal events."""
+        if details is None:
+            details = {}
+
+        nearby_characters = world.get_nearby_characters(self, radius=3)
+        if not nearby_characters:
+            return
+
+        # self.add_memory(f"Something noteworthy ({event_type}) happened to me. Nearby: {[c.name for c in nearby_characters]}.") # Optional self-log
+
+        for observer in nearby_characters:
+            observer_reaction_logged = False
+            if event_type == "major_skill_up":
+                skill_name = details.get("skill_name", "a skill")
+                new_level = details.get("new_level", "a high level")
+                observer.modify_relationship(self.name, 1, world, reason=f"impressed by {self.name} reaching level {new_level} in {skill_name}")
+                observer.add_memory(f"Noticed {self.name} achieved level {new_level} in {skill_name}. Impressive.")
+                observer_reaction_logged = True
+
+            elif event_type == "tool_break":
+                tool_name = details.get("tool_name", "a tool")
+                reaction_val = 0
+                reason = ""
+                observer_memory = ""
+
+                if "Kind" in observer.traits or "Empathetic" in observer.traits:
+                    reaction_val = 1
+                    reason = f"sympathetic about {self.name}'s broken {tool_name}"
+                    observer_memory = f"Felt sorry for {self.name} when their {tool_name} broke."
+                elif "Grumpy" in observer.traits:
+                    reaction_val = -1
+                    reason = f"annoyed by {self.name}'s broken {tool_name}"
+                    observer_memory = f"Grumblingly noted {self.name} broke their {tool_name} again."
+
+                if reaction_val != 0:
+                    observer.modify_relationship(self.name, reaction_val, world, reason=reason)
+                    if observer_memory: observer.add_memory(observer_memory)
+                    observer_reaction_logged = True
+
+            # Add more event_types here, e.g., "significant_mood_change_positive/negative"
+
+            # if observer_reaction_logged:
+            #    self.add_memory(f"{observer.name} noticed my {event_type}.") # Optional: self observes observer's reaction

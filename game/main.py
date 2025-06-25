@@ -249,19 +249,30 @@ def main_simulation(stdscr): # Renamed main to main_simulation, takes stdscr
     # Characters for Skill Progression Test
     event_test_chars = [] # Re-using this list name for convenience
 
-    # Eva - Woodcutter, starts at level 1 Woodcutting
+    # Eva - Woodcutter, to test skill-up and tool break. Empathetic.
     char1_needs = {"Hunger": 80, "Thirst": 75, "Energy": 90, "Social": 60, "Comfort": 70, "Wood": 20}
-    char1 = Character(name="Eva", personality="Stoic", traits=[],
-                      job="Woodcutter", x=2,y=2, skills={"Woodcutting": 1},
+    # Start Eva at Woodcutting level 4, close to level 5 for major skill up broadcast
+    eva_skills = {"Woodcutting": {"level": 4, "experience": 500, "exp_to_next_level": char1._calculate_exp_for_level(4) if Character else 528}}
+    char1 = Character(name="Eva", personality="Stoic", traits=["Empathetic"],
+                      job="Woodcutter", x=2,y=2, skills=eva_skills,
                       needs=char1_needs)
+    # Give Eva a nearly broken tool
+    tool_shed.remove_item("Stone Axe", 1) # Remove the full durability one
+    tool_shed.add_item("Stone Axe", 1) # Add a new one to grab
+    char1.inventory["Stone Axe"] = 1 # Character needs to fetch it first to equip and use. This line is not needed if she fetches.
+                                     # Instead, let's ensure she fetches it and then we'll modify its durability after fetching.
+                                     # For simplicity in setup, let's give her one and set durability low.
+    # We will set tool durability after she equips it. Or, create a custom low-dura tool.
+    # For now, let's assume she'll grab one from ToolShed and it will break naturally or we can adjust durability later.
+
     game_world.add_character(char1)
     event_test_chars.append(char1)
-    initial_setup_messages.append(f"  Added: {char1.name} (Job: {char1.job}, Woodcutting Lvl: {char1.skills.get('Woodcutting',{}).get('level',0)}) at ({char1.x},{char1.y})")
+    initial_setup_messages.append(f"  Added: {char1.name} (Job: {char1.job}, Woodcutting Lvl 4, Empathetic) at ({char1.x},{char1.y}). Will test skill-up & tool break.")
 
-    # Liam - Now a Builder, starts at level 1 Mining and 1 Construction
-    char2_needs = {"Hunger": 85, "Thirst": 70, "Energy": 95, "Social": 55, "Comfort": 65, "Stone": 5} # Reduced stone personal need
-    char2 = Character(name="Liam", personality="Optimistic", traits=["Diligent"],
-                      job="Builder", x=3,y=2, skills={"Mining": 1, "Construction": 1},
+    # Liam - Now a Builder, to observe reactions. Add "Grumpy" to test negative tool break reaction.
+    char2_needs = {"Hunger": 85, "Thirst": 70, "Energy": 95, "Social": 55, "Comfort": 65, "Stone": 5}
+    char2 = Character(name="Liam", personality="Optimistic", traits=["Diligent", "Grumpy"], # Added Grumpy
+                      job="Builder", x=2,y=1, skills={"Mining": 1, "Construction": 1}, # Moved closer to Eva
                       needs=char2_needs)
 
     # Manager Character
