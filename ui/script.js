@@ -5,23 +5,49 @@ document.addEventListener('DOMContentLoaded', () => {
     const gameStatusDiv = document.getElementById('game-status');
     const pauseButton = document.getElementById('pause-button');
     const toggleDetailsButton = document.getElementById('toggle-details-button');
+    const speedButtons = document.querySelectorAll('.speed-button');
 
     let API_BASE_URL = 'http://localhost:8000';
     let showEntityDetails = false; // Controlled by toggle button
+    let currentSpeedMultiplier = 1.0; // To keep track locally for UI updates
+    let isFetchingGameState = false; // Prevent multiple simultaneous fetches
 
     async function fetchGameState() {
+        if (isFetchingGameState) return null; // Don't fetch if already fetching
+        isFetchingGameState = true;
+        // Simple loading indicator for game status
+        // gameStatusDiv.innerHTML = 'Loading game state...';
         try {
             const response = await fetch(`${API_BASE_URL}/game_state`);
             if (!response.ok) {
                 console.error(`HTTP error! status: ${response.status}`);
-                gameStatusDiv.textContent = `Error fetching game state: ${response.status}`;
+                if (gameStatusDiv) gameStatusDiv.innerHTML = `<p class="error">Error fetching game state: ${response.status}</p>`;
                 return null;
             }
-            return await response.json();
+            const data = await response.json();
+            // Clear loading message from gameStatusDiv if it was set there, by updateGameInfo
+            return data;
         } catch (error) {
             console.error('Error fetching game state:', error);
-            gameStatusDiv.textContent = 'Failed to connect to game server.';
+            if (gameStatusDiv) gameStatusDiv.innerHTML = '<p class="error">Failed to connect to game server. Is it running?</p>';
             return null;
+        } finally {
+            isFetchingGameState = false;
+        }
+    }
+
+    async function setSimulationSpeed(multiplier) {
+        try {
+            const response = await fetch(`${API_BASE_URL}/set_speed?multiplier=${multiplier}`, { method: 'POST' });
+            if (!response.ok) {
+                console.error(`HTTP error setting speed! status: ${response.status}`);
+                return;
+            }
+            const data = await response.json();
+            currentSpeedMultiplier = data.new_speed_multiplier; // Update local state
+            updateUI(); // Refresh UI to show new speed and button state
+        } catch (error) {
+            console.error('Error setting simulation speed:', error);
         }
     }
 
@@ -30,14 +56,16 @@ document.addEventListener('DOMContentLoaded', () => {
             displayEntityDetails(null, 'building_detailed'); // Clear or hide panel
             return;
         }
+        entityDetailsDiv.innerHTML = `<p>Loading details for (${x},${y})...</p>`;
         try {
             const response = await fetch(`${API_BASE_URL}/building_info?x=${x}&y=${y}`);
             if (!response.ok) {
                 console.error(`HTTP error fetching building details! status: ${response.status}`);
-                entityDetailsDiv.innerHTML = `<p>Error fetching building details for (${x},${y}): ${response.status}</p>`;
+                let errorMsg = `Error fetching building details for (${x},${y}): ${response.status}`;
                 if (response.status === 404) {
-                     entityDetailsDiv.innerHTML = `<p>No building or stockpile found at (${x},${y}).</p>`;
+                     errorMsg = `<p>No building or stockpile found at (${x},${y}).</p>`;
                 }
+                entityDetailsDiv.innerHTML = `<p class="error">${errorMsg}</p>`;
                 return;
             }
             const buildingDetails = await response.json();
@@ -45,7 +73,7 @@ document.addEventListener('DOMContentLoaded', () => {
             displayEntityDetails({ name: buildingDetails.display_name, ...buildingDetails }, 'building_detailed');
         } catch (error) {
             console.error('Error fetching building details:', error);
-            entityDetailsDiv.innerHTML = `<p>Failed to fetch building details for (${x},${y}).</p>`;
+            entityDetailsDiv.innerHTML = `<p class="error">Failed to fetch building details for (${x},${y}). Check connection.</p>`;
         }
     }
 
@@ -61,11 +89,15 @@ document.addEventListener('DOMContentLoaded', () => {
             row.forEach((tile, c_idx) => {
                 const cell = document.createElement('div');
                 cell.classList.add('map-cell');
-                cell.classList.add(`tile-${tile.replace(/\s+/g, '')}`); // Add class like tile-Grass, tile-Forest
+                // Add tile-specific class, removing spaces from tile name for valid CSS class
+                const tileClassName = `tile-${tile.replace(/\s+/g, '-')}`;
+                cell.classList.add(tileClassName);
                 cell.textContent = tile[0];
-                cell.title = tile;
+                cell.title = tile; // Tooltip for the base tile
                 cell.dataset.x = c_idx;
                 cell.dataset.y = r_idx;
+                // Add generic click listener for empty tiles initially
+                cell.addEventListener('click', handleMapCellClick);
                 gameMapDiv.appendChild(cell);
             });
         });
@@ -77,21 +109,33 @@ document.addEventListener('DOMContentLoaded', () => {
                     for (let c_offset = 0; c_offset < b.width; c_offset++) {
                         const buildingCellX = b.x + c_offset;
                         const buildingCellY = b.y + r_offset;
+
+                        if (buildingCellY >= gameState.grid_size[0] || buildingCellX >= gameState.grid_size[1]) continue; // Bounds check
+
                         const cellIndex = buildingCellY * gameState.grid_size[1] + buildingCellX;
                         const cellDiv = gameMapDiv.children[cellIndex];
+
                         if (cellDiv) {
                             cellDiv.innerHTML = ''; // Clear base tile content
                             cellDiv.textContent = b.map_char;
-                            cellDiv.title = `${b.display_name} (${b.structure_type})`;
-                            cellDiv.classList.remove('tile-Grass', 'tile-Forest', 'tile-Water', 'tile-Rocks'); // Remove base tile class
+                            cellDiv.title = `${b.display_name} (${b.structure_type} at ${buildingCellX},${buildingCellY})`;
+
+                            // Remove all potential tile classes
+                            cellDiv.className = 'map-cell'; // Reset to base map-cell class
+
                             if (b.structure_type === "Stockpile") {
                                 cellDiv.classList.add('stockpile-cell');
                             } else {
                                 cellDiv.classList.add('building-cell');
+                                // Add specific building type class for more granular styling
+                                if (b.structure_type) {
+                                     cellDiv.classList.add(`building-${b.structure_type.replace(/\s+/g, '_')}`);
+                                }
                             }
-                            // Add click listener for building/stockpile details
-                            cellDiv.removeEventListener('click', handleMapCellClick); // Remove generic tile listener first
-                            cellDiv.addEventListener('click', () => {
+                            // Replace generic tile listener with specific building listener
+                            cellDiv.removeEventListener('click', handleMapCellClick);
+                            cellDiv.addEventListener('click', (e) => {
+                                e.stopPropagation(); // Prevent any other listeners if it's a building
                                 fetchBuildingDetails(buildingCellX, buildingCellY);
                             });
                         }
@@ -108,11 +152,21 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (cellDiv) {
                     // If cellDiv was turned into a building/stockpile cell, its content might have been set.
                     // We need to ensure character is displayed, possibly clearing previous content or appending.
-                    cellDiv.innerHTML = ''; // Clear previous content (tile or building char) to ensure char is prominent
+                    // If the cell already has building/stockpile text, the charMarker will be appended.
+                    // If it's a base tile, innerHTML clearing is fine.
+                    // For building/stockpile cells, we want to keep their map_char and add character on top.
+                    let baseContent = cellDiv.textContent; // Keep existing building char if any
+                    if (cellDiv.classList.contains('building-cell') || cellDiv.classList.contains('stockpile-cell')) {
+                        cellDiv.innerHTML = ''; // Clear only if we want char to replace building char, or style char to overlay
+                    } else {
+                         cellDiv.innerHTML = ''; // Clear base tile character for char marker
+                    }
+
                     const charMarker = document.createElement('span');
+                    charMarker.classList.add('char-marker'); // Add class for styling
                     charMarker.textContent = char.name[0];
-                    charMarker.title = `${char.name} (${char.job})`;
-                    charMarker.style.fontWeight = 'bold';
+                    charMarker.title = `${char.name} (${char.job}) at (${char.x},${char.y})`; // More detailed tooltip
+                    // charMarker.style.fontWeight = 'bold'; // Moved to CSS
                     charMarker.style.color = char.is_sick ? 'orange' : (char.is_injured ? 'red' : 'blue');
                     charMarker.addEventListener('click', (e) => {
                         e.stopPropagation();
@@ -138,13 +192,24 @@ document.addEventListener('DOMContentLoaded', () => {
     function updateGameInfo(gameState) {
         if (!gameStatusDiv || !gameState) return;
         let electionText = gameState.days_until_election >= 0 ? `Election in: ${gameState.days_until_election} days` : "Election TBD";
+        currentSpeedMultiplier = gameState.current_speed_multiplier || 1.0; // Update local speed
         gameStatusDiv.innerHTML = `
             Day: ${gameState.day}, Tick: ${gameState.tick}/${gameState.ticks_per_day}<br>
             Season: ${gameState.season}, Weather: ${gameState.weather}<br>
-            Status: ${gameState.is_paused ? "Paused" : "Running"}<br>
+            Status: ${gameState.is_paused ? "Paused" : "Running"} | Speed: ${currentSpeedMultiplier}x <br>
             ${electionText}
         `;
         pauseButton.textContent = gameState.is_paused ? "Resume" : "Pause";
+
+        speedButtons.forEach(button => {
+            if (parseFloat(button.dataset.speed) === currentSpeedMultiplier) {
+                button.style.fontWeight = 'bold';
+                button.style.backgroundColor = '#0056b3'; // Highlight active speed
+            } else {
+                button.style.fontWeight = 'normal';
+                button.style.backgroundColor = '#007bff';
+            }
+        });
     }
 
     function displayEntityDetails(entity, type) {
@@ -153,51 +218,57 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         if (!entityDetailsDiv) return;
-        let detailsHtml = `<h4>Details: ${entity.name} (${type})</h4>`;
-        if (type === 'character_detailed') { // Changed type to reflect detailed data
-            detailsHtml += `<ul>
-                <li>Name: ${entity.name}</li>
-                <li>Job: ${entity.job || 'N/A'} (Rank: ${entity.rank || 'N/A'})</li>
-                <li>Position: (${entity.x}, ${entity.y})</li>
-                <li>Goal: ${entity.current_goal || 'N/A'}</li>
-                <li>Personality: ${entity.personality || 'N/A'}</li>
-                <li>Traits: ${(entity.traits || []).join(', ') || 'None'}</li>
-                <li>Health:
-                    Sick: ${entity.is_sick ? `Yes (Severity: ${entity.sickness_severity})` : 'No'},
-                    Injured: ${entity.is_injured ? `Yes (Severity: ${entity.injury_severity})` : 'No'}
-                </li>
-                <li>Needs: <pre>${JSON.stringify(entity.needs, null, 2)}</pre></li>
-                <li>Inventory: <pre>${JSON.stringify(entity.inventory, null, 2)}</pre></li>
-                <li>Skills: <pre>${JSON.stringify(entity.skills, null, 2)}</pre></li>
-                <li>Supervisor: ${entity.supervisor_name || 'None'}</li>
-                <li>Appointed By: ${entity.appointed_by || 'N/A'}</li>
-                <li>Subordinates: ${(entity.subordinates_names || []).join(', ') || 'None'}</li>
-                <li>Performance: ${entity.performance_rating || 'N/A'} (Warnings: ${entity.warning_count || 0})</li>
-                <li>Last 5 Memories:</li><ul>`;
-            (entity.memory || []).slice(-5).reverse().forEach(mem => { // Show newest 5 first
+        if (!entity && type !== 'clear') { // If entity is null but not a clear instruction, show placeholder
+             entityDetailsDiv.innerHTML = '<p>Select an entity to see details, or enable details view.</p>';
+             return;
+        }
+         if (type === 'clear' || !showEntityDetails) {
+            entityDetailsDiv.innerHTML = '<p><em>Entity details are currently hidden. Click "Toggle Entity Details" to show.</em></p>';
+            return;
+        }
+
+        let detailsHtml = `<h4>Details: ${entity.name || entity.display_name || 'N/A'}</h4><dl>`;
+
+        if (type === 'character_detailed') {
+            detailsHtml += `<dt>Name</dt><dd>${entity.name}</dd>`;
+            detailsHtml += `<dt>Job</dt><dd>${entity.job || 'N/A'} (Rank: ${entity.rank || 'N/A'})</dd>`;
+            detailsHtml += `<dt>Position</dt><dd>(${entity.x}, ${entity.y})</dd>`;
+            detailsHtml += `<dt>Goal</dt><dd>${entity.current_goal || 'N/A'}</dd>`;
+            detailsHtml += `<dt>Personality</dt><dd>${entity.personality || 'N/A'}</dd>`;
+            detailsHtml += `<dt>Traits</dt><dd>${(entity.traits || []).join(', ') || 'None'}</dd>`;
+            detailsHtml += `<dt>Health</dt><dd>Sick: ${entity.is_sick ? `Yes (Sev: ${entity.sickness_severity})` : 'No'}, Injured: ${entity.is_injured ? `Yes (Sev: ${entity.injury_severity})` : 'No'}</dd>`;
+            detailsHtml += `<dt>Needs</dt><dd><pre>${JSON.stringify(entity.needs, null, 2)}</pre></dd>`;
+            detailsHtml += `<dt>Inventory</dt><dd><pre>${JSON.stringify(entity.inventory, null, 2)}</pre></dd>`;
+            detailsHtml += `<dt>Skills</dt><dd><pre>${JSON.stringify(entity.skills, null, 2)}</pre></dd>`;
+            detailsHtml += `<dt>Supervisor</dt><dd>${entity.supervisor_name || 'None'}</dd>`;
+            detailsHtml += `<dt>Appointed By</dt><dd>${entity.appointed_by || 'N/A'}</dd>`;
+            detailsHtml += `<dt>Subordinates</dt><dd>${(entity.subordinates_names || []).join(', ') || 'None'}</dd>`;
+            detailsHtml += `<dt>Performance</dt><dd>${entity.performance_rating || 'N/A'} (Warnings: ${entity.warning_count || 0})</dd>`;
+            detailsHtml += `<dt>Last 5 Memories:</dt><dd><ul>`;
+            (entity.memory || []).slice(-5).reverse().forEach(mem => {
                 detailsHtml += `<li>${mem}</li>`;
             });
-            detailsHtml += `</ul></ul>`;
+            detailsHtml += `</ul></dd>`;
         } else if (type === 'building_detailed') {
-            detailsHtml += `<ul>
-                <li>Name: ${entity.display_name}</li>
-                <li>Type: ${entity.structure_type}</li>
-                <li>Location: (${entity.location[0]}, ${entity.location[1]})</li>
-                <li>Size: (${entity.size[0]} x ${entity.size[1]})</li>
-                <li>Operational: ${entity.is_operational ? 'Yes' : 'No'}</li>`;
+            detailsHtml += `<dt>Name</dt><dd>${entity.display_name}</dd>`;
+            detailsHtml += `<dt>Type</dt><dd>${entity.structure_type}</dd>`;
+            detailsHtml += `<dt>Location</dt><dd>(${entity.location[0]}, ${entity.location[1]})</dd>`;
+            detailsHtml += `<dt>Size</dt><dd>(${entity.size[0]} x ${entity.size[1]})</dd>`;
+            detailsHtml += `<dt>Operational</dt><dd>${entity.is_operational ? 'Yes' : 'No'}</dd>`;
             if (!entity.is_operational && entity.build_time > 0) {
-                detailsHtml += `<li>Construction: ${entity.current_progress.toFixed(1)} / ${entity.build_time.toFixed(1)} (${entity.current_phase_name || 'N/A'})</li>`;
+                detailsHtml += `<dt>Construction</dt><dd>${entity.current_progress.toFixed(1)} / ${entity.build_time.toFixed(1)} (${entity.current_phase_name || 'N/A'})</dd>`;
             }
             if (entity.inventory) {
-                detailsHtml += `<li>Inventory: <pre>${JSON.stringify(entity.inventory, null, 2)}</pre></li>`;
+                detailsHtml += `<dt>Inventory</dt><dd><pre>${JSON.stringify(entity.inventory, null, 2)}</pre></dd>`;
             }
             if (entity.allowed_resources) {
-                detailsHtml += `<li>Allowed Resources: ${entity.allowed_resources.join(', ') || 'Any'}</li>`;
+                detailsHtml += `<dt>Allowed Resources</dt><dd>${entity.allowed_resources.join(', ') || 'Any'}</dd>`;
             }
-            detailsHtml += `</ul>`;
-        } else if (type === 'tile') { // Basic tile info
-             detailsHtml += `<p>Tile Type: ${entity.tileType}</p><p>Coordinates: (${entity.x}, ${entity.y})</p>`;
+        } else if (type === 'tile') {
+             detailsHtml += `<dt>Tile Type</dt><dd>${entity.tileType}</dd>`;
+             detailsHtml += `<dt>Coordinates</dt><dd>(${entity.x}, ${entity.y})</dd>`;
         }
+        detailsHtml += `</dl>`;
         entityDetailsDiv.innerHTML = detailsHtml;
     }
 
@@ -206,18 +277,23 @@ document.addEventListener('DOMContentLoaded', () => {
             displayEntityDetails(null, 'character_detailed'); // Clear or hide panel
             return;
         }
+        entityDetailsDiv.innerHTML = `<p>Loading details for ${characterName}...</p>`;
         try {
             const response = await fetch(`${API_BASE_URL}/character_info?name=${encodeURIComponent(characterName)}`);
             if (!response.ok) {
                 console.error(`HTTP error fetching character details! status: ${response.status}`);
-                entityDetailsDiv.innerHTML = `<p>Error fetching details for ${characterName}: ${response.status}</p>`;
+                let errorMsg = `Error fetching details for ${characterName}: ${response.status}`;
+                 if (response.status === 404) {
+                    errorMsg = `Character ${characterName} not found.`;
+                }
+                entityDetailsDiv.innerHTML = `<p class="error">${errorMsg}</p>`;
                 return;
             }
             const charDetails = await response.json();
             displayEntityDetails(charDetails, 'character_detailed');
         } catch (error) {
             console.error('Error fetching character details:', error);
-            entityDetailsDiv.innerHTML = `<p>Failed to fetch details for ${characterName}.</p>`;
+            entityDetailsDiv.innerHTML = `<p class="error">Failed to fetch details for ${characterName}. Check connection.</p>`;
         }
     }
 
@@ -305,6 +381,13 @@ document.addEventListener('DOMContentLoaded', () => {
     if (pauseButton) {
         pauseButton.addEventListener('click', togglePause);
     }
+
+    speedButtons.forEach(button => {
+        button.addEventListener('click', () => {
+            const speed = parseFloat(button.dataset.speed);
+            setSimulationSpeed(speed);
+        });
+    });
 
     // Initial UI update and start interval
     updateUI();

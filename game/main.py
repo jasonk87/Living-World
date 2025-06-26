@@ -30,6 +30,8 @@ game_world: Optional[World] = None
 game_time_obj: Optional[Time] = None
 simulation_running = True # Controls the simulation loop
 game_paused = False       # To pause/resume the simulation
+SIMULATION_SPEED_MULTIPLIER = 1.0 # 1.0 is normal speed
+BASE_TICK_SLEEP_DURATION = 0.2 # Seconds for 1x speed per tick
 test_characters_list: List[Character] = [] # To store characters for final report
 
 # --- Simulation Logic ---
@@ -140,7 +142,13 @@ def simulation_thread_func():
     while simulation_running:
         if not game_paused:
             tick_simulation()
-        py_time.sleep(0.1) # Control simulation speed (e.g., 10 ticks per second)
+
+        current_sleep_duration = BASE_TICK_SLEEP_DURATION
+        if SIMULATION_SPEED_MULTIPLIER > 0: # Avoid division by zero or negative multipliers
+            current_sleep_duration /= SIMULATION_SPEED_MULTIPLIER
+
+        py_time.sleep(max(0.01, current_sleep_duration)) # Ensure a minimum sleep to prevent overly tight loops
+
     print("Simulation thread finished.")
     # Print final character states after simulation stops
     if game_world and test_characters_list:
@@ -227,7 +235,8 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "characters": characters_repr,
                     "event_log": event_log_repr,
                     "is_paused": game_paused,
-                    "days_until_election": getattr(game_time_obj, 'days_until_election', -1)
+                    "days_until_election": getattr(game_time_obj, 'days_until_election', -1),
+                    "current_speed_multiplier": SIMULATION_SPEED_MULTIPLIER
                 }
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
@@ -247,6 +256,29 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps({"paused": game_paused}).encode('utf-8'))
             if game_world: game_world.add_event_log_message(f"SIMULATION TOGGLED: {'PAUSED' if game_paused else 'RESUMED'}")
             print(f"Game state toggled. Paused: {game_paused}")
+
+        elif self.path.startswith('/set_speed'):
+            global SIMULATION_SPEED_MULTIPLIER
+            query_components = {}
+            if '?' in self.path:
+                query_string = self.path.split('?',1)[1]
+                query_components = dict(qc.split("=") for qc in query_string.split("&"))
+
+            try:
+                multiplier = float(query_components.get('multiplier', 1.0))
+                if multiplier <= 0: multiplier = 0.1 # Prevent zero or negative speed
+                SIMULATION_SPEED_MULTIPLIER = multiplier
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "success", "new_speed_multiplier": SIMULATION_SPEED_MULTIPLIER}).encode('utf-8'))
+                if game_world: game_world.add_event_log_message(f"Simulation speed set to {SIMULATION_SPEED_MULTIPLIER}x")
+                print(f"Simulation speed set to {SIMULATION_SPEED_MULTIPLIER}x")
+            except ValueError:
+                self.send_error(400, "Invalid 'multiplier' value for set_speed")
+            except Exception as e:
+                self.send_error(500, f"Error setting speed: {e}")
 
         elif self.path.startswith('/character_info'):
             if not game_world:

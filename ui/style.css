@@ -42,6 +42,12 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    position: relative; /* For potential absolute positioning of character markers if needed */
+}
+
+.map-cell:hover {
+    outline: 1px solid blue;
+    box-shadow: 0 0 5px rgba(0,0,255,0.5);
 }
 
 /* Tile-specific styling */
@@ -63,6 +69,23 @@ body {
     background-color: #d2b48c; /* Tan - for stockpiles */
     cursor: pointer;
     font-size: 1.2em; /* Make stockpile 'S' slightly larger if needed */
+}
+.building-wooden_hut { /* Example specific building type styling */
+    background-color: #deb887; /* BurlyWood */
+}
+/* Add more specific building styles here, e.g. .building-small_workshop */
+
+.char-marker {
+    cursor: pointer;
+    position: absolute; /* To ensure it's on top and can be centered if cell content is cleared */
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    padding: 2px;
+    background-color: rgba(255, 255, 255, 0.7); /* Slight background for readability */
+    border-radius: 3px;
+    line-height: 1; /* Ensure text is centered vertically */
+    z-index: 10; /* Ensure it's above tile background/building char */
 }
 
 
@@ -126,4 +149,41 @@ h2 {
     margin-top: 0;
     font-size: 1.2em;
     color: #333;
+}
+
+/* Entity Details Panel Styling */
+#entity-details dl {
+    margin: 0;
+    padding: 0;
+}
+#entity-details dt {
+    font-weight: bold;
+    margin-top: 8px;
+    color: #555;
+}
+#entity-details dd {
+    margin-left: 15px;
+    margin-bottom: 5px;
+    color: #333;
+}
+#entity-details pre {
+    white-space: pre-wrap; /* Allow wrapping for long JSON strings */
+    word-wrap: break-word;
+    background-color: #eee;
+    padding: 5px;
+    border-radius: 3px;
+    font-size: 0.9em;
+    max-height: 100px; /* Limit height of preformatted blocks */
+    overflow-y: auto;
+}
+#entity-details ul { /* For memories list */
+    padding-left: 20px;
+    margin-top: 0;
+}
+#entity-details li {
+    margin-bottom: 3px;
+}
+.error {
+    color: red;
+    font-weight: bold;
 }
