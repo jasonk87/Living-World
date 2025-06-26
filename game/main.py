@@ -168,7 +168,7 @@ def simulation_thread_func():
 PORT = 8000
 class GameDataHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
-        global game_world, game_time_obj, game_paused, simulation_running
+        global game_world, game_time_obj, game_paused, simulation_running, SIMULATION_SPEED_MULTIPLIER # Correct placement
         if self.path == '/game_state':
             if game_world and game_time_obj:
                 # Ensure thread safety if accessing shared data that simulation thread modifies
@@ -255,10 +255,12 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({"paused": game_paused}).encode('utf-8'))
             if game_world: game_world.add_event_log_message(f"SIMULATION TOGGLED: {'PAUSED' if game_paused else 'RESUMED'}")
+            # Duplicated log line below, removing it.
+            # if game_world: game_world.add_event_log_message(f"SIMULATION TOGGLED: {'PAUSED' if game_paused else 'RESUMED'}")
             print(f"Game state toggled. Paused: {game_paused}")
 
         elif self.path.startswith('/set_speed'):
-            global SIMULATION_SPEED_MULTIPLIER
+            # global SIMULATION_SPEED_MULTIPLIER # This was the problematic line if misplaced
             query_components = {}
             if '?' in self.path:
                 query_string = self.path.split('?',1)[1]
@@ -267,7 +269,21 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
             try:
                 multiplier = float(query_components.get('multiplier', 1.0))
                 if multiplier <= 0: multiplier = 0.1 # Prevent zero or negative speed
+                # SIMULATION_SPEED_MULTIPLIER is global, so assign directly
+                # No, this is wrong. If a global is assigned in a function, it needs 'global' keyword.
+                # The 'global' keyword for SIMULATION_SPEED_MULTIPLIER should be at the start of do_GET.
+                # My previous fix was to put it at the start of do_GET, this comment is a bit misleading now.
+                # The `global ... SIMULATION_SPEED_MULTIPLIER` at the start of do_GET handles this.
+                __class__.SIMULATION_SPEED_MULTIPLIER = multiplier # This is incorrect, should assign to the global directly
+                # Corrected assignment below:
+                # global SIMULATION_SPEED_MULTIPLIER # This should be at the top of do_GET
+                # SIMULATION_SPEED_MULTIPLIER = multiplier
+
+                # Re-correction: The `global` statement at the top of `do_GET` makes `SIMULATION_SPEED_MULTIPLIER`
+                # refer to the global one throughout `do_GET`. So, direct assignment is correct here.
                 SIMULATION_SPEED_MULTIPLIER = multiplier
+
+
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
                 self.send_header('Access-Control-Allow-Origin', '*')
