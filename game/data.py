@@ -127,6 +127,20 @@ JOB_TASK_DEFINITIONS = {
         "base_yield": 0,
         "base_time_per_yield": 0 # Represents general readiness/duty
     },
+    "Maintain Peace in Settlement": { # For Sheriff
+        "required_tool_type": None, # Could be "Badge" or "Weapon" later
+        "skill_used": "Security",   # New skill for law enforcement, order, and investigation
+        "resource_produced": None,
+        "base_yield": 0,
+        "base_time_per_yield": 0 # Continuous oversight/presence task
+    },
+    "Patrol Area": { # For Deputy
+        "required_tool_type": None,
+        "skill_used": "Security",
+        "resource_produced": None,
+        "base_yield": 0,
+        "base_time_per_yield": 0 # Represents active patrolling
+    },
 }
 
 # It might also be useful to define tool types if they have specific properties beyond what's in blueprints

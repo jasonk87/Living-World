@@ -460,6 +460,8 @@ class Character:
         if self.job == "Mayor": return "Oversee Settlement"
         if self.job == "Chief Medical Officer": return "Oversee Medical Operations"
         if self.job == "Medic": return "Provide Medical Care"
+        if self.job == "Sheriff": return "Maintain Peace in Settlement"
+        if self.job == "Deputy": return "Patrol Area"
         # Add a check for rank if we want Nobles who aren't "Manager" to also manage
         if self.rank in ["Noble Lord", "Baron"] and not self.subordinates_names: # Example: A noble without a specific job might just idle or have other duties
             return "Oversee Domain" # Placeholder for other noble tasks
@@ -1099,6 +1101,60 @@ class Character:
         # They also do not move unless a future sub-task of overseeing requires it (e.g. "Inspect Project X")
         return
 
+    def _execute_maintain_peace(self, world: 'World'): # For Sheriff
+        if self.job != "Sheriff":
+            self.current_goal = self.job_default_goal() or "Idle"
+            return
+
+        self.add_memory(f"Sheriff {self.name} is maintaining peace in the settlement.")
+
+        # Initial simple behavior: Log surveying and occasionally move to a central point or wander.
+        if random.random() < 0.2:
+            self.add_memory("Surveying the surroundings for any disturbances.")
+
+        # Placeholder for patrolling movement: move towards a conceptual "town_center" or just wander slightly.
+        # If world had defined key locations, Sheriff could move between them.
+        # For now, a simple wander-like behavior if not actively doing something else.
+        if random.random() < 0.1: # Low chance to decide to move to a different spot
+            # Simple wander to simulate being present in different areas.
+            # This could be replaced with movement to specific patrol points if defined.
+            dx = random.choice([-1, 0, 1])
+            dy = random.choice([-1, 0, 1])
+            if dx != 0 or dy != 0:
+                self.add_memory(f"Sheriff {self.name} moves to a new vantage point.")
+                self.move(dx, dy, world) # move will handle collisions/boundaries
+
+        # Future: Scan for incidents, characters with "Troublemaker" trait, etc.
+        # For now, the Sheriff's presence is the primary function.
+        # Goal remains "Maintain Peace in Settlement" unless an incident changes it.
+        return
+
+    def _execute_patrol_area(self, world: 'World'): # For Deputy
+        if self.job != "Deputy":
+            self.current_goal = self.job_default_goal() or "Idle"
+            return
+
+        self.add_memory(f"Deputy {self.name} is patrolling their assigned area.")
+
+        # Simple patrolling behavior: move randomly or towards predefined points.
+        # For now, just a random move.
+        if random.random() < 0.3: # Chance to move each tick while patrolling
+            dx = random.choice([-1, 0, 1])
+            dy = random.choice([-1, 0, 1])
+            if dx != 0 or dy != 0: # Ensure there's an actual move attempt
+                if self.move(dx, dy, world):
+                    self.add_memory(f"Patrolling... moved to ({self.x},{self.y}).")
+                else:
+                    self.add_memory(f"Patrolling... tried to move but was blocked.")
+            else:
+                self.add_memory("Patrolling... surveying current location.")
+        else:
+            self.add_memory("Patrolling... observing the area.")
+
+        # Goal remains "Patrol Area". Deputies would continuously patrol.
+        # Could add logic to return to a "Guardhouse" or report to Sheriff periodically.
+        return
+
     def _execute_wander(self, world: 'World'):
         moves=[];
         for dx,dy in[(0,1),(0,-1),(1,0),(-1,0)]:
@@ -1190,8 +1246,14 @@ class Character:
         elif self.current_goal == "Provide Medical Care": # Added for Medic
             self._execute_provide_medical_care(world)
             return
-        elif self.current_goal == "Gather Herbs": # Added for herb gathering
+        elif self.current_goal == "Gather Herbs":
             self._execute_gather_herbs(world)
+            return
+        elif self.current_goal == "Maintain Peace in Settlement": # Added for Sheriff
+            self._execute_maintain_peace(world)
+            return
+        elif self.current_goal == "Patrol Area": # Added for Deputy
+            self._execute_patrol_area(world)
             return
 
 
