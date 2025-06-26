@@ -1,18 +1,18 @@
 # game/main.py
-from .character import Character
-from .world import World
-from .time import Time
-from .stockpile import Stockpile
-from .work_order import WorkOrder
-from .data import BLUEPRINTS, JOB_TASK_DEFINITIONS, STRUCTURE_BLUEPRINTS # Added STRUCTURE_BLUEPRINTS
-from .building import Building # Added Building
-# from .furniture import Furniture # Commented out as it's not present after reset and not core to this test
-# from .events_data import EVENT_DEFINITIONS # Commented out - file missing after reset
-# from .event_manager import EventManager # Commented out - file missing after reset / depends on events_data
-from . import config
+from game.character import Character
+from game.world import World
+from game.time import Time
+from game.stockpile import Stockpile
+from game.work_order import WorkOrder
+from game.data import BLUEPRINTS, JOB_TASK_DEFINITIONS, STRUCTURE_BLUEPRINTS
+from game.building import Building
+# from game.furniture import Furniture # If re-enabled
+# from game.events_data import EVENT_DEFINITIONS # If re-enabled
+# from game.event_manager import EventManager # If re-enabled
+from game import config
 import random
-import curses
-from typing import Optional, Dict, Any, List # Added List
+import curses # Keep for now, might be used by main_simulation_logic
+from typing import Optional, Dict, Any, List
 
 def print_map_to_console(world: World, characters: List[Character]):
     grid_display = [["." for _ in range(world.grid_size[1])] for _ in range(world.grid_size[0])]
