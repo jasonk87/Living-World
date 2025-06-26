@@ -44,6 +44,28 @@ body {
     white-space: nowrap;
 }
 
+/* Tile-specific styling */
+.tile-Grass { background-color: #90ee90; /* LightGreen */ }
+.tile-Forest { background-color: #228B22; color: white; /* ForestGreen */ }
+.tile-Water { background-color: #add8e6; color: navy; /* LightBlue */ }
+.tile-Rocks { background-color: #a9a9a9; color: black; /* DarkGray */ }
+.tile-OutOfBounds { background-color: #333; }
+
+
+/* Building and Stockpile cell styling */
+.building-cell {
+    font-weight: bold;
+    background-color: #f5deb3; /* Wheat - default for buildings */
+    cursor: pointer;
+}
+.stockpile-cell {
+    font-weight: bold;
+    background-color: #d2b48c; /* Tan - for stockpiles */
+    cursor: pointer;
+    font-size: 1.2em; /* Make stockpile 'S' slightly larger if needed */
+}
+
+
 #info-panel {
     flex: 1; /* Takes less space than map */
     min-width: 250px;

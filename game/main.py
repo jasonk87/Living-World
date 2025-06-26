@@ -191,6 +191,31 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
 
                 event_log_repr = game_world.event_log[-20:] if game_world else []
 
+                buildings_repr = []
+                if hasattr(game_world, 'buildings'):
+                    for b in game_world.buildings:
+                        buildings_repr.append({
+                            "x": b.location[0], # Assuming building.location is (x,y)
+                            "y": b.location[1],
+                            "width": b.size[0], # Assuming building.size is (width, height)
+                            "height": b.size[1],
+                            "map_char": b.get_current_map_char(),
+                            "display_name": b.display_name,
+                            "structure_type": b.structure_type # Added for frontend differentiation
+                        })
+                if hasattr(game_world, 'stockpiles'): # Also include stockpiles as "buildings" for map display
+                    for sp in game_world.stockpiles:
+                        buildings_repr.append({
+                            "x": sp.rect[0],
+                            "y": sp.rect[1],
+                            "width": sp.rect[2],
+                            "height": sp.rect[3],
+                            "map_char": "S", # Stockpile character
+                            "display_name": sp.name,
+                            "structure_type": "Stockpile"
+                        })
+
+
                 state = {
                     "day": game_time_obj.current_day,
                     "tick": game_time_obj.current_tick,
@@ -220,9 +245,128 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
             self.wfile.write(json.dumps({"paused": game_paused}).encode('utf-8'))
-            game_world.add_event_log_message(f"SIMULATION TOGGLED: {'PAUSED' if game_paused else 'RESUMED'}")
+            if game_world: game_world.add_event_log_message(f"SIMULATION TOGGLED: {'PAUSED' if game_paused else 'RESUMED'}")
             print(f"Game state toggled. Paused: {game_paused}")
 
+        elif self.path.startswith('/character_info'):
+            if not game_world:
+                self.send_error(503, "Game world not initialized")
+                return
+
+            query_components = {}
+            if '?' in self.path:
+                query_string = self.path.split('?',1)[1]
+                query_components = dict(qc.split("=") for qc in query_string.split("&"))
+
+            char_name = query_components.get('name')
+            if not char_name:
+                self.send_error(400, "Missing 'name' parameter for character_info")
+                return
+
+            character = game_world.get_character_by_name(char_name)
+            if character:
+                char_data = {
+                    "name": character.name,
+                    "job": character.job,
+                    "rank": character.rank,
+                    "x": character.x,
+                    "y": character.y,
+                    "current_goal": character.current_goal,
+                    "inventory": character.inventory,
+                    "skills": {skill_name: data["level"] for skill_name, data in character.skills.items()}, # Simplified skills view
+                    "needs": character.needs,
+                    "is_sick": getattr(character, 'is_sick', False),
+                    "sickness_severity": getattr(character, 'sickness_severity', 0),
+                    "is_injured": getattr(character, 'is_injured', False),
+                    "injury_severity": getattr(character, 'injury_severity', 0),
+                    "appointed_by": getattr(character, 'appointed_by', None),
+                    "supervisor_name": character.supervisor_name,
+                    "subordinates_names": character.subordinates_names,
+                    "memory": character.memory[-10:], # Last 10 memories
+                    "personality": character.personality,
+                    "traits": character.traits,
+                    "performance_rating": getattr(character, 'performance_rating', "N/A"),
+                    "warning_count": getattr(character, 'warning_count', 0)
+                }
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps(char_data).encode('utf-8'))
+            else:
+                self.send_error(404, f"Character '{char_name}' not found")
+
+        elif self.path.startswith('/building_info'):
+            if not game_world:
+                self.send_error(503, "Game world not initialized")
+                return
+
+            query_components = {}
+            if '?' in self.path:
+                query_string = self.path.split('?',1)[1]
+                query_components = dict(qc.split("=") for qc in query_string.split("&"))
+
+            try:
+                x = int(query_components.get('x', -1))
+                y = int(query_components.get('y', -1))
+            except ValueError:
+                self.send_error(400, "Invalid 'x' or 'y' parameters for building_info")
+                return
+
+            if x == -1 or y == -1:
+                self.send_error(400, "Missing 'x' or 'y' parameters for building_info")
+                return
+
+            building = game_world.get_building_at(x,y)
+            if building:
+                building_data = {
+                    "display_name": building.display_name,
+                    "structure_type": building.structure_type,
+                    "location": building.location,
+                    "size": building.size,
+                    "is_operational": building.is_operational,
+                    "current_progress": getattr(building, 'current_progress', 0),
+                    "build_time": getattr(building, 'build_time', 0), # Total work for all phases
+                    "current_phase_name": building.get_current_phase_name() if hasattr(building, 'get_current_phase_name') else "N/A",
+                    "map_char": building.get_current_map_char()
+                }
+                # If it's a stockpile or has inventory (like some workshops might)
+                if hasattr(building, 'inventory'):
+                    building_data["inventory"] = building.inventory
+                if hasattr(building, 'allowed_resources'): # For stockpiles
+                    building_data["allowed_resources"] = building.allowed_resources
+
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps(building_data).encode('utf-8'))
+            else:
+                # Check if it's a stockpile, as they are separate from buildings in world lists
+                stockpile_at_loc = None
+                for sp in game_world.stockpiles:
+                    sp_x, sp_y, sp_w, sp_h = sp.rect
+                    if sp_x <= x < sp_x + sp_w and sp_y <= y < sp_y + sp_h:
+                        stockpile_at_loc = sp
+                        break
+                if stockpile_at_loc:
+                    stockpile_data = {
+                        "display_name": stockpile_at_loc.name,
+                        "structure_type": "Stockpile", # Generic type for UI
+                        "location": (stockpile_at_loc.rect[0], stockpile_at_loc.rect[1]),
+                        "size": (stockpile_at_loc.rect[2], stockpile_at_loc.rect[3]),
+                        "is_operational": True, # Stockpiles are always "operational"
+                        "inventory": stockpile_at_loc.inventory,
+                        "allowed_resources": stockpile_at_loc.allowed_resources,
+                        "map_char": "S" # Placeholder map char for stockpile
+                    }
+                    self.send_response(200)
+                    self.send_header('Content-type', 'application/json')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(json.dumps(stockpile_data).encode('utf-8'))
+                else:
+                    self.send_error(404, f"No building or stockpile found at ({x},{y})")
         else:
             # Serve files from a 'ui' subdirectory if they exist (for the frontend)
             # This part makes SimpleHTTPRequestHandler serve files from 'ui' instead of current dir.
