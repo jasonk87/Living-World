@@ -211,44 +211,21 @@ class Character:
                         # This is a tricky state. Builder might be stuck if they can't use what they have.
                         # For now, they will just wait at the site.
 
-                        # Check if we were actively fetching a resource that we partially have but still need more of for the project.
-                        if self.resource_to_fetch and \
-                           self.inventory.get(self.resource_to_fetch["name"], 0) > 0 and \
-                           structure_bp_data and \
-                           self.resource_to_fetch["name"] in structure_bp_data["required_resources"] and \
-                           self.inventory.get(self.resource_to_fetch["name"], 0) < structure_bp_data["required_resources"][self.resource_to_fetch["name"]]:
-                            # We are at the site, inventory full. The resource we were trying to fetch (and have some of)
-                            # is still not enough for the whole project. We can't use it yet with current monolithic resource consumption.
-                            # Clear resource_to_fetch. This will make Stage 2 re-pick Wood.
-                            # Then, _execute_fetch_resource_for_build will be called. Since x,y is not stockpile, it will move.
-                            self.add_memory(f"At site ({self.x},{self.y}) with full inv, still need more {self.resource_to_fetch['name']}. Will re-target fetching to go to stockpile.")
-                            self.resource_to_fetch = None
-                            return # Return to allow re-evaluation from top of decide_action
+                        # At site, inventory full, but still missing materials for the project.
+                        # The 'next_resource_to_target_for_project' variable must be valid here because
+                        # 'current_project_mats_fully_in_inventory' was false.
+                        self.add_memory(f"At site ({self.x},{self.y}) with full inventory. Still need {next_resource_to_target_for_project} for {self.current_building_project}. Heading to gather more.")
 
-                        # Check if we were actively fetching a resource that we partially have but still need more of for the project.
-                        if self.resource_to_fetch and \
-                           self.inventory.get(self.resource_to_fetch["name"], 0) > 0 and \
-                           structure_bp_data and \
-                           self.resource_to_fetch["name"] in structure_bp_data["required_resources"] and \
-                           self.inventory.get(self.resource_to_fetch["name"], 0) < structure_bp_data["required_resources"][self.resource_to_fetch["name"]]:
-                            self.add_memory(f"At site ({self.x},{self.y}), inv full, still need more {self.resource_to_fetch['name']}. Will re-target fetching to go to stockpile.")
-                            self.resource_to_fetch = None
-                            return
-                        else:
-                            # Original "Waiting" logic, but with safer logging for missing resource
-                            log_missing_res_detail = "items"
-                            # The variable 'next_resource_to_target_for_project' might not be defined here if the loop for it was skipped.
-                            # So, we determine the missing resource more robustly for logging.
-                            if self.resource_to_fetch:
-                                log_missing_res_detail = self.resource_to_fetch['name']
-                            else:
-                                if structure_bp_data and "required_resources" in structure_bp_data:
-                                    for res_n_log, total_qty_n_log in structure_bp_data["required_resources"].items():
-                                        if self.inventory.get(res_n_log, 0) < total_qty_n_log:
-                                            log_missing_res_detail = res_n_log
-                                            break
-                            self.add_memory(f"At site for {self.current_building_project}, inventory full, but still need other materials like {log_missing_res_detail}. Waiting.")
-                            return # Stuck here for this tick.
+                        # Set up to fetch the next needed resource type.
+                        needed_qty_of_this_type = structure_bp_data["required_resources"][next_resource_to_target_for_project] - self.inventory.get(next_resource_to_target_for_project, 0)
+                        self.resource_to_fetch = {
+                            "name": next_resource_to_target_for_project,
+                            "quantity": needed_qty_of_this_type,
+                            "target_stockpile_name": None # _execute_fetch_resource_for_build will find a stockpile
+                        }
+                        # Immediately attempt to fetch. Since character is at build site (not stockpile), this will trigger movement.
+                        self._execute_fetch_resource_for_build(world)
+                        return # End tick, fetching/moving is in progress.
                 else:
                     # Inventory has space, so initiate fetching for the identified 'next_resource_to_target_for_project'.
                     needed_qty_of_this_type = structure_bp_data["required_resources"][next_resource_to_target_for_project] - self.inventory.get(next_resource_to_target_for_project, 0)
@@ -262,6 +239,7 @@ class Character:
                     return # End tick, fetching is in progress.
             # If no next_resource_to_target (should mean all gathered) but materials_gathered_for_build is still false,
             # it's an inconsistent state, let it re-evaluate next tick.
+            # However, with the fix above, this path should be less likely for the described bug.
             return
 
 
