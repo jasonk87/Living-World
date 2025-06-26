@@ -1,3 +1,11 @@
+import sys
+import os
+# Add the project root to sys.path
+# Assumes main.py is in 'game/' and the project root is one directory up.
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 # game/main.py
 from game.character import Character
 from game.world import World
