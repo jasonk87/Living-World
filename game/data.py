@@ -141,6 +141,13 @@ JOB_TASK_DEFINITIONS = {
         "base_yield": 0,
         "base_time_per_yield": 0 # Represents active patrolling
     },
+    "Give Speech": { # For Mayor
+        "required_tool_type": None,
+        "skill_used": "Leadership", # Oratory could be part of Leadership or a new Charisma skill
+        "resource_produced": None,  # Indirectly affects morale or opinion
+        "base_yield": 0,
+        "base_time_per_yield": 0 # Action takes a certain number of ticks, not yield-based
+    },
 }
 
 # It might also be useful to define tool types if they have specific properties beyond what's in blueprints

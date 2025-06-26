@@ -165,6 +165,17 @@ def main_simulation_logic(stdscr: Optional[curses.window]): # Combined logic, st
             if new_day:
                 day_msg = f"*** NEW DAY: Day {game_time_obj.current_day}. Weather: {game_world.weather}, Season: {game_world.season} ***"
                 print(day_msg); game_world.add_event_log_message(day_msg)
+
+                # Check for election day
+                if hasattr(game_world.game_time, 'days_until_election') and game_world.game_time.days_until_election <= 0:
+                    if hasattr(game_world, 'handle_election'):
+                        game_world.handle_election()
+                    else: # Should not happen if world.py is updated correctly
+                        game_world.add_event_log_message("ERROR: Election due but handle_election method not found in world.")
+                        # Manually reset timer to avoid constant trigger if method is missing
+                        game_world.game_time.days_until_election = config.ELECTION_CYCLE_DAYS
+
+
                 if not stdscr: print_map_to_console(game_world, game_world.characters)
 
                 # event_manager.check_triggers() # Commented out

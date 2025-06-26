@@ -235,3 +235,99 @@ class World:
         pass # Placeholder
     def expire_event_effects(self, event_instance: Any):
         pass # Placeholder
+
+    def handle_election(self):
+        if not self.game_time or not hasattr(self.game_time, 'days_until_election'):
+            # Should not happen if timer logic is correctly in Time class
+            self.add_event_log_message("Election handling called but game_time or election timer is not properly set up.")
+            return
+
+        self.add_event_log_message(f"--- ELECTION DAY (Day {self.game_time.current_day}) ---")
+
+        # Identify candidates: e.g., Nobles or high Leadership
+        candidates: List['Character'] = []
+        for char in self.characters:
+            # Example criteria: Noble Lord rank OR Leadership skill > 3
+            # Exclude current mayor from being a "new" candidate if we want to ensure change, or include for re-election.
+            # For now, simple criteria:
+            is_noble_lord = hasattr(char, 'rank') and char.rank == "Noble Lord"
+            leadership_skill = 0
+            if hasattr(char, 'skills') and char.skills and "Leadership" in char.skills and isinstance(char.skills["Leadership"], dict):
+                leadership_skill = char.skills["Leadership"].get("level",0)
+
+            if is_noble_lord or leadership_skill >= 3: # Min leadership 3 for candidacy
+                if char.job != "Mayor": # Don't add current mayor to candidate list this way, handle re-election separately if needed
+                    candidates.append(char)
+
+        current_mayor: Optional['Character'] = None
+        for char in self.characters:
+            if char.job == "Mayor":
+                current_mayor = char
+                if current_mayor not in candidates: # Allow current mayor to be a candidate
+                    # Add them if they meet criteria (e.g. still a Noble Lord, or if their leadership is high enough)
+                    # For simplicity, if they are mayor, they can run again.
+                    # More complex logic could check if they are eligible for re-election.
+                    pass # current_mayor will be handled below
+
+        if not candidates and not current_mayor:
+            self.add_event_log_message("No eligible candidates found for Mayor. Election postponed.")
+            self.game_time.days_until_election = config.ELECTION_CYCLE_DAYS // 2 # Postpone for a shorter period
+            return
+
+        # Add current mayor to candidate list if they exist, to allow for re-election possibility
+        # or if they are the only option.
+        eligible_candidates_for_vote = candidates[:] # copy
+        if current_mayor and current_mayor not in eligible_candidates_for_vote:
+             # Re-evaluate if current mayor should always be a candidate or based on criteria
+             is_noble_lord = hasattr(current_mayor, 'rank') and current_mayor.rank == "Noble Lord"
+             leadership_skill = 0
+             if hasattr(current_mayor, 'skills') and current_mayor.skills and "Leadership" in current_mayor.skills and isinstance(current_mayor.skills["Leadership"], dict):
+                leadership_skill = current_mayor.skills["Leadership"].get("level",0)
+             if is_noble_lord or leadership_skill >=3:
+                eligible_candidates_for_vote.append(current_mayor)
+
+
+        if not eligible_candidates_for_vote: # Still no one after considering current mayor
+            self.add_event_log_message("No eligible candidates (including current Mayor) for election. Term extended.")
+            if current_mayor:
+                 self.add_event_log_message(f"{current_mayor.name} continues as Mayor by default.")
+            self.game_time.days_until_election = config.ELECTION_CYCLE_DAYS
+            return
+
+        # Winner selection: For now, highest Leadership. Tie-break randomly.
+        eligible_candidates_for_vote.sort(key=lambda c: c.skills.get("Leadership", {}).get("level", 0), reverse=True)
+
+        max_leadership = eligible_candidates_for_vote[0].skills.get("Leadership", {}).get("level", 0)
+        top_candidates = [c for c in eligible_candidates_for_vote if c.skills.get("Leadership", {}).get("level", 0) == max_leadership]
+
+        winner = random.choice(top_candidates)
+
+        self.add_event_log_message(f"Candidates were: {[c.name for c in eligible_candidates_for_vote]}.")
+        self.add_event_log_message(f"{winner.name} has been elected as the new Mayor with Leadership {winner.skills.get('Leadership', {}).get('level', 0)}!")
+
+        if current_mayor and current_mayor.name != winner.name:
+            self.add_event_log_message(f"Former Mayor {current_mayor.name} steps down.")
+            current_mayor.job = "Noble" # Or "Commoner" or "Unemployed" depending on desired outcome
+            current_mayor.current_goal = current_mayor.job_default_goal()
+            # Clear subordinates if they were managing people directly as Mayor (not typical with current setup)
+            # current_mayor.subordinates_names.clear()
+            if current_mayor.name in winner.subordinates_names: # Should not happen
+                 winner.remove_subordinate(current_mayor.name)
+
+
+        winner.job = "Mayor"
+        winner.rank = "Noble Lord" # Ensure rank is appropriate
+        winner.current_goal = winner.job_default_goal() # Should be "Oversee Settlement"
+        winner.appointed_by = None # Elected, not appointed by another individual in this context
+
+        # Clear winner's previous supervisor/appointer if they had one from a lesser role
+        if winner.supervisor_name:
+            old_supervisor = self.get_character_by_name(winner.supervisor_name)
+            if old_supervisor and winner.name in old_supervisor.subordinates_names:
+                old_supervisor.remove_subordinate(winner.name)
+            winner.supervisor_name = None
+        if winner.appointed_by : winner.appointed_by = None
+
+
+        # Reset election timer
+        self.game_time.days_until_election = config.ELECTION_CYCLE_DAYS

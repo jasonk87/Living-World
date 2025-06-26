@@ -1105,6 +1105,12 @@ class Character:
         if random.random() < 0.1: # 10% chance each time Mayor oversees settlement
             self._execute_manage_appointments(world)
 
+        # Chance to give a speech
+        if random.random() < 0.02: # 2% chance each time Mayor oversees settlement
+            self.add_memory(f"Mayor {self.name} feels it's time to address the populace.")
+            self.current_goal = "Give Speech"
+            return # Goal changed, decide_action will pick it up next tick
+
         # Mayoral Project Initiation
         # Simplified: 5% chance each time the Mayor oversees settlement to initiate a project
         if random.random() < 0.05:
@@ -1173,19 +1179,24 @@ class Character:
                 self.add_memory(f"Position of {position_job_title} is vacant. Seeking candidate.")
                 # Simplified hiring: find first available character without a critical job
                 candidate: Optional['Character'] = None
+                potential_candidates: List['Character'] = []
                 for char_to_check in world.characters:
-                    if char_to_check.job not in key_positions and char_to_check.job != "Mayor" and char_to_check.rank != "Noble Lord": # Avoid appointing other nobles or already key staff
-                        # Basic skill check (can be expanded)
+                    if char_to_check.job not in key_positions and char_to_check.job != "Mayor" and char_to_check.rank != "Noble Lord":
                         required_skill_for_job = {"Sheriff": "Security", "Chief Medical Officer": "Medicine", "Manager": "Leadership"}.get(position_job_title)
                         if required_skill_for_job and char_to_check.skills.get(required_skill_for_job, {}).get("level", 0) > 0:
-                             candidate = char_to_check
-                             break
-                        elif not required_skill_for_job: # If no specific skill, any non-key role is fine
-                             candidate = char_to_check
-                             break
+                            potential_candidates.append(char_to_check)
+                        elif not required_skill_for_job: # Should ideally not happen for key positions
+                            potential_candidates.append(char_to_check)
 
-                if candidate:
-                    self.add_memory(f"Appointing {candidate.name} as the new {position_job_title}.")
+                if potential_candidates:
+                    # Prefer candidate with highest relevant skill
+                    # Add trait preference here later (e.g. "Diligent")
+                    relevant_skill = {"Sheriff": "Security", "Chief Medical Officer": "Medicine", "Manager": "Leadership"}.get(position_job_title)
+                    if relevant_skill:
+                        potential_candidates.sort(key=lambda c: c.skills.get(relevant_skill, {}).get("level", 0), reverse=True)
+                    candidate = potential_candidates[0] # Pick the best one
+
+                    self.add_memory(f"Appointing {candidate.name} (Skill: {candidate.skills.get(relevant_skill, {}).get('level', 0) if relevant_skill else 'N/A'}) as the new {position_job_title}.")
                     # Unassign from old role if necessary (more complex logic for supervisor, etc. later)
                     if candidate.supervisor_name:
                         supervisor = world.get_character_by_name(candidate.supervisor_name)
@@ -1201,12 +1212,23 @@ class Character:
                 else:
                     self.add_memory(f"Could not find a suitable candidate for {position_job_title} at this time.")
             else:
-                # Position is filled, consider firing (very simplified for now)
-                if random.random() < 0.02: # 2% chance to consider firing an existing appointee
+                # Position is filled, consider firing (simplified: trait-influenced random chance)
+                base_firing_consideration_chance = 0.02 # Base 2% chance to even consider it
+                if "Strict" in self.traits: base_firing_consideration_chance *= 1.5
+                if "Impatient" in self.traits: base_firing_consideration_chance *= 1.5
+                if "Forgiving" in self.traits: base_firing_consideration_chance *= 0.5
+
+                if random.random() < base_firing_consideration_chance:
                     self.add_memory(f"Considering the performance of {current_holder.name}, the current {position_job_title}.")
-                    # Add more sophisticated firing criteria later. For now, just a small random chance.
-                    if random.random() < 0.25: # 25% of that 2% chance leads to firing
-                        self.add_memory(f"Decided to relieve {current_holder.name} of their duties as {position_job_title}.")
+
+                    actual_firing_chance = 0.25 # Base 25% chance if considered
+                    if "Ruthless" in self.traits: actual_firing_chance = 0.5
+                    if "Forgiving" in self.traits and "Ruthless" not in self.traits: actual_firing_chance = 0.1
+
+                    # Future: Add more sophisticated firing criteria based on performance metrics
+                    # For now, trait-modified random chance.
+                    if random.random() < actual_firing_chance:
+                        self.add_memory(f"Decided to relieve {current_holder.name} of their duties as {position_job_title} due to perceived unsatisfactory performance.")
                         current_holder.add_memory(f"I have been fired from my position as {position_job_title} by Mayor {self.name}.")
                         current_holder.job = "Unemployed"
                         current_holder.appointed_by = None
@@ -1269,6 +1291,35 @@ class Character:
 
         # Goal remains "Patrol Area". Deputies would continuously patrol.
         # Could add logic to return to a "Guardhouse" or report to Sheriff periodically.
+        return
+
+    def _execute_give_speech(self, world: 'World'):
+        if self.job != "Mayor":
+            self.current_goal = self.job_default_goal() or "Idle"
+            return
+
+        speech_topic = "the general state of the settlement and future prospects"
+        # Basic LLM integration placeholder
+        generated_speech_snippet = ""
+        if config.USE_LLM:
+            # Simple prompt, can be greatly expanded
+            prompt = (f"You are {self.name}, the Mayor of a small, developing settlement. "
+                      f"Your personality is {self.personality} and you have traits: {', '.join(self.traits)}. "
+                      f"Briefly generate a snippet of a speech you are giving to your populace about {speech_topic}. "
+                      f"Keep it under 50 words.")
+            generated_speech_snippet = generate_dialogue(prompt, self.name) # Assuming generate_dialogue can be used for this
+
+        if generated_speech_snippet:
+            self.add_memory(f"Gave a speech: \"{generated_speech_snippet}\"")
+            world.add_event_log_message(f"Mayor {self.name} addresses the populace: \"{generated_speech_snippet}\"")
+        else:
+            self.add_memory(f"Practiced a speech about {speech_topic}.")
+            world.add_event_log_message(f"Mayor {self.name} clears their throat, preparing a speech about {speech_topic}.")
+
+        # Future: This action could affect world morale, NPC opinions of the Mayor, etc.
+        # For now, it's just a logged action.
+
+        self.current_goal = self.job_default_goal() # Return to overseeing or default state
         return
 
     def _execute_wander(self, world: 'World'):
@@ -1370,6 +1421,9 @@ class Character:
             return
         elif self.current_goal == "Patrol Area": # Added for Deputy
             self._execute_patrol_area(world)
+            return
+        elif self.current_goal == "Give Speech": # Added for Mayor
+            self._execute_give_speech(world)
             return
 
 

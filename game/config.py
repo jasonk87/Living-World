@@ -21,3 +21,6 @@ MAYOR_RESOURCE_HIGH_THRESHOLD = 150 # Example: Mayor notes abundance if key reso
 
 # Medical System Configs (Initial Placeholders)
 MEDICAL_SUPPLY_LOW_THRESHOLD = 5 # Example: CMO concerned if Herbs/Bandages drop below this
+
+# Governance Configs
+ELECTION_CYCLE_DAYS = 30 # How often mayoral elections are held
