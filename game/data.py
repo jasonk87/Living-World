@@ -8,7 +8,8 @@ BLUEPRINTS = {
         "craft_time_per_unit": 5,
         "size": (1, 1),
         "map_char": "c",
-        "functionality": {"comfort_bonus": 5, "provides_seat": True}
+        "functionality": {"comfort_bonus": 5, "provides_seat": True},
+        "requires_building_tags": ["indoor"] # Chairs are typically indoor
     },
     "Stone Axe": {
         "required_resources": {"Stone": 2, "Wood": 1}, # Cost to make a Stone Axe
@@ -36,7 +37,8 @@ BLUEPRINTS = {
         "craft_time_per_unit": 20,
         "size": (1, 2), # Typically 1 tile wide, 2 tiles long
         "map_char": "b",
-        "functionality": {"provides_rest_quality": 1.5, "provides_comfort": 10, "is_bed": True}
+        "functionality": {"provides_rest_quality": 1.5, "provides_comfort": 10, "is_bed": True},
+        "requires_building_tags": ["indoor", "residential"] # Beds need to be in an indoor, residential space
     },
     "Iron Pickaxe": { # Example of a more advanced item
         "required_resources": {"Iron Ingot": 3, "Wood": 1}, # Assuming "Iron Ingot" is a processed resource
@@ -116,20 +118,20 @@ STRUCTURE_BLUEPRINTS = {
         "size": (2, 2), # width, height
         "required_resources": {"Wood": 30},
         "build_time": 50, # Amount of "work"
-        "functionality": {"provides_shelter": 1}, # Can shelter 1 person
-        "required_skill": {"Construction": 1}, # Skill and level needed
-        "map_char_initial": "h.", # Under construction
-        "map_char_complete": "H"   # Completed
+        "functionality": {"provides_shelter": 1, "tags": ["indoor", "residential", "housing"]},
+        "required_skill": {"Construction": 1},
+        "map_char_initial": "h.",
+        "map_char_complete": "H"
     },
     "small_workshop": {
         "display_name": "Small Workshop",
         "size": (3, 2), # width, height
         "required_resources": {"Wood": 50, "Stone": 20},
         "build_time": 100,
-        "functionality": {"allows_crafting_category": ["Basic Tools", "Simple Furniture"]}, # Categories of items craftable here
+        "functionality": {"allows_crafting_category": ["Basic Tools", "Simple Furniture"], "tags": ["indoor", "workshop", "crafting_general"]},
         "required_skill": {"Construction": 3},
-        "map_char_initial": "w.", # Under construction
-        "map_char_complete": "W"   # Completed
+        "map_char_initial": "w.",
+        "map_char_complete": "W"
     },
     "simple_bed": {
         "display_name": "Simple Bed",

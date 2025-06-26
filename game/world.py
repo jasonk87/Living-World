@@ -207,11 +207,15 @@ class World:
             self.furniture.append(furniture_item)
             # print(f"Added furniture: {furniture_item.display_name} at ({furniture_item.x},{furniture_item.y})")
 
-    def can_place_furniture(self, furniture_item_name: str, x: int, y: int, size: Tuple[int,int]) -> bool:
+    def can_place_furniture(self, furniture_item_name: str, x: int, y: int, size: Tuple[int,int], furniture_blueprint: Dict[str, Any]) -> bool:
         """Checks if a piece of furniture can be placed at the given location."""
-        from .data import BLUEPRINTS # Local import to access blueprint for item details if needed, though size is passed
+        # furniture_blueprint is passed in directly to avoid repeated lookups
 
-        # Check bounds and obstructions for all tiles the furniture would occupy
+        required_tags = furniture_blueprint.get("requires_building_tags", [])
+        first_tile_building: Optional[Building] = None
+        all_tiles_in_same_building = True
+
+        # Check bounds, obstructions, and building requirements for all tiles the furniture would occupy
         for r_offset in range(size[1]):  # height
             for c_offset in range(size[0]):  # width
                 check_x, check_y = x + c_offset, y + r_offset
@@ -238,8 +242,33 @@ class World:
                     # print(f"Placement check: Unsuitable terrain '{base_tile}' for {furniture_item_name} at ({check_x},{check_y})")
                     return False
 
+                # Building checks for furniture requiring specific building tags
+                if required_tags:
+                    current_tile_building = self.get_building_at(check_x, check_y)
+                    if r_offset == 0 and c_offset == 0: # First tile
+                        first_tile_building = current_tile_building
+                        if not first_tile_building: # Must be in a building if tags are required
+                            # print(f"Placement check: {furniture_item_name} requires building, but not placed in one at ({check_x},{check_y}).")
+                            return False
+                    elif current_tile_building != first_tile_building: # All parts must be in the SAME building
+                        all_tiles_in_same_building = False
+                        # print(f"Placement check: {furniture_item_name} spans multiple buildings or is partially outside.")
+                        break
+            if not all_tiles_in_same_building:
+                return False
+
+        # After checking all tiles, if tags are required, verify building has them
+        if required_tags and first_tile_building: # We know it's in a building and all parts in same building
+            building_tags = first_tile_building.functionality.get("tags", [])
+            for req_tag in required_tags:
+                if req_tag not in building_tags:
+                    # print(f"Placement check: Building '{first_tile_building.display_name}' lacks required tag '{req_tag}' for {furniture_item_name}.")
+                    return False
+        elif required_tags and not first_tile_building: # Should have been caught earlier, but double check
+            # print(f"Placement check: {furniture_item_name} requires building tags but not placed in any building.")
+            return False
+
         # TODO: Add more rules:
-        # - Must be placed inside a specific building type (e.g. bed in a "House" building)
         # - Cannot block doorways or critical paths (more complex pathfinding check)
 
         return True

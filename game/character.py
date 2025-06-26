@@ -1669,22 +1669,14 @@ class Character:
             self.add_memory(f"Cannot place {item_name_to_place}: not a valid furniture blueprint. WO: {work_order_id}")
             order.status = "Failed"; order.denial_reason = f"Invalid furniture blueprint for {item_name_to_place}"
             self.current_goal = self.job_default_goal() or "Idle"
+            # Reset active work order ID from character if it was this one
+            if self.active_work_order_id == work_order_id: self.active_work_order_id = None
             return
 
-        # For now, using a simplified can_place check. Next step will enhance world.can_place_furniture
-        can_place = True
         furniture_size = furniture_bp.get("size", (1,1))
-        for r_offset in range(furniture_size[1]):
-            for c_offset in range(furniture_size[0]):
-                check_x, check_y = target_location[0] + c_offset, target_location[1] + r_offset
-                if world.get_building_at(check_x, check_y) or world.get_furniture_at(check_x, check_y):
-                    can_place = False; break
-            if not can_place: break
 
-        # A more robust check using a dedicated world method would be:
-        # if not world.can_place_furniture(item_name_to_place, target_location[0], target_location[1], furniture_bp.get("size",(1,1))):
-
-        if can_place:
+        # Use the enhanced world method for placement validation
+        if world.can_place_furniture(item_name_to_place, target_location[0], target_location[1], furniture_size, furniture_bp):
             self.inventory[item_name_to_place] -= 1
             if self.inventory[item_name_to_place] <= 0:
                 del self.inventory[item_name_to_place]
