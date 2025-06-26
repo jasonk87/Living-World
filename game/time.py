@@ -4,10 +4,8 @@ class Time:
         self.current_day = 1
         self.ticks_per_day = ticks_per_day
         self.current_tick = 0
-        self.current_total_ticks = 0 # Initialize total ticks
 
     def tick(self) -> bool:
-        self.current_total_ticks += 1 # Increment total ticks
         self.current_tick += 1
         new_day_started = False
         if self.current_tick >= self.ticks_per_day:

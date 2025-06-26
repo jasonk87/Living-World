@@ -10,3 +10,7 @@ LLM_HAS_THINKING_TAGS = False # Set to True if your model uses <thinking>...</th
 STALE_THRESHOLD_DAYS = 2 # Days after which ledger data is considered stale for manager decisions
 MANAGEMENT_REVIEW_INTERVAL_DAYS = 5 # How often managers review subordinates
 FIRING_WARNING_THRESHOLD = 3 # Number of warnings before firing is likely
+
+# Skill System
+BASE_EXP_TO_NEXT_LEVEL = 50.0
+EXP_LEVEL_SCALING_FACTOR = 1.5
