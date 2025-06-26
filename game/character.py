@@ -62,6 +62,7 @@ class Character:
         self.sickness_severity: int = 0 # 0: healthy, 1-3: mild, 4-6: moderate, 7-9: severe, 10: critical/dying
         self.is_injured: bool = False
         self.injury_severity: int = 0 # Similar scale to sickness
+        self.appointed_by: Optional[str] = None # Tracks who appointed this character to their current key role
 
         # Attributes for build orders (re-adding them here as they were missed)
         self.active_build_order_id: Optional[str] = None
@@ -1099,6 +1100,121 @@ class Character:
         # Specific events or critical thresholds might trigger a change in their goal or actions later.
         # For this initial implementation, the Mayor doesn't change their own goal here.
         # They also do not move unless a future sub-task of overseeing requires it (e.g. "Inspect Project X")
+
+        # Periodically review appointments
+        if random.random() < 0.1: # 10% chance each time Mayor oversees settlement
+            self._execute_manage_appointments(world)
+
+        # Mayoral Project Initiation
+        # Simplified: 5% chance each time the Mayor oversees settlement to initiate a project
+        if random.random() < 0.05:
+            # Determine a project. For now, let's assume it's always to build a 'wooden_hut'.
+            # Future: Could be based on actual settlement needs (e.g., housing shortage).
+            project_structure_type = "wooden_hut"
+            structure_bp = STRUCTURE_BLUEPRINTS.get(project_structure_type)
+
+            if structure_bp and world.game_time:
+                # Find a suitable location - very simplified: find first available 2x2 grass area
+                # This needs a much more robust placement system in the future.
+                build_location: Optional[Tuple[int,int]] = None
+                for r in range(world.grid_size[0] - structure_bp["size"][1] + 1):
+                    for c in range(world.grid_size[1] - structure_bp["size"][0] + 1):
+                        can_place = True
+                        for dr in range(structure_bp["size"][1]):
+                            for dc in range(structure_bp["size"][0]):
+                                if world.get_tile(c + dc, r + dr) != "Grass" or world.get_building_at(c + dc, r + dr):
+                                    can_place = False; break
+                            if not can_place: break
+                        if can_place:
+                            build_location = (c, r) # Note: blueprint size is (width, height), location is (x,y) or (col,row)
+                            break
+                    if build_location: break
+
+                if build_location:
+                    project_name = f"Mayoral Project: Construct {structure_bp['display_name']}"
+                    self.add_memory(f"Decreeing new project: {project_name} at {build_location}.")
+
+                    order_details = {
+                        "structure_type": project_structure_type,
+                        "location": build_location,
+                        "required_resources": structure_bp["required_resources"].copy(),
+                        "initiated_by_mayor": True # Flag to differentiate from other build orders if needed
+                    }
+                    # Mayor gives high priority to their projects.
+                    new_build_order = WorkOrder(order_type="BuildStructure", details=order_details,
+                                                priority=3, creation_day=world.game_time.current_day)
+
+                    world.add_work_order(new_build_order)
+                    self.add_memory(f"Issued Work Order {new_build_order.order_id} for {project_name}. Expecting Managers to handle assignment.")
+                else:
+                    self.add_memory(f"Considered initiating a {project_structure_type} project, but could not find a suitable location.")
+            elif not structure_bp:
+                 self.add_memory(f"Wanted to initiate a {project_structure_type} project, but blueprint is missing.")
+
+
+        return
+
+    def _execute_manage_appointments(self, world: 'World'):
+        if self.job != "Mayor": # Should only be called by Mayor
+            return
+
+        self.add_memory(f"Mayor {self.name} is reviewing key settlement appointments.")
+        key_positions = ["Sheriff", "Chief Medical Officer", "Manager"] # Define key roles Mayor manages
+
+        # Check for vacant positions and try to hire
+        for position_job_title in key_positions:
+            current_holder: Optional['Character'] = None
+            for char in world.characters:
+                if char.job == position_job_title:
+                    current_holder = char
+                    break
+
+            if not current_holder:
+                self.add_memory(f"Position of {position_job_title} is vacant. Seeking candidate.")
+                # Simplified hiring: find first available character without a critical job
+                candidate: Optional['Character'] = None
+                for char_to_check in world.characters:
+                    if char_to_check.job not in key_positions and char_to_check.job != "Mayor" and char_to_check.rank != "Noble Lord": # Avoid appointing other nobles or already key staff
+                        # Basic skill check (can be expanded)
+                        required_skill_for_job = {"Sheriff": "Security", "Chief Medical Officer": "Medicine", "Manager": "Leadership"}.get(position_job_title)
+                        if required_skill_for_job and char_to_check.skills.get(required_skill_for_job, {}).get("level", 0) > 0:
+                             candidate = char_to_check
+                             break
+                        elif not required_skill_for_job: # If no specific skill, any non-key role is fine
+                             candidate = char_to_check
+                             break
+
+                if candidate:
+                    self.add_memory(f"Appointing {candidate.name} as the new {position_job_title}.")
+                    # Unassign from old role if necessary (more complex logic for supervisor, etc. later)
+                    if candidate.supervisor_name:
+                        supervisor = world.get_character_by_name(candidate.supervisor_name)
+                        if supervisor: supervisor.remove_subordinate(candidate.name)
+
+                    candidate.job = position_job_title
+                    candidate.supervisor_name = self.name # Mayor becomes their supervisor
+                    candidate.appointed_by = self.name
+                    # Potentially adjust rank, e.g., to "Skilled Worker" or similar if not already appropriate
+                    if candidate.rank == "Worker": candidate.rank = "Skilled Worker"
+                    self.add_subordinate(candidate.name)
+                    candidate.add_memory(f"I have been appointed as {position_job_title} by Mayor {self.name}.")
+                else:
+                    self.add_memory(f"Could not find a suitable candidate for {position_job_title} at this time.")
+            else:
+                # Position is filled, consider firing (very simplified for now)
+                if random.random() < 0.02: # 2% chance to consider firing an existing appointee
+                    self.add_memory(f"Considering the performance of {current_holder.name}, the current {position_job_title}.")
+                    # Add more sophisticated firing criteria later. For now, just a small random chance.
+                    if random.random() < 0.25: # 25% of that 2% chance leads to firing
+                        self.add_memory(f"Decided to relieve {current_holder.name} of their duties as {position_job_title}.")
+                        current_holder.add_memory(f"I have been fired from my position as {position_job_title} by Mayor {self.name}.")
+                        current_holder.job = "Unemployed"
+                        current_holder.appointed_by = None
+                        if self.name in current_holder.supervisor_name : current_holder.supervisor_name = None # check if mayor is supervisor
+                        if current_holder.name in self.subordinates_names: self.remove_subordinate(current_holder.name)
+                        # Note: This doesn't automatically reassign their previous subordinates if they were a manager.
+                    else:
+                        self.add_memory(f"{current_holder.name}'s performance as {position_job_title} is deemed acceptable for now.")
         return
 
     def _execute_maintain_peace(self, world: 'World'): # For Sheriff
