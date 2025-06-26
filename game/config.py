@@ -18,3 +18,6 @@ EXP_LEVEL_SCALING_FACTOR = 1.5
 # Mayor Specific Configs (Initial placeholders)
 MAYOR_RESOURCE_LOW_THRESHOLD = 20  # Example: Mayor concerned if key resource drops below this
 MAYOR_RESOURCE_HIGH_THRESHOLD = 150 # Example: Mayor notes abundance if key resource is above this
+
+# Medical System Configs (Initial Placeholders)
+MEDICAL_SUPPLY_LOW_THRESHOLD = 5 # Example: CMO concerned if Herbs/Bandages drop below this

@@ -40,6 +40,18 @@ BLUEPRINTS = {
         "max_durability": 150,
         "description": "A durable pickaxe for efficient mining.",
         "craft_time_per_unit": 15
+    },
+    "Herbs": {
+        "type": "Resource", # Gatherable raw material
+        "description": "Medicinal herbs with healing properties."
+        # No crafting time or required resources as it's gathered.
+    },
+    "Bandages": {
+        "required_resources": {"Herbs": 2},
+        "job_skill_needed": "Medicine", # New skill for crafting/using medical items
+        "type": "MedicalSupply", # A more specific type for medical items
+        "description": "Simple bandages for treating injuries.",
+        "craft_time_per_unit": 3
     }
     # Add other items as needed, e.g., "Wooden Shield", "Stone Hammer"
 }
@@ -85,6 +97,35 @@ JOB_TASK_DEFINITIONS = {
         "resource_produced": None,  # Mayor's actions are indirect
         "base_yield": 0,            # No direct resource yield from this task
         "base_time_per_yield": 0    # Not applicable as it's not a yield-based task
+    },
+    "Gather Herbs": {
+        "required_tool_type": None, # Could require a "Gathering Pouch" or similar later
+        "skill_used": "Herbalism",   # New skill for finding and gathering herbs
+        "resource_produced": "Herbs",
+        "base_yield": 1,
+        "base_time_per_yield": 4    # Ticks to gather one unit of herbs
+    },
+    "Treat Patient": {
+        "required_tool_type": None, # Could require "Medical Kit" later
+        "skill_used": "Medicine",    # Skill for diagnosis and treatment
+        "resource_produced": None,   # Action modifies patient's state, doesn't produce item
+        "base_yield": 1,             # Represents 1 unit of "treatment progress/action"
+        "base_time_per_yield": 5,    # Ticks for one treatment action
+        # "consumed_resources": {"Bandages": 1} # Or handled by execution logic
+    },
+    "Oversee Medical Operations": { # For the Chief Medical Officer (CMO)
+        "required_tool_type": None,
+        "skill_used": "Medicine", # High-level medical planning and oversight
+        "resource_produced": None,
+        "base_yield": 0,
+        "base_time_per_yield": 0 # Continuous oversight task
+    },
+    "Provide Medical Care": { # For Medics
+        "required_tool_type": None, # Specific actions like "Treat Patient" might consume items
+        "skill_used": "Medicine",   # General medical duties
+        "resource_produced": None,
+        "base_yield": 0,
+        "base_time_per_yield": 0 # Represents general readiness/duty
     },
 }
 

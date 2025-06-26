@@ -57,6 +57,12 @@ class Character:
         self.current_task_def_name: Optional[str] = None
         self._mc_item_check_idx: int = 0
 
+        # Health States
+        self.is_sick: bool = False
+        self.sickness_severity: int = 0 # 0: healthy, 1-3: mild, 4-6: moderate, 7-9: severe, 10: critical/dying
+        self.is_injured: bool = False
+        self.injury_severity: int = 0 # Similar scale to sickness
+
         # Attributes for build orders (re-adding them here as they were missed)
         self.active_build_order_id: Optional[str] = None
         self.materials_gathered_for_build: bool = False
@@ -451,7 +457,9 @@ class Character:
         if self.job == "Manager": return "Manage Subordinates" # Changed from "Manage Work Orders"
         if self.job == "Bookkeeper": return "Maintain Ledger"
         if self.job == "Expedition Leader": return "Oversee Expedition"
-        if self.job == "Mayor": return "Oversee Settlement" # Added Mayor's default goal
+        if self.job == "Mayor": return "Oversee Settlement"
+        if self.job == "Chief Medical Officer": return "Oversee Medical Operations"
+        if self.job == "Medic": return "Provide Medical Care"
         # Add a check for rank if we want Nobles who aren't "Manager" to also manage
         if self.rank in ["Noble Lord", "Baron"] and not self.subordinates_names: # Example: A noble without a specific job might just idle or have other duties
             return "Oversee Domain" # Placeholder for other noble tasks
@@ -882,6 +890,174 @@ class Character:
         if not self._execute_generic_task(world, "Mine Stone"): return
         inv_stone = self.inventory.get("Stone",0); job_quota = self.needs.get("Stone",5) if self.job == "Stonemason" else float('inf')
         if self.get_inventory_load()>=self.max_inventory_items or inv_stone >= job_quota: self.current_goal = "Perform Stonemason Duties"
+
+    def _execute_gather_herbs(self, world: 'World'):
+        # For now, assume herbs can be found in "Forest" tiles, similar to wood.
+        # This would need adjustment if a specific "Meadow" tile or herb resource node is implemented.
+        # The find_task_location would also need to be updated to support "Herbs" if it's tied to a specific tile.
+        # For this initial pass, we'll directly use "Gather Herbs" task if a location can be found.
+
+        # Temporary: find_task_location doesn't support "Herbs" yet.
+        # We'll assume a generic "Forest" location for gathering if the task is "Gather Herbs".
+        # This part needs refinement based on how herb locations are defined in the world.
+        task_loc = self.find_task_location("Gather Herbs", world) # This will currently fail as "Gather Herbs" doesn't map to a known tile in find_task_location
+
+        # Fallback: If find_task_location doesn't work for herbs yet, try finding any Forest tile.
+        # This is a placeholder until find_task_location is updated or herb sources are better defined.
+        if not task_loc:
+            self.add_memory("No specific herb location found, trying generic Forest.")
+            # Simplified search for any Forest tile for now
+            found_forest_tile = None
+            for r_idx in range(world.grid_size[0]):
+                for c_idx in range(world.grid_size[1]):
+                    if world.get_tile(r_idx, c_idx) == "Forest":
+                        # Check if this forest tile actually has herbs - future enhancement
+                        # For now, any forest tile is a potential spot.
+                        found_forest_tile = (r_idx, c_idx)
+                        break
+                if found_forest_tile:
+                    break
+            task_loc = found_forest_tile
+
+        if not task_loc:
+            self.add_memory(f"Cannot find a location to gather herbs (e.g., Forest).")
+            self.current_goal = "Idle" # Or back to a job default goal
+            return
+
+        if (self.x, self.y) != task_loc:
+            self.move_towards(task_loc[0], task_loc[1], world)
+            return
+
+        # Execute the generic task for gathering
+        if not self._execute_generic_task(world, "Gather Herbs"):
+            # This could mean a tool is needed (if defined for "Gather Herbs" later)
+            # or some other precondition failed.
+            return
+
+        # Check if inventory is full or if a personal quota is met (if any)
+        # For now, just gather until inventory is full.
+        if self.get_inventory_load() >= self.max_inventory_items:
+            self.add_memory("Inventory full of herbs.")
+            # Decide what to do next, e.g., haul herbs or return to duties.
+            # For a Medic/CMO, this might be returning to the clinic or seeking patients.
+            # For now, set to Idle, which will trigger job_default_goal.
+            self.current_goal = self.job_default_goal() or "Idle"
+            # If a specific "Haul Herbs" goal exists, it could be set here.
+
+    def _execute_oversee_medical_operations(self, world: 'World'):
+        if self.job != "Chief Medical Officer":
+            self.current_goal = self.job_default_goal() or "Idle"
+            return
+
+        self.add_memory(f"CMO {self.name} is overseeing medical operations.")
+
+        # Scan for patients
+        patient_found = False
+        for char in world.characters:
+            if char.is_sick or char.is_injured:
+                patient_found = True
+                self.add_memory(f"Patient detected: {char.name} (Sick: {char.is_sick}, Injured: {char.is_injured}, S_Sev: {char.sickness_severity}, I_Sev: {char.injury_severity})")
+                # Future: Assign medic, prioritize, etc.
+        if not patient_found:
+            self.add_memory("No patients currently require attention.")
+
+        # Check medical supplies
+        medical_supplies_to_check = ["Herbs", "Bandages"]
+        if world.ledger:
+            for supply_name in medical_supplies_to_check:
+                total_count = world.ledger.get_total_resource_count(supply_name)
+                self.add_memory(f"Supply check: Current {supply_name} stock is {total_count}.")
+                if total_count < getattr(config, "MEDICAL_SUPPLY_LOW_THRESHOLD", 5): # Using getattr for safety
+                    self.add_memory(f"CMO {self.name} notes: {supply_name} levels are low ({total_count}). Should request more.")
+                    # Future: Generate work order for crafting/gathering supplies.
+        else:
+            self.add_memory(f"CMO {self.name} cannot check medical supplies: Ledger not available.")
+
+        # CMOs might also manage medic assignments, rest schedules for medical staff, etc.
+        # For now, primarily observation and logging.
+        if random.random() < 0.1:
+             self.add_memory(f"CMO {self.name} reviews medical protocols and staff readiness.")
+        return
+
+    def _execute_provide_medical_care(self, world: 'World'):
+        if self.job != "Medic":
+            self.current_goal = self.job_default_goal() or "Idle"
+            return
+
+        # Find a patient - simplistic: first sick/injured person found
+        # Future: Could be assigned by CMO, or check a list of designated patients.
+        target_patient: Optional['Character'] = None
+        for char in world.characters:
+            if char.name != self.name and (char.is_sick or char.is_injured):
+                # Prioritize more severe cases if logic allows, or just take first one
+                target_patient = char
+                break
+
+        if not target_patient:
+            self.add_memory("No patients currently require medical care. Standing by.")
+            # Medic might return to a clinic, or just idle here.
+            self.current_goal = "Idle" # Reverts to job default next tick, which might be "Provide Medical Care" again.
+            return
+
+        self.add_memory(f"Medic {self.name} assigned to patient {target_patient.name} at ({target_patient.x},{target_patient.y}).")
+
+        patient_loc = (target_patient.x, target_patient.y)
+        if (self.x, self.y) != patient_loc:
+            self.move_towards(patient_loc[0], patient_loc[1], world)
+            self.add_memory(f"Moving towards patient {target_patient.name}.")
+            return
+
+        # At the patient, perform treatment (conceptual for now)
+        self.add_memory(f"Medic {self.name} is treating {target_patient.name}.")
+
+        # Attempt to use a bandage first, then herbs
+        item_used_for_treatment = None
+        if self.inventory.get("Bandages", 0) > 0:
+            self.inventory["Bandages"] -= 1
+            if self.inventory["Bandages"] <= 0:
+                del self.inventory["Bandages"]
+            item_used_for_treatment = "Bandages"
+            self.add_memory(f"Used 1 Bandage on {target_patient.name}.")
+        elif self.inventory.get("Herbs", 0) > 0:
+            self.inventory["Herbs"] -= 1
+            if self.inventory["Herbs"] <= 0:
+                del self.inventory["Herbs"]
+            item_used_for_treatment = "Herbs"
+            self.add_memory(f"Used 1 Herb on {target_patient.name}.")
+        else:
+            self.add_memory(f"No medical supplies (Bandages/Herbs) to treat {target_patient.name}. Need to restock.")
+            # Medic might change goal to "Gather Herbs" or request supplies.
+            # For now, they are stuck this tick if no supplies.
+            return
+
+        # Apply treatment effect (simplified)
+        treatment_potency = 1 # Base potency
+        if item_used_for_treatment == "Bandages": treatment_potency = 2 # Bandages are better
+
+        if target_patient.is_injured:
+            target_patient.injury_severity -= treatment_potency
+            self.add_memory(f"Treated {target_patient.name}'s injuries. Severity now {target_patient.injury_severity}.")
+            if target_patient.injury_severity <= 0:
+                target_patient.is_injured = False
+                target_patient.injury_severity = 0
+                self.add_memory(f"{target_patient.name} has recovered from injuries.")
+
+        if target_patient.is_sick: # Can treat sickness if not injured, or if injury is now handled
+            target_patient.sickness_severity -= treatment_potency
+            self.add_memory(f"Treated {target_patient.name}'s sickness. Severity now {target_patient.sickness_severity}.")
+            if target_patient.sickness_severity <= 0:
+                target_patient.is_sick = False
+                target_patient.sickness_severity = 0
+                self.add_memory(f"{target_patient.name} has recovered from sickness.")
+
+        self._grant_skill_experience("Medicine", 0.5 * treatment_potency, world) # Grant XP for treatment
+
+        # After treatment, Medic might look for another patient or return to standby.
+        # For now, will re-evaluate from top next tick.
+        self.current_goal = self.job_default_goal() or "Idle" # Re-evaluate next patient or task
+        return
+
+
     def _execute_oversee_expedition(self, world: 'World'):
          if self.job != "Expedition Leader": self.current_goal = self.job_default_goal(); return
          if random.random() < 0.1: self.add_memory("Surveyed expedition progress.")
@@ -1005,8 +1181,17 @@ class Character:
 
         # Other "Perform..." duties would go here if this was a full decide_action
         # elif self.current_goal == "Perform Woodcutter Duties": self._execute_perform_woodcutter_duties(world); return
-        elif self.current_goal == "Oversee Settlement": # Added call for Mayor
+        elif self.current_goal == "Oversee Settlement":
             self._execute_oversee_settlement(world)
+            return
+        elif self.current_goal == "Oversee Medical Operations": # Added for CMO
+            self._execute_oversee_medical_operations(world)
+            return
+        elif self.current_goal == "Provide Medical Care": # Added for Medic
+            self._execute_provide_medical_care(world)
+            return
+        elif self.current_goal == "Gather Herbs": # Added for herb gathering
+            self._execute_gather_herbs(world)
             return
 
 
