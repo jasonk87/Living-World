@@ -451,6 +451,7 @@ class Character:
         if self.job == "Manager": return "Manage Subordinates" # Changed from "Manage Work Orders"
         if self.job == "Bookkeeper": return "Maintain Ledger"
         if self.job == "Expedition Leader": return "Oversee Expedition"
+        if self.job == "Mayor": return "Oversee Settlement" # Added Mayor's default goal
         # Add a check for rank if we want Nobles who aren't "Manager" to also manage
         if self.rank in ["Noble Lord", "Baron"] and not self.subordinates_names: # Example: A noble without a specific job might just idle or have other duties
             return "Oversee Domain" # Placeholder for other noble tasks
@@ -885,6 +886,43 @@ class Character:
          if self.job != "Expedition Leader": self.current_goal = self.job_default_goal(); return
          if random.random() < 0.1: self.add_memory("Surveyed expedition progress.")
          self.current_goal = "Idle"
+
+    def _execute_oversee_settlement(self, world: 'World'):
+        if self.job != "Mayor":
+            self.current_goal = self.job_default_goal() or "Idle"
+            return
+
+        self.add_memory(f"{self.name} the Mayor is assessing the overall resource status of the settlement.")
+
+        key_resources = ["Wood", "Stone"] # Initial key resources to monitor. Add "Food" if it becomes a general resource.
+        # Future: These could be dynamically determined or configured.
+
+        if world.ledger:
+            for resource_name in key_resources:
+                total_count = world.ledger.get_total_resource_count(resource_name)
+                self.add_memory(f"Ledger check: Current {resource_name} stock is {total_count}.")
+
+                # Example thresholds for Mayor's concern or attention
+                # These are arbitrary and can be refined or made dynamic.
+                # For now, just logging. Future actions could be to issue directives or priorities.
+                if total_count < config.MAYOR_RESOURCE_LOW_THRESHOLD: # Assuming a config value like 20
+                    self.add_memory(f"Mayor {self.name} notes: {resource_name} levels are low ({total_count}). Action may be needed.")
+                elif total_count > config.MAYOR_RESOURCE_HIGH_THRESHOLD: # Assuming a config value like 200
+                    self.add_memory(f"Mayor {self.name} notes: {resource_name} levels are abundant ({total_count}).")
+        else:
+            self.add_memory(f"Mayor {self.name} cannot assess resource status: Ledger not available.")
+
+        # Simulate Mayor's strategic thinking or planning
+        if random.random() < 0.15: # Chance to log a more general thought
+            self.add_memory(f"Mayor {self.name} spends time contemplating the settlement's long-term strategy and development.")
+
+        # The Mayor's role is ongoing oversight. They don't typically "finish" this goal quickly.
+        # They might stay in "Oversee Settlement" for many ticks, continuously monitoring.
+        # Specific events or critical thresholds might trigger a change in their goal or actions later.
+        # For this initial implementation, the Mayor doesn't change their own goal here.
+        # They also do not move unless a future sub-task of overseeing requires it (e.g. "Inspect Project X")
+        return
+
     def _execute_wander(self, world: 'World'):
         moves=[];
         for dx,dy in[(0,1),(0,-1),(1,0),(-1,0)]:
@@ -967,6 +1005,9 @@ class Character:
 
         # Other "Perform..." duties would go here if this was a full decide_action
         # elif self.current_goal == "Perform Woodcutter Duties": self._execute_perform_woodcutter_duties(world); return
+        elif self.current_goal == "Oversee Settlement": # Added call for Mayor
+            self._execute_oversee_settlement(world)
+            return
 
 
         # If truly nothing else to do

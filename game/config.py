@@ -14,3 +14,7 @@ FIRING_WARNING_THRESHOLD = 3 # Number of warnings before firing is likely
 # Skill System
 BASE_EXP_TO_NEXT_LEVEL = 50.0
 EXP_LEVEL_SCALING_FACTOR = 1.5
+
+# Mayor Specific Configs (Initial placeholders)
+MAYOR_RESOURCE_LOW_THRESHOLD = 20  # Example: Mayor concerned if key resource drops below this
+MAYOR_RESOURCE_HIGH_THRESHOLD = 150 # Example: Mayor notes abundance if key resource is above this

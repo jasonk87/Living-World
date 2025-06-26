@@ -79,6 +79,13 @@ JOB_TASK_DEFINITIONS = {
     # "Till Soil": {"required_tool_type": "Hoe", "skill_used": "Farming", "resource_produced": "Tilled Plot"},
     # "Construct Wall Segment": {"required_tool_type": "Hammer", "skill_used": "Construction", "resource_produced": "Wall Section"},
     # "Hunt Small Game": {"required_tool_type": "Spear", "skill_used": "Hunting", "resource_produced": "Raw Meat"}
+    "Oversee Settlement": {
+        "required_tool_type": None,
+        "skill_used": "Leadership", # Skill related to governance and decision-making
+        "resource_produced": None,  # Mayor's actions are indirect
+        "base_yield": 0,            # No direct resource yield from this task
+        "base_time_per_yield": 0    # Not applicable as it's not a yield-based task
+    },
 }
 
 # It might also be useful to define tool types if they have specific properties beyond what's in blueprints
