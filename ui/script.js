@@ -150,29 +150,32 @@ document.addEventListener('DOMContentLoaded', () => {
                 const cellIndex = char.y * gameState.grid_size[1] + char.x;
                 const cellDiv = gameMapDiv.children[cellIndex];
                 if (cellDiv) {
-                    // If cellDiv was turned into a building/stockpile cell, its content might have been set.
-                    // We need to ensure character is displayed, possibly clearing previous content or appending.
-                    // If the cell already has building/stockpile text, the charMarker will be appended.
-                    // If it's a base tile, innerHTML clearing is fine.
-                    // For building/stockpile cells, we want to keep their map_char and add character on top.
-                    let baseContent = cellDiv.textContent; // Keep existing building char if any
-                    if (cellDiv.classList.contains('building-cell') || cellDiv.classList.contains('stockpile-cell')) {
-                        cellDiv.innerHTML = ''; // Clear only if we want char to replace building char, or style char to overlay
+                    // If the cell is a base tile (not a building/stockpile), clear its text content (e.g., 'G' for Grass)
+                    // to make way for the character marker.
+                    // If it's a building/stockpile cell, its textContent (e.g. 'H') should remain,
+                    // and the absolutely positioned charMarker will appear on top.
+                    if (!cellDiv.classList.contains('building-cell') && !cellDiv.classList.contains('stockpile-cell')) {
+                        cellDiv.innerHTML = ''; // Clear only base tile character's text content
                     } else {
-                         cellDiv.innerHTML = ''; // Clear base tile character for char marker
+                        // For building/stockpile cells, we might have set textContent.
+                        // To ensure the charMarker span can be appended and positioned correctly,
+                        // we ensure any existing text content is wrapped or cleared if charMarker is sole content.
+                        // However, since charMarker is absolute, appending it should just work.
+                        // If there's an issue, we might need to wrap existing building char in a span too.
+                        // For now, let's assume direct append + absolute positioning is enough.
                     }
 
                     const charMarker = document.createElement('span');
-                    charMarker.classList.add('char-marker'); // Add class for styling
+                    charMarker.classList.add('char-marker');
                     charMarker.textContent = char.name[0];
-                    charMarker.title = `${char.name} (${char.job}) at (${char.x},${char.y})`; // More detailed tooltip
-                    // charMarker.style.fontWeight = 'bold'; // Moved to CSS
-                    charMarker.style.color = char.is_sick ? 'orange' : (char.is_injured ? 'red' : 'blue');
+                    charMarker.title = `${char.name} (${char.job}) at (${char.x},${char.y})`;
+                    charMarker.style.color = char.is_sick ? 'orange' : (char.is_injured ? 'red' : 'blue'); // Dynamic color based on health
+
                     charMarker.addEventListener('click', (e) => {
                         e.stopPropagation();
                         fetchCharacterDetails(char.name);
                     });
-                    cellDiv.appendChild(charMarker);
+                    cellDiv.appendChild(charMarker); // Append, CSS will handle overlay
                 }
             });
         }
