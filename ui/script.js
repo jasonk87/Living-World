@@ -89,20 +89,29 @@ document.addEventListener('DOMContentLoaded', () => {
             row.forEach((tile, c_idx) => {
                 const cell = document.createElement('div');
                 cell.classList.add('map-cell');
-                // Add tile-specific class, removing spaces from tile name for valid CSS class
-                const tileClassName = `tile-${tile.replace(/\s+/g, '-')}`;
+                const tileClassName = `tile-${tile.replace(/\s+/g, '-') || 'Unknown'}`;
                 cell.classList.add(tileClassName);
-                cell.textContent = tile[0];
-                cell.title = tile; // Tooltip for the base tile
+
+                // Set textContent based on proposed symbols
+                let tileSymbol = '';
+                switch (tile) {
+                    case 'Grass': tileSymbol = '.'; break;
+                    case 'Forest': tileSymbol = '♣'; break;
+                    case 'Water': tileSymbol = '≈'; break;
+                    case 'Rocks': tileSymbol = '▲'; break;
+                    case 'OutOfBounds': tileSymbol = 'X'; break;
+                    default: tileSymbol = '?'; // For unknown tiles
+                }
+                cell.textContent = tileSymbol;
+                cell.title = tile; // Tooltip shows full tile name
                 cell.dataset.x = c_idx;
                 cell.dataset.y = r_idx;
-                // Add generic click listener for empty tiles initially
                 cell.addEventListener('click', handleMapCellClick);
                 gameMapDiv.appendChild(cell);
             });
         });
 
-        // Render buildings and stockpiles (from game_state.buildings which now includes stockpiles)
+        // Render buildings and stockpiles
         if (gameState.buildings) {
             gameState.buildings.forEach(b => {
                 for (let r_offset = 0; r_offset < b.height; r_offset++) {
@@ -110,32 +119,29 @@ document.addEventListener('DOMContentLoaded', () => {
                         const buildingCellX = b.x + c_offset;
                         const buildingCellY = b.y + r_offset;
 
-                        if (buildingCellY >= gameState.grid_size[0] || buildingCellX >= gameState.grid_size[1]) continue; // Bounds check
+                        if (buildingCellY >= gameState.grid_size[0] || buildingCellX >= gameState.grid_size[1]) continue;
 
                         const cellIndex = buildingCellY * gameState.grid_size[1] + buildingCellX;
                         const cellDiv = gameMapDiv.children[cellIndex];
 
                         if (cellDiv) {
-                            cellDiv.innerHTML = ''; // Clear base tile content
+                            cellDiv.innerHTML = ''; // Clear base tile symbol
+                            // Use map_char from backend for building/stockpile symbol
                             cellDiv.textContent = b.map_char;
                             cellDiv.title = `${b.display_name} (${b.structure_type} at ${buildingCellX},${buildingCellY})`;
 
-                            // Remove all potential tile classes
-                            cellDiv.className = 'map-cell'; // Reset to base map-cell class
-
+                            cellDiv.className = 'map-cell'; // Reset to base
                             if (b.structure_type === "Stockpile") {
                                 cellDiv.classList.add('stockpile-cell');
                             } else {
                                 cellDiv.classList.add('building-cell');
-                                // Add specific building type class for more granular styling
-                                if (b.structure_type) {
+                                if (b.structure_type) { // e.g., building-wooden_hut
                                      cellDiv.classList.add(`building-${b.structure_type.replace(/\s+/g, '_')}`);
                                 }
                             }
-                            // Replace generic tile listener with specific building listener
                             cellDiv.removeEventListener('click', handleMapCellClick);
                             cellDiv.addEventListener('click', (e) => {
-                                e.stopPropagation(); // Prevent any other listeners if it's a building
+                                e.stopPropagation();
                                 fetchBuildingDetails(buildingCellX, buildingCellY);
                             });
                         }

@@ -51,29 +51,39 @@ body {
 }
 
 /* Tile-specific styling */
-.tile-Grass { background-color: #90ee90; /* LightGreen */ }
-.tile-Forest { background-color: #228B22; color: white; /* ForestGreen */ }
-.tile-Water { background-color: #add8e6; color: navy; /* LightBlue */ }
-.tile-Rocks { background-color: #a9a9a9; color: black; /* DarkGray */ }
-.tile-OutOfBounds { background-color: #333; }
+.tile-Grass { background-color: #90ee90; color: #556B2F; /* DarkOliveGreen for symbol */ font-size: 1.2em; }
+.tile-Forest { background-color: #228B22; color: #004d00; /* Darker Green for symbol */ font-size: 1.4em; }
+.tile-Water { background-color: #add8e6; color: #0000CD; /* MediumBlue for symbol */ font-size: 1.4em; }
+.tile-Rocks { background-color: #silver; color: #696969; /* DimGray for symbol */ font-size: 1.2em; }
+.tile-OutOfBounds { background-color: #333; color: #555; }
+/* Default for unknown tiles, if any */
+.tile-Unknown { background-color: #ffccff; } /* Light pink for unknown tiles */
 
 
 /* Building and Stockpile cell styling */
-.building-cell {
+.building-cell { /* Generic building, can be overridden by specific types */
     font-weight: bold;
     background-color: #f5deb3; /* Wheat - default for buildings */
+    color: #8B4513; /* SaddleBrown for symbol */
+    font-size: 1.4em; /* Make building symbols larger */
     cursor: pointer;
 }
 .stockpile-cell {
     font-weight: bold;
     background-color: #d2b48c; /* Tan - for stockpiles */
+    color: #542709; /* Darker Brown for symbol */
     cursor: pointer;
-    font-size: 1.2em; /* Make stockpile 'S' slightly larger if needed */
+    font-size: 1.4em; /* Make stockpile 'S' or symbol larger */
 }
-.building-wooden_hut { /* Example specific building type styling */
+.building-wooden_hut {
     background-color: #deb887; /* BurlyWood */
+    color: #8B4513; /* SaddleBrown for symbol */
 }
-/* Add more specific building styles here, e.g. .building-small_workshop */
+.building-small_workshop { /* Example for another building type */
+    background-color: #c0c0c0; /* Silver for workshop */
+    color: #404040;
+}
+/* Add more specific building styles here */
 
 .char-marker {
     cursor: pointer;
