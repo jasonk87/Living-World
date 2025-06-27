@@ -425,8 +425,17 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
             original_cwd = os.getcwd()
             try:
                 os.chdir(ui_dir)
-                # Remove leading '/' from self.path for SimpleHTTPRequestHandler
-                super().do_GET(path=self.path.lstrip('/'))
+                # SimpleHTTPRequestHandler uses self.path directly.
+                # Ensure self.path is relative to the new CWD (ui_dir) for the superclass method.
+                # Most browsers request '/' for index.html, or '/style.css', etc.
+                # So, self.path might be '/', '/style.css'. We need to ensure this path
+                # is correctly interpreted by the parent class after chdir.
+                # SimpleHTTPRequestHandler.translate_path will use os.getcwd() + self.path
+
+                # The path for super().do_GET() should be relative to the ui_dir.
+                # If self.path is "/style.css", it should remain so.
+                # If self.path is "/", SimpleHTTPRequestHandler typically serves "index.html".
+                super().do_GET() # Call without path argument
             except FileNotFoundError:
                 self.send_error(404, "File not found in UI directory or API endpoint not supported")
             finally:
