@@ -274,7 +274,56 @@ document.addEventListener('DOMContentLoaded', () => {
             (entity.memory || []).slice(-5).reverse().forEach(mem => {
                 detailsHtml += `<li>${mem}</li>`;
             });
-            detailsHtml += `</ul></dd>`;
+            detailsHtml += `</ul></dd></dl>`; // Close the main DL
+
+            // Social Info Section (conditionally shown if data exists)
+            detailsHtml += `<div id="character-social-info" style="display: none;">`; // Initially hidden
+            detailsHtml += `<h3>Social Info</h3>`;
+
+            detailsHtml += `<div id="char-known-chars"><h4>Known Characters:</h4><ul>`;
+            if (entity.known_characters && entity.known_characters.length > 0) {
+                entity.known_characters.forEach(charName => { detailsHtml += `<li>${charName}</li>`; });
+            } else {
+                detailsHtml += `<li>N/A</li>`;
+            }
+            detailsHtml += `</ul></div>`;
+
+            detailsHtml += `<div id="char-relationships"><h4>Relationships:</h4><ul>`;
+            if (entity.relationships && Object.keys(entity.relationships).length > 0) {
+                Object.entries(entity.relationships).forEach(([charName, score]) => {
+                    detailsHtml += `<li>${charName}: ${score}</li>`;
+                });
+            } else {
+                detailsHtml += `<li>N/A</li>`;
+            }
+            detailsHtml += `</ul></div>`;
+
+            detailsHtml += `<div id="char-dialogue-history"><h4>Recent Dialogue (last 5):</h4><ul>`;
+            if (entity.dialogue_history && entity.dialogue_history.length > 0) {
+                // Assuming dialogue_history is an array of objects/strings. Displaying simply for now.
+                entity.dialogue_history.slice(-5).forEach(dialogueEntry => {
+                    let entryText = 'Interaction';
+                    if (typeof dialogueEntry === 'string') {
+                        entryText = dialogueEntry;
+                    } else if (typeof dialogueEntry === 'object' && dialogueEntry !== null) {
+                        // Attempt to create a more descriptive summary
+                        if (dialogueEntry.type === 'greeting') {
+                            entryText = `Greeted ${dialogueEntry.target || 'someone'} (Day ${dialogueEntry.day || '?'})`;
+                            if(dialogueEntry.dialogue && dialogueEntry.dialogue.length > 0) {
+                                entryText += `: "${dialogueEntry.dialogue[0].line.substring(0,30)}..."`;
+                            }
+                        } else {
+                             entryText = JSON.stringify(dialogueEntry).substring(0, 50) + "..."; // Basic fallback
+                        }
+                    }
+                    detailsHtml += `<li>${entryText}</li>`;
+                });
+            } else {
+                detailsHtml += `<li>N/A</li>`;
+            }
+            detailsHtml += `</ul></div>`;
+            detailsHtml += `</div>`; // End of character-social-info
+
         } else if (type === 'building_detailed') {
             detailsHtml += `<dt>Name</dt><dd>${entity.display_name}</dd>`;
             detailsHtml += `<dt>Type</dt><dd>${entity.structure_type}</dd>`;
@@ -296,8 +345,16 @@ document.addEventListener('DOMContentLoaded', () => {
              detailsHtml += `<dt>Tile Type</dt><dd>${entity.tileType}</dd>`;
              detailsHtml += `<dt>Coordinates</dt><dd>(${entity.x}, ${entity.y})</dd>`;
         }
-        detailsHtml += `</dl>`;
+        // detailsHtml += `</dl>`; // DL is closed earlier if it's a character
         entityDetailsDiv.innerHTML = detailsHtml;
+
+        // After setting innerHTML, if it's a character and social data might exist, try to show the section
+        if (type === 'character_detailed' && (entity.known_characters || entity.relationships || entity.dialogue_history)) {
+            const socialInfoDiv = document.getElementById('character-social-info');
+            if (socialInfoDiv) {
+                socialInfoDiv.style.display = 'block'; // Show the social info section
+            }
+        }
     }
 
     async function fetchCharacterDetails(characterName) {

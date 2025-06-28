@@ -24,3 +24,6 @@ MEDICAL_SUPPLY_LOW_THRESHOLD = 5 # Example: CMO concerned if Herbs/Bandages drop
 
 # Governance Configs
 ELECTION_CYCLE_DAYS = 30 # How often mayoral elections are held
+
+# Social Interaction
+SOCIAL_INTERACTION_CHANCE = 0.02 # Chance per tick (if idle/wandering) to initiate a social interaction like greeting

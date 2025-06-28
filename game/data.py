@@ -155,6 +155,13 @@ JOB_TASK_DEFINITIONS = {
         "base_yield": 0,
         "base_time_per_yield": 0 # Goal is to reach a medic/clinic
     },
+    "Greet Character": {
+        "required_tool_type": None,
+        "skill_used": "Social", # Or None, or a new "Social" skill
+        "resource_produced": None,
+        "base_yield": 0,
+        "base_time_per_yield": 0 # Interaction, not yield-based
+    },
 }
 
 # It might also be useful to define tool types if they have specific properties beyond what's in blueprints

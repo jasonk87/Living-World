@@ -210,7 +210,9 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                             "goal": char.current_goal,
                             "is_sick": getattr(char, 'is_sick', False), # Add health status
                             "is_injured": getattr(char, 'is_injured', False),
-                            "inventory_load": char.get_inventory_load()
+                            "inventory_load": char.get_inventory_load(),
+                            "known_characters": getattr(char, 'known_characters', []),
+                            "dialogue_history_count": len(getattr(char, 'dialogue_history', [])) # Just count for overview
                         })
 
                 event_log_repr = game_world.event_log[-20:] if game_world else []
@@ -350,7 +352,10 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "personality": character.personality,
                     "traits": character.traits,
                     "performance_rating": getattr(character, 'performance_rating', "N/A"),
-                    "warning_count": getattr(character, 'warning_count', 0)
+                    "warning_count": getattr(character, 'warning_count', 0),
+                    "known_characters": getattr(character, 'known_characters', []),
+                    "relationships": getattr(character, 'relationships', {}),
+                    "dialogue_history": getattr(character, 'dialogue_history', [])[-10:] # Last 10 dialogue entries
                 }
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')

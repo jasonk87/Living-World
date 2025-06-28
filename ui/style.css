@@ -197,3 +197,43 @@ h2 {
     color: red;
     font-weight: bold;
 }
+
+/* Styling for Social Info Sections */
+#character-social-info {
+    margin-top: 15px;
+    padding-top: 10px;
+    border-top: 1px dashed #ccc;
+}
+
+#character-social-info h3 {
+    margin-top: 0;
+    margin-bottom: 10px;
+    font-size: 1.1em;
+    color: #444;
+}
+
+#character-social-info h4 {
+    margin-top: 10px;
+    margin-bottom: 5px;
+    font-size: 1em;
+    color: #555;
+}
+
+#character-social-info ul {
+    list-style-type: disc; /* Or 'circle' or 'square' */
+    padding-left: 25px; /* Indent list items */
+    margin-top: 0;
+    font-size: 0.95em;
+}
+
+#character-social-info li {
+    margin-bottom: 4px;
+}
+
+#char-known-chars, #char-relationships, #char-dialogue-history {
+    margin-bottom: 10px;
+    padding: 8px;
+    border: 1px solid #e0e0e0;
+    background-color: #fdfdfd;
+    border-radius: 3px;
+}

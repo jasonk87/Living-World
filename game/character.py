@@ -64,6 +64,12 @@ class Character:
         self.injury_severity: int = 0 # Similar scale to sickness
         self.appointed_by: Optional[str] = None # Tracks who appointed this character to their current key role
 
+        # Social Attributes
+        self.known_characters: List[str] = [] # List of names of characters met
+        # self.relationships is already Dict[str, int] from before, suitable for relationship scores
+        self.dialogue_history: List[Dict[str, Any]] = [] # List of dialogue interaction dicts
+        self.current_goal_details: Optional[Dict[str, Any]] = None # For goals needing specific targets, like greeting
+
         # Attributes for build orders (re-adding them here as they were missed)
         self.active_build_order_id: Optional[str] = None
         self.materials_gathered_for_build: bool = False
@@ -1534,6 +1540,9 @@ class Character:
         elif self.current_goal == "Seek Medical Attention": # Added for sick/injured
             self._execute_seek_medical_attention(world)
             return
+        elif self.current_goal == "Greet Character":
+            self._execute_greet_character(world)
+            return
 
 
         # If truly nothing else to do
@@ -1550,6 +1559,41 @@ class Character:
         # print(f"Warning: {self.name} has unhandled goal '{self.current_goal}'. Idling.")
         # self.current_goal = "Idle" # Fallback
         return
+
+        # --- Social Interaction Initiation (Basic) ---
+        # If idle or wandering, consider greeting someone.
+        if self.current_goal in ["Idle", "Wander"] and random.random() < config.SOCIAL_INTERACTION_CHANCE: # e.g., 0.01 (1% chance per tick)
+            # Find nearby characters to greet
+            potential_targets_to_greet: List[Character] = []
+            for other_char in world.characters:
+                if other_char.name == self.name:
+                    continue # Don't greet self
+
+                distance = abs(self.x - other_char.x) + abs(self.y - other_char.y)
+                # Max distance to consider initiating a greeting, character will move if target is further but within this initial detection range.
+                max_initiation_distance = 5
+                if distance <= max_initiation_distance:
+                    # Don't greet someone they just greeted or were greeted by very recently
+                    # This is a simple check; more sophisticated cooldowns could be added.
+                    recently_interacted = False
+                    if self.dialogue_history:
+                        last_interaction = self.dialogue_history[-1]
+                        if last_interaction.get("target") == other_char.name or last_interaction.get("initiator") == other_char.name:
+                            if world.game_time and (world.game_time.current_day - last_interaction.get("day", -100)) < 1: # Within the same day
+                                recently_interacted = True
+
+                    if not recently_interacted:
+                        potential_targets_to_greet.append(other_char)
+
+            if potential_targets_to_greet:
+                target_to_greet = random.choice(potential_targets_to_greet)
+                self.current_goal = "Greet Character"
+                self.current_goal_details = {"target_char_name": target_to_greet.name}
+                self.add_memory(f"Decided to go and greet {target_to_greet.name}.")
+                # The _execute_greet_character will handle moving towards the target if needed.
+                self._execute_greet_character(world) # Start executing immediately
+                return
+
 
     # --- Management Actions ---
     def conduct_performance_review(self, subordinate_char_name: str, world: 'World'):
@@ -1764,3 +1808,99 @@ class Character:
 
         # Example: If a supervisor reviews poorly, supervisor's relationship to subordinate might not change much,
         # but subordinate's relationship to supervisor likely worsens. This would be handled by the calling function.
+
+    def _execute_greet_character(self, world: 'World'):
+        if not self.current_goal_details or "target_char_name" not in self.current_goal_details:
+            self.add_memory("Wanted to greet someone, but no target specified.")
+            self.current_goal = self.job_default_goal() or "Idle"
+            self.current_goal_details = None
+            return
+
+        target_name = self.current_goal_details["target_char_name"]
+        target_char = world.get_character_by_name(target_name)
+
+        if not target_char:
+            self.add_memory(f"Wanted to greet {target_name}, but they could not be found.")
+            self.current_goal = self.job_default_goal() or "Idle"
+            self.current_goal_details = None
+            return
+
+        # Check distance - characters should be close to greet
+        # Using Manhattan distance for simplicity
+        distance = abs(self.x - target_char.x) + abs(self.y - target_char.y)
+        max_greeting_distance = 2 # Can be adjusted
+
+        if distance > max_greeting_distance:
+            self.add_memory(f"Trying to greet {target_name}, but they are too far away. Moving closer.")
+            self.move_towards(target_char.x, target_char.y, world)
+            return # Still moving, try again next tick
+
+        # --- At Greeting Distance ---
+        self.add_memory(f"Approached {target_name} to greet them.")
+
+        # Simple initial greeting effect:
+        # 1. Both characters become aware of each other.
+        if target_name not in self.known_characters:
+            self.known_characters.append(target_name)
+        if self.name not in target_char.known_characters:
+            target_char.known_characters.append(self.name)
+
+        # 2. Small positive relationship boost for first meeting, or neutral for subsequent meetings.
+        #    This can be influenced by personality later.
+        relationship_change = 0
+        if self.name not in target_char.relationships: # First time target_char is forming an opinion of self
+            relationship_change += 2 # Small positive bump for first impressions by target
+            target_char.modify_relationship(self.name, relationship_change, world, reason=f"Met {self.name} for the first time.")
+
+        if target_name not in self.relationships: # First time self is forming an opinion of target
+            my_relationship_change = 2 # Small positive bump
+            self.modify_relationship(target_name, my_relationship_change, world, reason=f"Met {target_name} for the first time.")
+        else: # Already know them, just a neutral interaction for now
+            # Could have a small chance of slight positive/negative based on traits later
+            pass
+
+
+        # 3. Log a simple dialogue snippet (placeholder for LLM or more complex system)
+        dialogue_line_self = f"Hello, {target_name}."
+        dialogue_line_target = f"Oh, hello {self.name}."
+
+        # More personality-driven greetings (very basic examples)
+        if "Friendly" in self.traits:
+            dialogue_line_self = f"Well hello there, {target_name}! Nice to see you."
+        elif "Grumpy" in self.traits:
+            dialogue_line_self = f"{target_name}." # Minimalist greeting
+
+        if "Friendly" in target_char.traits:
+            dialogue_line_target = f"Hi {self.name}! Good to meet you."
+        elif "Grumpy" in target_char.traits:
+            dialogue_line_target = f"Hmph. {self.name}."
+
+
+        dialogue_entry = {
+            "type": "greeting",
+            "initiator": self.name,
+            "target": target_name,
+            "day": world.game_time.current_day if world.game_time else -1,
+            "dialogue": [
+                {"speaker": self.name, "line": dialogue_line_self},
+                {"speaker": target_name, "line": dialogue_line_target}
+            ]
+        }
+        self.dialogue_history.append(dialogue_entry)
+        target_char.dialogue_history.append(dialogue_entry) # Both characters record the interaction
+
+        self.add_memory(f"Greeted {target_name}. Said: '{dialogue_line_self}'")
+        target_char.add_memory(f"Was greeted by {self.name}. They said: '{dialogue_line_self}'. I replied: '{dialogue_line_target}'")
+        world.add_event_log_message(f"{self.name} greeted {target_name}.")
+
+        # 4. Target character's reaction:
+        #    For now, the target doesn't change their current goal significantly,
+        #    but they acknowledge the greeting.
+        #    Future: Target might pause their task, or decide to engage in further conversation.
+        if target_char.current_goal != "Greet Character": # Don't interrupt if they were also trying to greet
+            target_char.add_memory(f"Acknowledged greeting from {self.name} while I was {target_char.current_goal}.")
+
+        # 5. Greeting complete. Reset goal.
+        self.current_goal = self.job_default_goal() or "Idle"
+        self.current_goal_details = None
+        return
