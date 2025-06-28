@@ -1550,6 +1550,12 @@ class Character:
         elif self.current_goal == "Small Talk":
             self._execute_small_talk(world)
             return
+        elif self.current_goal == "Share Positive News":
+            self._execute_share_positive_news(world)
+            return
+        elif self.current_goal == "Offer Comfort":
+            self._execute_offer_comfort(world)
+            return
 
 
         # If truly nothing else to do
@@ -1569,10 +1575,15 @@ class Character:
 
         # --- Social Interaction Initiation (Basic) ---
         # If idle or wandering, consider social interaction.
+        # This block is for proactive social interactions (greeting, small talk, news).
+        # Reactive interactions like "Offer Comfort" will be handled by a separate check.
+
+        # Proactive Social Interaction Check
         if self.current_goal in ["Idle", "Wander"] and random.random() < config.SOCIAL_INTERACTION_CHANCE:
             potential_strangers: List[Character] = []
-            potential_known_to_greet: List[Character] = [] # For initial greetings
-            potential_known_for_smalltalk: List[Character] = [] # For small talk
+            potential_known_to_greet: List[Character] = []
+            potential_known_for_smalltalk: List[Character] = []
+            potential_known_for_news: List[Character] = []
 
             for other_char in world.characters:
                 if other_char.name == self.name:
@@ -1593,47 +1604,84 @@ class Character:
                     if not recently_interacted_today:
                         if other_char.name not in self.known_characters:
                             potential_strangers.append(other_char)
-                        else:
-                            # If known, they are candidates for both greeting (if not recently greeted)
-                            # and small talk. We'll prioritize introduction, then small talk, then greeting.
+                        else: # Character is known
                             potential_known_for_smalltalk.append(other_char)
-                            # Greeting is a lower priority if small talk is an option with someone known
-                            # For now, let's simplify: if known, they are potential for small talk or greeting.
-                            # The choice between small talk and greeting for known characters can be random or based on other factors.
-                            # Let's add them to a general "known_can_interact" list for now.
-                            potential_known_to_greet.append(other_char)
-
+                            potential_known_for_news.append(other_char)
+                            potential_known_to_greet.append(other_char) # Greeting is always an option if others aren't chosen
 
             target_char_for_interaction: Optional[Character] = None
             interaction_type = None
 
-            # Priority: 1. Introduce to strangers, 2. Small talk with known, 3. Greet known (if no small talk chosen)
+            # Determine interaction based on priority and chance
+            # Trait influence for choosing to share news (e.g., "Chatty")
+            chatty_bonus_for_news = 0.2 if "Chatty" in self.traits else 0.0
+
             if potential_strangers:
                 target_char_for_interaction = random.choice(potential_strangers)
                 interaction_type = "Introduce Self to Stranger"
-            elif potential_known_for_smalltalk: # If no strangers, consider small talk
-                # Could add another random chance here to decide between small talk and greeting
-                if random.random() < 0.6: # 60% chance to prefer small talk over just a greeting if possible
-                    target_char_for_interaction = random.choice(potential_known_for_smalltalk)
-                    interaction_type = "Small Talk"
-                elif potential_known_to_greet: # Fallback to greet if small talk not chosen
-                    target_char_for_interaction = random.choice(potential_known_to_greet)
-                    interaction_type = "Greet Character"
-            elif potential_known_to_greet: # Only greeting option left for known characters
-                 target_char_for_interaction = random.choice(potential_known_to_greet)
-                 interaction_type = "Greet Character"
-
+            elif potential_known_for_news and random.random() < (0.3 + chatty_bonus_for_news): # 30-50% chance to share news
+                target_char_for_interaction = random.choice(potential_known_for_news)
+                interaction_type = "Share Positive News"
+            elif potential_known_for_smalltalk and random.random() < 0.6: # 60% chance for small talk over just greeting
+                target_char_for_interaction = random.choice(potential_known_for_smalltalk)
+                interaction_type = "Small Talk"
+            elif potential_known_to_greet:
+                target_char_for_interaction = random.choice(potential_known_to_greet)
+                interaction_type = "Greet Character"
 
             if target_char_for_interaction and interaction_type:
                 self.current_goal = interaction_type
                 self.current_goal_details = {"target_char_name": target_char_for_interaction.name}
                 self.add_memory(f"Decided to '{interaction_type}' with {target_char_for_interaction.name}.")
 
-                # Execute the chosen interaction
-                if interaction_type == "Introduce Self to Stranger": self._execute_introduce_self(world)
-                elif interaction_type == "Greet Character": self._execute_greet_character(world)
-                elif interaction_type == "Small Talk": self._execute_small_talk(world)
-                return
+                # Execute the chosen interaction (the actual execution happens via the main goal dispatcher in decide_action)
+                # No need to call _execute_* here, as the goal will be picked up by the elif chain.
+                return # Goal has been set, action for this tick is to initiate this.
+
+        # Reactive Social Interaction Check (e.g., Offer Comfort)
+        # This check happens even if not strictly Idle/Wandering, but not if already in a social goal.
+        # Higher priority than general idling if conditions are met.
+        social_goals = ["Greet Character", "Introduce Self to Stranger", "Small Talk", "Share Positive News", "Offer Comfort"]
+        if self.current_goal not in social_goals : # Avoid interrupting an ongoing social interaction
+            # Consider offering comfort if someone nearby is distressed
+            # Trait influence: "Kind", "Compassionate" characters are more likely to offer comfort.
+            comfort_chance_modifier = 0.0
+            if "Kind" in self.traits: comfort_chance_modifier += 0.3
+            if "Compassionate" in self.traits: comfort_chance_modifier += 0.4 # Stronger pull for compassionate
+
+            if random.random() < (0.1 + comfort_chance_modifier): # Base 10% + trait bonus
+                target_for_comfort: Optional[Character] = None
+                for char_in_need in world.characters:
+                    if char_in_need.name == self.name or char_in_need.name not in self.known_characters:
+                        continue # Don't comfort self or strangers (yet)
+
+                    distance = abs(self.x - char_in_need.x) + abs(self.y - char_in_need.y)
+                    max_comfort_distance = 4 # Can notice someone in distress from a bit further
+
+                    if distance <= max_comfort_distance:
+                        is_distressed = (char_in_need.is_sick and char_in_need.sickness_severity > 3) or \
+                                        (char_in_need.is_injured and char_in_need.injury_severity > 3)
+                        # Future: could also check for very low mood, recent negative memory etc.
+
+                        if is_distressed:
+                            # Check if already comforted this person recently for this specific issue (simplistic check)
+                            recently_comforted_for_this = False
+                            if self.dialogue_history:
+                                for entry in reversed(self.dialogue_history[-3:]): # Check last few interactions
+                                    if entry.get("type") == "offer_comfort" and entry.get("target") == char_in_need.name and \
+                                       world.game_time and (world.game_time.current_day - entry.get("day", -100)) < 1 : # Same day
+                                        recently_comforted_for_this = True
+                                        break
+                            if not recently_comforted_for_this:
+                                target_for_comfort = char_in_need
+                                break # Found someone to comfort
+
+                if target_for_comfort:
+                    self.current_goal = "Offer Comfort"
+                    self.current_goal_details = {"target_char_name": target_for_comfort.name}
+                    self.add_memory(f"Noticed {target_for_comfort.name} seems distressed. Decided to offer comfort.")
+                    # Execution will happen in the main goal dispatch elif chain.
+                    return # Goal set.
 
     # --- Management Actions ---
     def conduct_performance_review(self, subordinate_char_name: str, world: 'World'):
@@ -2000,6 +2048,246 @@ class Character:
             target_char.add_memory(f"Acknowledged greeting from {self.name} while I was {target_char.current_goal}.")
 
         # 6. Greeting complete. Reset goal.
+        self.current_goal = self.job_default_goal() or "Idle"
+        self.current_goal_details = None
+        return
+
+    def _execute_offer_comfort(self, world: 'World'):
+        if not self.current_goal_details or "target_char_name" not in self.current_goal_details:
+            self.add_memory("Wanted to offer comfort, but no target specified.")
+            self.current_goal = self.job_default_goal() or "Idle"
+            self.current_goal_details = None
+            return
+
+        target_name = self.current_goal_details["target_char_name"]
+        target_char = world.get_character_by_name(target_name)
+
+        if not target_char:
+            self.add_memory(f"Wanted to offer comfort to {target_name}, but they could not be found.")
+            self.current_goal = self.job_default_goal() or "Idle"
+            self.current_goal_details = None
+            return
+
+        # Comfort is typically for known characters in a negative state
+        if target_name not in self.known_characters:
+            self.add_memory(f"Wanted to offer comfort to {target_name}, but I don't know them.")
+            self.current_goal = self.job_default_goal()
+            self.current_goal_details = None
+            return
+
+        # Check if target is actually in a state deserving comfort (e.g. sick/injured)
+        # This condition should ideally be part of the decision to initiate "Offer Comfort"
+        if not (target_char.is_sick and target_char.sickness_severity > 3) and \
+           not (target_char.is_injured and target_char.injury_severity > 3):
+            self.add_memory(f"Considered offering comfort to {target_name}, but they seem fine now.")
+            self.current_goal = self.job_default_goal() or "Idle"
+            self.current_goal_details = None
+            return
+
+        distance = abs(self.x - target_char.x) + abs(self.y - target_char.y)
+        max_interaction_distance = 2
+        if distance > max_interaction_distance:
+            self.add_memory(f"Trying to offer comfort to {target_name}, moving closer.")
+            self.move_towards(target_char.x, target_char.y, world)
+            return
+
+        self.add_memory(f"Offering comfort to {target_name}.")
+
+        initiator_kind = "Kind" in self.traits or "Compassionate" in self.traits # Assuming Compassionate implies Kind
+        initiator_grumpy = "Grumpy" in self.traits
+        target_grumpy = "Grumpy" in target_char.traits
+
+        # 1. Relationship Impact
+        rel_change = 2 # Base positive impact for offering comfort
+        if initiator_kind: rel_change += 2
+        if initiator_grumpy: rel_change -= 1 # Grumpy comfort might be awkward but still counts
+
+        # Target's state might influence how they perceive comfort
+        if target_char.sickness_severity > 6 or target_char.injury_severity > 6 : # Very severe state
+            rel_change +=1 # Extra appreciation if very unwell
+        if target_grumpy:
+            rel_change = max(0, rel_change -1) # Grumpy target might be less receptive
+
+        rel_change = max(0, min(5, rel_change)) # Clamp between 0 and 5
+
+        self.modify_relationship(target_name, rel_change, world, reason=f"Offered comfort to {target_name}.")
+        target_char.modify_relationship(self.name, rel_change, world, reason=f"{self.name} offered comfort.")
+
+
+        # 2. Dialogue
+        comforting_lines_self = [
+            f"I heard you weren't feeling too well, {target_name}. Hope you get better soon.",
+            f"Sorry to see you're having a tough time, {target_name}. Let me know if there's anything I can do.",
+            f"Hang in there, {target_name}. These things pass."
+        ]
+        if initiator_kind:
+             comforting_lines_self.append(f"You're strong, {target_name}, you'll get through this. My thoughts are with you.")
+        if initiator_grumpy: # Grumpy comfort is... different
+            comforting_lines_self = [f"Heard you were down. Well, try not to be.", f"Tough luck, {target_name}. Get over it."]
+
+
+        replies_target = ["Thank you, I appreciate that.", "Thanks for your concern.", "I'm trying my best."]
+        if target_grumpy: replies_target = ["Hmph. Fine.", "I'll manage.", "Whatever."]
+        elif target_char.sickness_severity > 6 or target_char.injury_severity > 6: # Very unwell
+            replies_target.append("It means a lot... thank you.")
+
+
+        dialogue_line_self = random.choice(comforting_lines_self)
+        dialogue_line_target = random.choice(replies_target)
+
+        dialogue_entry = {
+            "type": "offer_comfort",
+            "initiator": self.name,
+            "target": target_name,
+            "day": world.game_time.current_day if world.game_time else -1,
+            "dialogue_exchanges": [
+                {"speaker": self.name, "line": dialogue_line_self},
+                {"speaker": target_name, "line": dialogue_line_target}
+            ]
+        }
+        self.dialogue_history.append(dialogue_entry)
+        target_char.dialogue_history.append(dialogue_entry)
+
+        # 3. Opinion Impact
+        if target_name not in self.opinions: self.opinions[target_name] = {}
+        opinion_tag_target = "grace_in_hardship" # How target handles being comforted
+        current_opinion_target = self.opinions[target_name].get(opinion_tag_target, 0)
+        if not target_grumpy : current_opinion_target +=1 # Non-grumpy people seen as more graceful
+        self.opinions[target_name][opinion_tag_target] = max(-5, min(5, current_opinion_target))
+
+        if self.name not in target_char.opinions: target_char.opinions[self.name] = {}
+        opinion_tag_initiator = "empathy_level"
+        current_opinion_initiator = target_char.opinions[self.name].get(opinion_tag_initiator, 0)
+        if initiator_kind: current_opinion_initiator +=2
+        elif not initiator_grumpy: current_opinion_initiator +=1 # Neutral is still empathetic
+        # Grumpy initiator offering comfort might still be seen as having some empathy, just awkwardly expressed
+        target_char.opinions[self.name][opinion_tag_initiator] = max(-5, min(5, current_opinion_initiator))
+
+        self.add_memory(f"Offered comfort to {target_name}. Said: '{dialogue_line_self}'. Their grace: {self.opinions[target_name].get(opinion_tag_target, 'N/A')}")
+        target_char.add_memory(f"{self.name} offered comfort. Their empathy: {target_char.opinions[self.name].get(opinion_tag_initiator, 'N/A')}. I replied: '{dialogue_line_target}'")
+        world.add_event_log_message(f"{self.name} offered comfort to {target_name}.")
+
+        if target_char.current_goal not in ["Offer Comfort", "Seek Medical Attention"]:
+            target_char.add_memory(f"{self.name} comforted me while I was {target_char.current_goal}.")
+
+        self.current_goal = self.job_default_goal() or "Idle"
+        self.current_goal_details = None
+        return
+
+    def _execute_share_positive_news(self, world: 'World'):
+        if not self.current_goal_details or "target_char_name" not in self.current_goal_details:
+            self.add_memory("Wanted to share news, but no target specified.")
+            self.current_goal = self.job_default_goal() or "Idle"
+            self.current_goal_details = None
+            return
+
+        target_name = self.current_goal_details["target_char_name"]
+        target_char = world.get_character_by_name(target_name)
+
+        if not target_char:
+            self.add_memory(f"Wanted to share news with {target_name}, but they could not be found.")
+            self.current_goal = self.job_default_goal() or "Idle"
+            self.current_goal_details = None
+            return
+
+        if target_name not in self.known_characters:
+            self.add_memory(f"Wanted to share news with {target_name}, but I don't know them well enough.")
+            self.current_goal = self.job_default_goal() or "Idle" # Or try to introduce first
+            self.current_goal_details = None
+            return
+
+        distance = abs(self.x - target_char.x) + abs(self.y - target_char.y)
+        max_interaction_distance = 2
+
+        if distance > max_interaction_distance:
+            self.add_memory(f"Trying to share news with {target_name}, moving closer.")
+            self.move_towards(target_char.x, target_char.y, world)
+            return
+
+        self.add_memory(f"Sharing some positive news/gossip with {target_name}.")
+
+        initiator_friendly = "Friendly" in self.traits
+        initiator_grumpy = "Grumpy" in self.traits
+        initiator_chatty = "Chatty" in self.traits
+        target_friendly = "Friendly" in target_char.traits
+        target_grumpy = "Grumpy" in target_char.traits
+
+        # 1. Relationship Impact
+        rel_change = 0
+        if initiator_chatty or initiator_friendly: rel_change += 1
+        if target_friendly: rel_change +=1
+        elif target_grumpy: rel_change -=1
+
+        # Cap positive impact, make negative impact less likely unless initiator is also grumpy
+        if rel_change > 1: rel_change = 1
+        if rel_change < 0 and not initiator_grumpy: rel_change = 0
+
+        if rel_change != 0:
+            self.modify_relationship(target_name, rel_change, world, reason=f"Shared some news with {target_name}.")
+            target_char.modify_relationship(self.name, rel_change, world, reason=f"{self.name} shared some news.")
+
+        # 2. Dialogue
+        available_chars_for_gossip = [c.name for c in world.characters if c.name != self.name and c.name != target_name]
+        gossip_subject_name = random.choice(available_chars_for_gossip) if available_chars_for_gossip else "someone"
+
+        news_items_templates = [
+            "Heard the hunters had a good catch today!",
+            f"I saw {gossip_subject_name} looking particularly cheerful earlier.",
+            "They say the weather's going to be perfect for the next few days.",
+            "Someone mentioned finding an unusually large berry patch nearby.",
+            "Word is the builders are making great progress on that new structure."
+        ]
+        if initiator_grumpy: # Grumpy "positive" news is more like a grudging admission
+            news_items_templates = [
+                "Suppose the harvest wasn't a total disaster.",
+                "That new building isn't as bad as I expected.",
+                "At least it's not raining for once.",
+                f"Heard {gossip_subject_name} actually did something useful. Surprising."
+            ]
+
+        dialogue_line_self = random.choice(news_items_templates)
+
+        replies_target = ["Oh, that's good to hear!", "Is that so? Interesting.", "Thanks for letting me know."]
+        if target_friendly: replies_target.extend(["Wonderful news!", "That's fantastic!"])
+        elif target_grumpy: replies_target = ["Hmph. Alright.", "And?", "Noted."]
+        dialogue_line_target = random.choice(replies_target)
+
+        dialogue_entry = {
+            "type": "share_positive_news",
+            "initiator": self.name,
+            "target": target_name,
+            "day": world.game_time.current_day if world.game_time else -1,
+            "dialogue_exchanges": [
+                {"speaker": self.name, "line": dialogue_line_self},
+                {"speaker": target_name, "line": dialogue_line_target}
+            ]
+        }
+        self.dialogue_history.append(dialogue_entry)
+        target_char.dialogue_history.append(dialogue_entry)
+
+        # 3. Opinion Impact
+        if target_name not in self.opinions: self.opinions[target_name] = {}
+        opinion_tag_target = "receptiveness_to_news"
+        current_opinion_target = self.opinions[target_name].get(opinion_tag_target, 0)
+        if target_friendly: current_opinion_target +=1
+        elif target_grumpy: current_opinion_target -=1
+        self.opinions[target_name][opinion_tag_target] = max(-5, min(5, current_opinion_target))
+
+        if self.name not in target_char.opinions: target_char.opinions[self.name] = {}
+        opinion_tag_initiator = "news_sharing_style" # e.g. informative, amusing, trivial
+        current_opinion_initiator = target_char.opinions[self.name].get(opinion_tag_initiator, 0)
+        if initiator_chatty: current_opinion_initiator +=1 # Chatty people might be seen as good news sharers
+        if initiator_friendly: current_opinion_initiator +=1
+        elif initiator_grumpy: current_opinion_initiator -=1 # Grumpy news might not be well received
+        target_char.opinions[self.name][opinion_tag_initiator] = max(-5, min(5, current_opinion_initiator))
+
+        self.add_memory(f"Shared news with {target_name}: '{dialogue_line_self}'. Their receptiveness: {self.opinions[target_name][opinion_tag_target]}")
+        target_char.add_memory(f"{self.name} shared news: '{dialogue_line_self}'. Their style: {target_char.opinions[self.name][opinion_tag_initiator]}. I replied: '{dialogue_line_target}'")
+        world.add_event_log_message(f"{self.name} shared some news with {target_name}.")
+
+        if target_char.current_goal not in ["Share Positive News", "Small Talk", "Greet Character", "Introduce Self to Stranger"]:
+            target_char.add_memory(f"Heard some news from {self.name} while I was {target_char.current_goal}.")
+
         self.current_goal = self.job_default_goal() or "Idle"
         self.current_goal_details = None
         return

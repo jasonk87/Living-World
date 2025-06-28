@@ -324,23 +324,23 @@ document.addEventListener('DOMContentLoaded', () => {
             if (entity.dialogue_history && entity.dialogue_history.length > 0) {
                 entity.dialogue_history.slice(-5).forEach(dialogueEntry => {
                     let entryText = '';
-                    if (dialogueEntry.type === 'greeting' || dialogueEntry.type === 'introduction') {
-                        entryText += `<em>${dialogueEntry.type.charAt(0).toUpperCase() + dialogueEntry.type.slice(1)} with ${dialogueEntry.target || 'Unknown'} (Day ${dialogueEntry.day || '?'})</em><br/>`;
-                        if (dialogueEntry.dialogue_exchanges && dialogueEntry.dialogue_exchanges.length > 0) {
-                            dialogueEntry.dialogue_exchanges.forEach(exchange => {
-                                entryText += `&nbsp;&nbsp;<strong>${exchange.speaker}:</strong> "${exchange.line}"<br/>`;
-                            });
-                        } else {
-                            entryText += "&nbsp;&nbsp;No dialogue recorded for this exchange.";
-                        }
+                    const interactionType = dialogueEntry.type || 'unknown_interaction';
+                    // Generic way to format the type: replace underscores, capitalize words
+                    const typeFormatted = interactionType.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+
+                    entryText += `<em>${typeFormatted} with ${dialogueEntry.target || 'Unknown'} (Day ${dialogueEntry.day || '?'})</em><br/>`;
+
+                    if (dialogueEntry.dialogue_exchanges && dialogueEntry.dialogue_exchanges.length > 0) {
+                        dialogueEntry.dialogue_exchanges.forEach(exchange => {
+                            entryText += `&nbsp;&nbsp;<strong>${exchange.speaker}:</strong> "${exchange.line}"<br/>`;
+                        });
+                    } else if (dialogueEntry.dialogue && dialogueEntry.dialogue.length > 0 && typeof dialogueEntry.dialogue[0] === 'object') {
+                        // Fallback for old format if dialogue_exchanges is missing (assuming dialogue was an array of objects)
+                        dialogueEntry.dialogue.forEach(exchange => {
+                             entryText += `&nbsp;&nbsp;<strong>${exchange.speaker}:</strong> "${exchange.line}"<br/>`;
+                        });
                     } else {
-                        // Fallback for other dialogue types or older formats
-                        entryText = `Interaction (Type: ${dialogueEntry.type || 'Unknown'}, Day ${dialogueEntry.day || '?'})`;
-                        if(dialogueEntry.dialogue && dialogueEntry.dialogue.length > 0) { // Check old format
-                             entryText += `: "${dialogueEntry.dialogue[0].line.substring(0,30)}..."`;
-                        } else if (dialogueEntry.dialogue_exchanges && dialogueEntry.dialogue_exchanges.length > 0) { // Check new format
-                             entryText += `: "${dialogueEntry.dialogue_exchanges[0].line.substring(0,30)}..."`;
-                        }
+                        entryText += "&nbsp;&nbsp;No detailed dialogue recorded for this exchange.";
                     }
                     detailsHtml += `<li>${entryText}</li>`;
                 });

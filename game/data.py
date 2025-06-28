@@ -178,6 +178,22 @@ JOB_TASK_DEFINITIONS = {
         "base_yield": 0,
         "base_time_per_yield": 0 # Represents a short social exchange
     },
+    "Share Positive News": {
+        "description": "Character shares a piece of positive news or light gossip with an acquaintance.",
+        "required_tool_type": None,
+        "skill_used": "Social",
+        "resource_produced": None,
+        "base_yield": 0,
+        "base_time_per_yield": 0 # Short social interaction
+    },
+    "Offer Comfort": {
+        "description": "Character offers comfort or sympathy to someone in a negative state (e.g., sick, injured).",
+        "required_tool_type": None,
+        "skill_used": "Social", # Could also be influenced by an "Empathy" skill/trait
+        "resource_produced": None,
+        "base_yield": 0,
+        "base_time_per_yield": 0 # Short interaction
+    },
 }
 
 # It might also be useful to define tool types if they have specific properties beyond what's in blueprints
