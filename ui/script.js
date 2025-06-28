@@ -302,18 +302,23 @@ document.addEventListener('DOMContentLoaded', () => {
             if (entity.dialogue_history && entity.dialogue_history.length > 0) {
                 // Assuming dialogue_history is an array of objects/strings. Displaying simply for now.
                 entity.dialogue_history.slice(-5).forEach(dialogueEntry => {
-                    let entryText = 'Interaction';
-                    if (typeof dialogueEntry === 'string') {
-                        entryText = dialogueEntry;
-                    } else if (typeof dialogueEntry === 'object' && dialogueEntry !== null) {
-                        // Attempt to create a more descriptive summary
-                        if (dialogueEntry.type === 'greeting') {
-                            entryText = `Greeted ${dialogueEntry.target || 'someone'} (Day ${dialogueEntry.day || '?'})`;
-                            if(dialogueEntry.dialogue && dialogueEntry.dialogue.length > 0) {
-                                entryText += `: "${dialogueEntry.dialogue[0].line.substring(0,30)}..."`;
-                            }
+                    let entryText = '';
+                    if (dialogueEntry.type === 'greeting' || dialogueEntry.type === 'introduction') {
+                        entryText += `<em>${dialogueEntry.type.charAt(0).toUpperCase() + dialogueEntry.type.slice(1)} with ${dialogueEntry.target || 'Unknown'} (Day ${dialogueEntry.day || '?'})</em><br/>`;
+                        if (dialogueEntry.dialogue_exchanges && dialogueEntry.dialogue_exchanges.length > 0) {
+                            dialogueEntry.dialogue_exchanges.forEach(exchange => {
+                                entryText += `&nbsp;&nbsp;<strong>${exchange.speaker}:</strong> "${exchange.line}"<br/>`;
+                            });
                         } else {
-                             entryText = JSON.stringify(dialogueEntry).substring(0, 50) + "..."; // Basic fallback
+                            entryText += "&nbsp;&nbsp;No dialogue recorded for this exchange.";
+                        }
+                    } else {
+                        // Fallback for other dialogue types or older formats
+                        entryText = `Interaction (Type: ${dialogueEntry.type || 'Unknown'}, Day ${dialogueEntry.day || '?'})`;
+                        if(dialogueEntry.dialogue && dialogueEntry.dialogue.length > 0) { // Check old format
+                             entryText += `: "${dialogueEntry.dialogue[0].line.substring(0,30)}..."`;
+                        } else if (dialogueEntry.dialogue_exchanges && dialogueEntry.dialogue_exchanges.length > 0) { // Check new format
+                             entryText += `: "${dialogueEntry.dialogue_exchanges[0].line.substring(0,30)}..."`;
                         }
                     }
                     detailsHtml += `<li>${entryText}</li>`;

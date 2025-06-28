@@ -237,3 +237,30 @@ h2 {
     background-color: #fdfdfd;
     border-radius: 3px;
 }
+
+/* More specific styling for dialogue history list items */
+#char-dialogue-history ul {
+    list-style-type: none; /* Remove default bullets for dialogue */
+    padding-left: 10px; /* Less indent for dialogue */
+}
+
+#char-dialogue-history li {
+    padding: 5px;
+    border-bottom: 1px dotted #eee;
+    line-height: 1.4; /* Improve readability of multi-line dialogue entries */
+}
+
+#char-dialogue-history li:last-child {
+    border-bottom: none;
+}
+
+#char-dialogue-history li em { /* Style for the "Greeting with X (Day Y)" part */
+    font-style: italic;
+    color: #666;
+    display: block; /* Make it take its own line */
+    margin-bottom: 3px;
+}
+
+#char-dialogue-history li strong { /* Style for speaker name */
+    color: #333;
+}

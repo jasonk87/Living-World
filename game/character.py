@@ -1543,6 +1543,9 @@ class Character:
         elif self.current_goal == "Greet Character":
             self._execute_greet_character(world)
             return
+        elif self.current_goal == "Introduce Self to Stranger":
+            self._execute_introduce_self(world)
+            return
 
 
         # If truly nothing else to do
@@ -1561,39 +1564,53 @@ class Character:
         return
 
         # --- Social Interaction Initiation (Basic) ---
-        # If idle or wandering, consider greeting someone.
-        if self.current_goal in ["Idle", "Wander"] and random.random() < config.SOCIAL_INTERACTION_CHANCE: # e.g., 0.01 (1% chance per tick)
-            # Find nearby characters to greet
-            potential_targets_to_greet: List[Character] = []
+        # If idle or wandering, consider social interaction.
+        if self.current_goal in ["Idle", "Wander"] and random.random() < config.SOCIAL_INTERACTION_CHANCE:
+            potential_strangers: List[Character] = []
+            potential_known_acquaintances: List[Character] = []
+
             for other_char in world.characters:
                 if other_char.name == self.name:
-                    continue # Don't greet self
+                    continue
 
                 distance = abs(self.x - other_char.x) + abs(self.y - other_char.y)
-                # Max distance to consider initiating a greeting, character will move if target is further but within this initial detection range.
-                max_initiation_distance = 5
+                max_initiation_distance = 5 # Max distance to consider initiating an interaction
+
                 if distance <= max_initiation_distance:
-                    # Don't greet someone they just greeted or were greeted by very recently
-                    # This is a simple check; more sophisticated cooldowns could be added.
+                    # Check for recent interaction to avoid spamming
                     recently_interacted = False
                     if self.dialogue_history:
                         last_interaction = self.dialogue_history[-1]
                         if last_interaction.get("target") == other_char.name or last_interaction.get("initiator") == other_char.name:
-                            if world.game_time and (world.game_time.current_day - last_interaction.get("day", -100)) < 1: # Within the same day
+                            if world.game_time and (world.game_time.current_day - last_interaction.get("day", -100)) < 1:
                                 recently_interacted = True
 
                     if not recently_interacted:
-                        potential_targets_to_greet.append(other_char)
+                        if other_char.name not in self.known_characters:
+                            potential_strangers.append(other_char)
+                        else:
+                            potential_known_acquaintances.append(other_char)
 
-            if potential_targets_to_greet:
-                target_to_greet = random.choice(potential_targets_to_greet)
-                self.current_goal = "Greet Character"
-                self.current_goal_details = {"target_char_name": target_to_greet.name}
-                self.add_memory(f"Decided to go and greet {target_to_greet.name}.")
-                # The _execute_greet_character will handle moving towards the target if needed.
-                self._execute_greet_character(world) # Start executing immediately
+            target_char_for_interaction: Optional[Character] = None
+            interaction_type = None
+
+            if potential_strangers:
+                target_char_for_interaction = random.choice(potential_strangers)
+                interaction_type = "Introduce Self to Stranger"
+            elif potential_known_acquaintances: # Fallback to greeting known characters
+                target_char_for_interaction = random.choice(potential_known_acquaintances)
+                interaction_type = "Greet Character"
+
+            if target_char_for_interaction and interaction_type:
+                self.current_goal = interaction_type
+                self.current_goal_details = {"target_char_name": target_char_for_interaction.name}
+                self.add_memory(f"Decided to '{interaction_type}' with {target_char_for_interaction.name}.")
+
+                if interaction_type == "Introduce Self to Stranger":
+                    self._execute_introduce_self(world)
+                elif interaction_type == "Greet Character":
+                    self._execute_greet_character(world)
                 return
-
 
     # --- Management Actions ---
     def conduct_performance_review(self, subordinate_char_name: str, world: 'World'):
@@ -1845,43 +1862,87 @@ class Character:
         if self.name not in target_char.known_characters:
             target_char.known_characters.append(self.name)
 
-        # 2. Small positive relationship boost for first meeting, or neutral for subsequent meetings.
-        #    This can be influenced by personality later.
-        relationship_change = 0
-        if self.name not in target_char.relationships: # First time target_char is forming an opinion of self
-            relationship_change += 2 # Small positive bump for first impressions by target
-            target_char.modify_relationship(self.name, relationship_change, world, reason=f"Met {self.name} for the first time.")
+        # 2. Determine Relationship Impact based on traits
+        initiator_friendly = "Friendly" in self.traits
+        initiator_grumpy = "Grumpy" in self.traits
+        target_friendly = "Friendly" in target_char.traits
+        target_grumpy = "Grumpy" in target_char.traits
 
-        if target_name not in self.relationships: # First time self is forming an opinion of target
-            my_relationship_change = 2 # Small positive bump
-            self.modify_relationship(target_name, my_relationship_change, world, reason=f"Met {target_name} for the first time.")
-        else: # Already know them, just a neutral interaction for now
-            # Could have a small chance of slight positive/negative based on traits later
-            pass
+        # Base relationship change for meeting
+        base_rel_change_initiator_to_target = 0
+        base_rel_change_target_to_initiator = 0
 
+        if target_name not in self.relationships: # First time initiator forms opinion of target
+            if initiator_friendly and target_friendly: base_rel_change_initiator_to_target = 3
+            elif initiator_friendly and not target_grumpy: base_rel_change_initiator_to_target = 2 # Friendly to Neutral
+            elif initiator_friendly and target_grumpy: base_rel_change_initiator_to_target = 1 # Friendly optimistic
+            elif initiator_grumpy and target_friendly: base_rel_change_initiator_to_target = 0 # Grumpy unimpressed by friendliness
+            elif initiator_grumpy and target_grumpy: base_rel_change_initiator_to_target = 1 # Grumpy respects grumpy
+            elif initiator_grumpy and not target_friendly: base_rel_change_initiator_to_target = 0 # Grumpy to Neutral
+            else: base_rel_change_initiator_to_target = 1 # Neutral to anyone
+            self.modify_relationship(target_name, base_rel_change_initiator_to_target, world, reason=f"First impression of {target_name}.")
 
-        # 3. Log a simple dialogue snippet (placeholder for LLM or more complex system)
-        dialogue_line_self = f"Hello, {target_name}."
-        dialogue_line_target = f"Oh, hello {self.name}."
+        if self.name not in target_char.relationships: # First time target forms opinion of initiator
+            if target_friendly and initiator_friendly: base_rel_change_target_to_initiator = 3
+            elif target_friendly and not initiator_grumpy: base_rel_change_target_to_initiator = 2 # Friendly to Neutral
+            elif target_friendly and initiator_grumpy: base_rel_change_target_to_initiator = 1 # Friendly to Grumpy (still tries)
+            elif target_grumpy and initiator_friendly: base_rel_change_target_to_initiator = 0 # Grumpy unimpressed
+            elif target_grumpy and initiator_grumpy: base_rel_change_target_to_initiator = 1 # Mutual grumpiness
+            elif target_grumpy and not initiator_friendly: base_rel_change_target_to_initiator = 0 # Grumpy to Neutral
+            else: base_rel_change_target_to_initiator = 1 # Neutral to anyone
+            target_char.modify_relationship(self.name, base_rel_change_target_to_initiator, world, reason=f"First impression of {self.name}.")
 
-        # More personality-driven greetings (very basic examples)
-        if "Friendly" in self.traits:
-            dialogue_line_self = f"Well hello there, {target_name}! Nice to see you."
-        elif "Grumpy" in self.traits:
-            dialogue_line_self = f"{target_name}." # Minimalist greeting
+        # For subsequent greetings (if they happen), could add a smaller, consistent positive modifier, or none.
+        # For now, only first impressions are significantly impacted by this initial greeting.
 
-        if "Friendly" in target_char.traits:
-            dialogue_line_target = f"Hi {self.name}! Good to meet you."
-        elif "Grumpy" in target_char.traits:
-            dialogue_line_target = f"Hmph. {self.name}."
+        # 3. Generate Dialogue Snippets based on traits
+        # Initiator's line
+        if initiator_friendly:
+            dialogue_line_self = random.choice([
+                f"Well hello there, {target_name}! A pleasure to meet you.",
+                f"Greetings, {target_name}! Hope you're having a good day.",
+                f"Hi {target_name}! Always nice to see a new face." if target_name not in self.known_characters else f"Hi {target_name}! Good to see you again."
+            ])
+        elif initiator_grumpy:
+            dialogue_line_self = random.choice([
+                f"{target_name}.",
+                f"Hmph. {target_name} is it?",
+                "Yeah?"
+            ])
+        else: # Neutral initiator
+            dialogue_line_self = random.choice([
+                f"Hello, {target_name}.",
+                f"Greetings, {target_name}.",
+                f"Good day, {target_name}."
+            ])
 
+        # Target's reply
+        if target_friendly:
+            dialogue_line_target = random.choice([
+                f"And a good day to you too, {self.name}!",
+                f"Hello {self.name}! Nice to meet you as well.",
+                f"Hi there, {self.name}!"
+            ])
+        elif target_grumpy:
+            dialogue_line_target = random.choice([
+                "Hmph.",
+                "What do you want?",
+                f"Seen you around, {self.name}."
+            ])
+        else: # Neutral target
+            dialogue_line_target = random.choice([
+                f"Hello, {self.name}.",
+                f"Greetings.",
+                f"Good day."
+            ])
 
+        # Store dialogue
         dialogue_entry = {
-            "type": "greeting",
+            "type": "greeting", # Or "introduction" if it's a first meeting
             "initiator": self.name,
             "target": target_name,
             "day": world.game_time.current_day if world.game_time else -1,
-            "dialogue": [
+            "dialogue_exchanges": [ # Changed from "dialogue" to "dialogue_exchanges" to be clearer
                 {"speaker": self.name, "line": dialogue_line_self},
                 {"speaker": target_name, "line": dialogue_line_target}
             ]
@@ -1901,6 +1962,135 @@ class Character:
             target_char.add_memory(f"Acknowledged greeting from {self.name} while I was {target_char.current_goal}.")
 
         # 5. Greeting complete. Reset goal.
+        self.current_goal = self.job_default_goal() or "Idle"
+        self.current_goal_details = None
+        return
+
+    def _execute_introduce_self(self, world: 'World'):
+        if not self.current_goal_details or "target_char_name" not in self.current_goal_details:
+            self.add_memory("Wanted to introduce myself, but no target specified.")
+            self.current_goal = self.job_default_goal() or "Idle"
+            self.current_goal_details = None
+            return
+
+        target_name = self.current_goal_details["target_char_name"]
+        target_char = world.get_character_by_name(target_name)
+
+        if not target_char:
+            self.add_memory(f"Wanted to introduce myself to {target_name}, but they could not be found.")
+            self.current_goal = self.job_default_goal() or "Idle"
+            self.current_goal_details = None
+            return
+
+        # Ensure it's actually a stranger. If already known, switch to a generic greet or idle.
+        if target_name in self.known_characters:
+            self.add_memory(f"Wanted to introduce to {target_name}, but I already know them. Switching to greet.")
+            self.current_goal = "Greet Character"
+            # current_goal_details remains the same for the greet
+            self._execute_greet_character(world) # Execute greet immediately
+            return
+
+        distance = abs(self.x - target_char.x) + abs(self.y - target_char.y)
+        max_interaction_distance = 2
+
+        if distance > max_interaction_distance:
+            self.add_memory(f"Trying to introduce myself to {target_name}, moving closer.")
+            self.move_towards(target_char.x, target_char.y, world)
+            return
+
+        # --- At Interaction Distance with a Stranger ---
+        self.add_memory(f"Approached {target_name} to introduce myself.")
+
+        # 1. Become known to each other
+        self.known_characters.append(target_name)
+        if self.name not in target_char.known_characters: # Should usually be true if target_name wasn't in self.known_characters
+            target_char.known_characters.append(self.name)
+
+        # 2. Relationship Impact (similar to first greeting in _execute_greet_character)
+        initiator_friendly = "Friendly" in self.traits
+        initiator_grumpy = "Grumpy" in self.traits
+        target_friendly = "Friendly" in target_char.traits
+        target_grumpy = "Grumpy" in target_char.traits
+
+        rel_change_initiator_to_target = 1 # Base for neutral intro
+        if initiator_friendly and target_friendly: rel_change_initiator_to_target = 3
+        elif initiator_friendly and not target_grumpy: rel_change_initiator_to_target = 2
+        elif initiator_friendly and target_grumpy: rel_change_initiator_to_target = 1
+        elif initiator_grumpy and target_friendly: rel_change_initiator_to_target = 0
+        elif initiator_grumpy and target_grumpy: rel_change_initiator_to_target = 1
+        elif initiator_grumpy: rel_change_initiator_to_target = 0
+        self.modify_relationship(target_name, rel_change_initiator_to_target, world, reason=f"Introduced myself to {target_name}.")
+
+        rel_change_target_to_initiator = 1 # Base for neutral intro
+        if target_friendly and initiator_friendly: rel_change_target_to_initiator = 3
+        elif target_friendly and not initiator_grumpy: rel_change_target_to_initiator = 2
+        elif target_friendly and initiator_grumpy: rel_change_target_to_initiator = 1
+        elif target_grumpy and initiator_friendly: rel_change_target_to_initiator = 0
+        elif target_grumpy and initiator_grumpy: rel_change_target_to_initiator = 1
+        elif target_grumpy: rel_change_target_to_initiator = 0
+        target_char.modify_relationship(self.name, rel_change_target_to_initiator, world, reason=f"{self.name} introduced themselves.")
+
+        # 3. Dialogue Snippets for Introduction
+        # Initiator's line
+        if initiator_friendly:
+            dialogue_line_self = random.choice([
+                f"Hello there! I don't think we've met, I'm {self.name}.",
+                f"Hi! I'm {self.name}, a pleasure to make your acquaintance, {target_name}.",
+                f"Greetings! You must be {target_name}. I'm {self.name}."
+            ])
+        elif initiator_grumpy:
+            dialogue_line_self = random.choice([
+                f"I'm {self.name}. You're {target_name}, right?",
+                f"{self.name}. That's me. And you are?",
+                f"Name's {self.name}."
+            ])
+        else: # Neutral initiator
+            dialogue_line_self = random.choice([
+                f"Hello, I'm {self.name}.",
+                f"Greetings. My name is {self.name}. And you are {target_name}?",
+                f"I am {self.name}."
+            ])
+
+        # Target's reply
+        if target_friendly:
+            dialogue_line_target = random.choice([
+                f"A pleasure to meet you, {self.name}! I'm {target_name}.",
+                f"Hello {self.name}! I'm {target_name}. Nice to meet you!",
+                f"Hi {self.name}! I'm {target_name}."
+            ])
+        elif target_grumpy:
+            dialogue_line_target = random.choice([
+                f"{target_name}. And you are?",
+                f"I'm {target_name}. What of it, {self.name}?",
+                f"Yeah, I'm {target_name}."
+            ])
+        else: # Neutral target
+            dialogue_line_target = random.choice([
+                f"Hello, {self.name}. I am {target_name}.",
+                f"Greetings. I'm {target_name}.",
+                f"I am {target_name}. You are {self.name}."
+            ])
+
+        dialogue_entry = {
+            "type": "introduction",
+            "initiator": self.name,
+            "target": target_name,
+            "day": world.game_time.current_day if world.game_time else -1,
+            "dialogue_exchanges": [
+                {"speaker": self.name, "line": dialogue_line_self},
+                {"speaker": target_name, "line": dialogue_line_target}
+            ]
+        }
+        self.dialogue_history.append(dialogue_entry)
+        target_char.dialogue_history.append(dialogue_entry)
+
+        self.add_memory(f"Introduced myself to {target_name}. Said: '{dialogue_line_self}'")
+        target_char.add_memory(f"{self.name} introduced themselves. They said: '{dialogue_line_self}'. I replied: '{dialogue_line_target}'")
+        world.add_event_log_message(f"{self.name} introduced themselves to {target_name}.")
+
+        if target_char.current_goal != "Introduce Self to Stranger": # Avoid interrupting if they were also trying to introduce
+            target_char.add_memory(f"Met {self.name} while I was {target_char.current_goal}.")
+
         self.current_goal = self.job_default_goal() or "Idle"
         self.current_goal_details = None
         return

@@ -162,6 +162,14 @@ JOB_TASK_DEFINITIONS = {
         "base_yield": 0,
         "base_time_per_yield": 0 # Interaction, not yield-based
     },
+    "Introduce Self to Stranger": {
+        "description": "Character introduces themselves to an unknown character.",
+        "required_tool_type": None,
+        "skill_used": "Social",
+        "resource_produced": None,
+        "base_yield": 0,
+        "base_time_per_yield": 0 # Short interaction, similar to greeting
+    },
 }
 
 # It might also be useful to define tool types if they have specific properties beyond what's in blueprints
