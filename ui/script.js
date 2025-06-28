@@ -236,7 +236,22 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        let detailsHtml = `<h4>Details: ${entity.name || entity.display_name || 'N/A'}</h4><dl>`;
+        if (!entityDetailsDiv) return;
+        if (!entity && type !== 'clear') {
+             entityDetailsDiv.innerHTML = '<p>Select an entity to see details, or enable details view.</p>';
+             return;
+        }
+         if (type === 'clear' || !showEntityDetails) {
+            entityDetailsDiv.innerHTML = '<p><em>Entity details are currently hidden. Click "Toggle Entity Details" to show.</em></p>';
+            return;
+        }
+
+        let detailsHtml = `<h4>Details: ${entity.name || entity.display_name || 'N/A'}</h4><dl class="details-list">`;
+
+        function formatObject(obj) {
+            if (typeof obj !== 'object' || obj === null) return obj;
+            return Object.entries(obj).map(([key, value]) => `${key}: ${value}`).join('<br>');
+        }
 
         if (type === 'character_detailed') {
             detailsHtml += `<dt>Name</dt><dd>${entity.name}</dd>`;
@@ -246,9 +261,11 @@ document.addEventListener('DOMContentLoaded', () => {
             detailsHtml += `<dt>Personality</dt><dd>${entity.personality || 'N/A'}</dd>`;
             detailsHtml += `<dt>Traits</dt><dd>${(entity.traits || []).join(', ') || 'None'}</dd>`;
             detailsHtml += `<dt>Health</dt><dd>Sick: ${entity.is_sick ? `Yes (Sev: ${entity.sickness_severity})` : 'No'}, Injured: ${entity.is_injured ? `Yes (Sev: ${entity.injury_severity})` : 'No'}</dd>`;
-            detailsHtml += `<dt>Needs</dt><dd><pre>${JSON.stringify(entity.needs, null, 2)}</pre></dd>`;
-            detailsHtml += `<dt>Inventory</dt><dd><pre>${JSON.stringify(entity.inventory, null, 2)}</pre></dd>`;
-            detailsHtml += `<dt>Skills</dt><dd><pre>${JSON.stringify(entity.skills, null, 2)}</pre></dd>`;
+
+            detailsHtml += `<dt>Needs</dt><dd>${formatObject(entity.needs)}</dd>`;
+            detailsHtml += `<dt>Inventory</dt><dd>${formatObject(entity.inventory)}</dd>`;
+            detailsHtml += `<dt>Skills</dt><dd>${formatObject(entity.skills)}</dd>`;
+
             detailsHtml += `<dt>Supervisor</dt><dd>${entity.supervisor_name || 'None'}</dd>`;
             detailsHtml += `<dt>Appointed By</dt><dd>${entity.appointed_by || 'N/A'}</dd>`;
             detailsHtml += `<dt>Subordinates</dt><dd>${(entity.subordinates_names || []).join(', ') || 'None'}</dd>`;
@@ -267,8 +284,10 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!entity.is_operational && entity.build_time > 0) {
                 detailsHtml += `<dt>Construction</dt><dd>${entity.current_progress.toFixed(1)} / ${entity.build_time.toFixed(1)} (${entity.current_phase_name || 'N/A'})</dd>`;
             }
-            if (entity.inventory) {
-                detailsHtml += `<dt>Inventory</dt><dd><pre>${JSON.stringify(entity.inventory, null, 2)}</pre></dd>`;
+            if (entity.inventory && Object.keys(entity.inventory).length > 0) {
+                detailsHtml += `<dt>Inventory</dt><dd>${formatObject(entity.inventory)}</dd>`;
+            } else if (entity.inventory) {
+                 detailsHtml += `<dt>Inventory</dt><dd>Empty</dd>`;
             }
             if (entity.allowed_resources) {
                 detailsHtml += `<dt>Allowed Resources</dt><dd>${entity.allowed_resources.join(', ') || 'Any'}</dd>`;
