@@ -170,6 +170,14 @@ JOB_TASK_DEFINITIONS = {
         "base_yield": 0,
         "base_time_per_yield": 0 # Short interaction, similar to greeting
     },
+    "Small Talk": {
+        "description": "Character engages in a brief, casual conversation with a known acquaintance.",
+        "required_tool_type": None,
+        "skill_used": "Social",
+        "resource_produced": None,
+        "base_yield": 0,
+        "base_time_per_yield": 0 # Represents a short social exchange
+    },
 }
 
 # It might also be useful to define tool types if they have specific properties beyond what's in blueprints

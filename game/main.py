@@ -355,6 +355,7 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "warning_count": getattr(character, 'warning_count', 0),
                     "known_characters": getattr(character, 'known_characters', []),
                     "relationships": getattr(character, 'relationships', {}),
+                    "opinions": getattr(character, 'opinions', {}), # Added opinions
                     "dialogue_history": getattr(character, 'dialogue_history', [])[-10:] # Last 10 dialogue entries
                 }
                 self.send_response(200)

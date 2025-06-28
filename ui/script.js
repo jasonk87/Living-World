@@ -173,8 +173,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
                     const charMarker = document.createElement('span');
                     charMarker.classList.add('char-marker');
-                    charMarker.textContent = char.name[0];
-                    charMarker.title = `${char.name} (${char.job}) at (${char.x},${char.y})`;
+                    charMarker.textContent = char.name[0]; // Default: first initial
+
+                    // Basic visual cue for social interaction
+                    const socialGoals = ["Greet Character", "Introduce Self to Stranger", "Small Talk"];
+                    if (socialGoals.includes(char.goal)) {
+                        charMarker.classList.add('socializing');
+                        // Could also change textContent, e.g., to add a speech bubble icon if using FontAwesome or similar
+                        // charMarker.innerHTML = `${char.name[0]} <i class="fas fa-comment"></i>`; // Example
+                        charMarker.title = `${char.name} (${char.job}) - ${char.goal}`;
+                    } else {
+                        charMarker.title = `${char.name} (${char.job}) at (${char.x},${char.y}) - Goal: ${char.goal}`;
+                    }
+
                     charMarker.style.color = char.is_sick ? 'orange' : (char.is_injured ? 'red' : 'blue'); // Dynamic color based on health
 
                     charMarker.addEventListener('click', (e) => {
@@ -298,9 +309,19 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             detailsHtml += `</ul></div>`;
 
+            detailsHtml += `<div id="char-opinions"><h4>Opinions About Others:</h4><ul>`;
+            if (entity.opinions && Object.keys(entity.opinions).length > 0) {
+                Object.entries(entity.opinions).forEach(([charName, opinionTags]) => {
+                    let opinionDetails = Object.entries(opinionTags).map(([tag, score]) => `${tag.replace(/_/g, ' ')}: ${score}`).join(', ');
+                    detailsHtml += `<li><strong>${charName}:</strong> ${opinionDetails}</li>`;
+                });
+            } else {
+                detailsHtml += `<li>N/A</li>`;
+            }
+            detailsHtml += `</ul></div>`;
+
             detailsHtml += `<div id="char-dialogue-history"><h4>Recent Dialogue (last 5):</h4><ul>`;
             if (entity.dialogue_history && entity.dialogue_history.length > 0) {
-                // Assuming dialogue_history is an array of objects/strings. Displaying simply for now.
                 entity.dialogue_history.slice(-5).forEach(dialogueEntry => {
                     let entryText = '';
                     if (dialogueEntry.type === 'greeting' || dialogueEntry.type === 'introduction') {

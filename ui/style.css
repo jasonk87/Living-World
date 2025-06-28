@@ -98,6 +98,11 @@ body {
     z-index: 10; /* Ensure it's above tile background/building char */
 }
 
+.char-marker.socializing {
+    border: 2px solid purple; /* Example: purple border for socializing characters */
+    box-shadow: 0 0 5px purple;
+}
+
 
 #info-panel {
     flex: 1; /* Takes less space than map */
@@ -159,6 +164,21 @@ h2 {
     margin-top: 0;
     font-size: 1.2em;
     color: #333;
+}
+
+/* Styling for Opinions Section */
+#char-opinions ul {
+    list-style-type: none; /* No bullets for opinions list */
+    padding-left: 10px;
+}
+
+#char-opinions li {
+    margin-bottom: 5px;
+    line-height: 1.3;
+}
+
+#char-opinions li strong { /* Character name being opined about */
+    color: #222;
 }
 
 /* Entity Details Panel Styling */

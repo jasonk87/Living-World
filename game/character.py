@@ -67,6 +67,7 @@ class Character:
         # Social Attributes
         self.known_characters: List[str] = [] # List of names of characters met
         # self.relationships is already Dict[str, int] from before, suitable for relationship scores
+        self.opinions: Dict[str, Dict[str, int]] = {} # e.g. {"Liam": {"greeting_style": 1, "small_talk_quality": -1}}
         self.dialogue_history: List[Dict[str, Any]] = [] # List of dialogue interaction dicts
         self.current_goal_details: Optional[Dict[str, Any]] = None # For goals needing specific targets, like greeting
 
@@ -1546,6 +1547,9 @@ class Character:
         elif self.current_goal == "Introduce Self to Stranger":
             self._execute_introduce_self(world)
             return
+        elif self.current_goal == "Small Talk":
+            self._execute_small_talk(world)
+            return
 
 
         # If truly nothing else to do
@@ -1567,49 +1571,68 @@ class Character:
         # If idle or wandering, consider social interaction.
         if self.current_goal in ["Idle", "Wander"] and random.random() < config.SOCIAL_INTERACTION_CHANCE:
             potential_strangers: List[Character] = []
-            potential_known_acquaintances: List[Character] = []
+            potential_known_to_greet: List[Character] = [] # For initial greetings
+            potential_known_for_smalltalk: List[Character] = [] # For small talk
 
             for other_char in world.characters:
                 if other_char.name == self.name:
                     continue
 
                 distance = abs(self.x - other_char.x) + abs(self.y - other_char.y)
-                max_initiation_distance = 5 # Max distance to consider initiating an interaction
+                max_initiation_distance = 5
 
                 if distance <= max_initiation_distance:
-                    # Check for recent interaction to avoid spamming
-                    recently_interacted = False
+                    recently_interacted_today = False
                     if self.dialogue_history:
-                        last_interaction = self.dialogue_history[-1]
-                        if last_interaction.get("target") == other_char.name or last_interaction.get("initiator") == other_char.name:
-                            if world.game_time and (world.game_time.current_day - last_interaction.get("day", -100)) < 1:
-                                recently_interacted = True
+                        for entry in reversed(self.dialogue_history[-3:]): # Check last few interactions
+                            if (entry.get("target") == other_char.name or entry.get("initiator") == other_char.name) and \
+                               world.game_time and (world.game_time.current_day - entry.get("day", -100)) < 1:
+                                recently_interacted_today = True
+                                break
 
-                    if not recently_interacted:
+                    if not recently_interacted_today:
                         if other_char.name not in self.known_characters:
                             potential_strangers.append(other_char)
                         else:
-                            potential_known_acquaintances.append(other_char)
+                            # If known, they are candidates for both greeting (if not recently greeted)
+                            # and small talk. We'll prioritize introduction, then small talk, then greeting.
+                            potential_known_for_smalltalk.append(other_char)
+                            # Greeting is a lower priority if small talk is an option with someone known
+                            # For now, let's simplify: if known, they are potential for small talk or greeting.
+                            # The choice between small talk and greeting for known characters can be random or based on other factors.
+                            # Let's add them to a general "known_can_interact" list for now.
+                            potential_known_to_greet.append(other_char)
+
 
             target_char_for_interaction: Optional[Character] = None
             interaction_type = None
 
+            # Priority: 1. Introduce to strangers, 2. Small talk with known, 3. Greet known (if no small talk chosen)
             if potential_strangers:
                 target_char_for_interaction = random.choice(potential_strangers)
                 interaction_type = "Introduce Self to Stranger"
-            elif potential_known_acquaintances: # Fallback to greeting known characters
-                target_char_for_interaction = random.choice(potential_known_acquaintances)
-                interaction_type = "Greet Character"
+            elif potential_known_for_smalltalk: # If no strangers, consider small talk
+                # Could add another random chance here to decide between small talk and greeting
+                if random.random() < 0.6: # 60% chance to prefer small talk over just a greeting if possible
+                    target_char_for_interaction = random.choice(potential_known_for_smalltalk)
+                    interaction_type = "Small Talk"
+                elif potential_known_to_greet: # Fallback to greet if small talk not chosen
+                    target_char_for_interaction = random.choice(potential_known_to_greet)
+                    interaction_type = "Greet Character"
+            elif potential_known_to_greet: # Only greeting option left for known characters
+                 target_char_for_interaction = random.choice(potential_known_to_greet)
+                 interaction_type = "Greet Character"
+
 
             if target_char_for_interaction and interaction_type:
                 self.current_goal = interaction_type
                 self.current_goal_details = {"target_char_name": target_char_for_interaction.name}
                 self.add_memory(f"Decided to '{interaction_type}' with {target_char_for_interaction.name}.")
 
-                if interaction_type == "Introduce Self to Stranger":
-                    self._execute_introduce_self(world)
-                elif interaction_type == "Greet Character":
-                    self._execute_greet_character(world)
+                # Execute the chosen interaction
+                if interaction_type == "Introduce Self to Stranger": self._execute_introduce_self(world)
+                elif interaction_type == "Greet Character": self._execute_greet_character(world)
+                elif interaction_type == "Small Talk": self._execute_small_talk(world)
                 return
 
     # --- Management Actions ---
@@ -1950,18 +1973,168 @@ class Character:
         self.dialogue_history.append(dialogue_entry)
         target_char.dialogue_history.append(dialogue_entry) # Both characters record the interaction
 
-        self.add_memory(f"Greeted {target_name}. Said: '{dialogue_line_self}'")
-        target_char.add_memory(f"Was greeted by {self.name}. They said: '{dialogue_line_self}'. I replied: '{dialogue_line_target}'")
+        # 4. Form/Update Opinions based on the greeting
+        # Initiator (self) forms an opinion about the target's response style
+        if target_name not in self.opinions: self.opinions[target_name] = {}
+        if target_friendly: self.opinions[target_name]["greeting_response"] = self.opinions[target_name].get("greeting_response", 0) + 1
+        elif target_grumpy: self.opinions[target_name]["greeting_response"] = self.opinions[target_name].get("greeting_response", 0) - 1
+        else: self.opinions[target_name]["greeting_response"] = self.opinions[target_name].get("greeting_response", 0) + 0 # Neutral
+
+        # Target forms an opinion about the initiator's greeting style
+        if self.name not in target_char.opinions: target_char.opinions[self.name] = {}
+        if initiator_friendly: target_char.opinions[self.name]["greeting_style"] = target_char.opinions[self.name].get("greeting_style", 0) + 1
+        elif initiator_grumpy: target_char.opinions[self.name]["greeting_style"] = target_char.opinions[self.name].get("greeting_style", 0) - 1
+        else: target_char.opinions[self.name]["greeting_style"] = target_char.opinions[self.name].get("greeting_style", 0) + 0 # Neutral
+
+        # Clamp opinion scores (e.g., between -5 and 5 for this simple tag)
+        self.opinions[target_name]["greeting_response"] = max(-5, min(5, self.opinions[target_name].get("greeting_response",0)))
+        target_char.opinions[self.name]["greeting_style"] = max(-5, min(5, target_char.opinions[self.name].get("greeting_style",0)))
+
+
+        self.add_memory(f"Greeted {target_name}. Said: '{dialogue_line_self}'. My opinion of their response style: {self.opinions[target_name]['greeting_response']}")
+        target_char.add_memory(f"Was greeted by {self.name}. They said: '{dialogue_line_self}'. My opinion of their style: {target_char.opinions[self.name]['greeting_style']}. I replied: '{dialogue_line_target}'")
         world.add_event_log_message(f"{self.name} greeted {target_name}.")
 
-        # 4. Target character's reaction:
-        #    For now, the target doesn't change their current goal significantly,
-        #    but they acknowledge the greeting.
-        #    Future: Target might pause their task, or decide to engage in further conversation.
-        if target_char.current_goal != "Greet Character": # Don't interrupt if they were also trying to greet
+        # 5. Target character's reaction:
+        if target_char.current_goal != "Greet Character":
             target_char.add_memory(f"Acknowledged greeting from {self.name} while I was {target_char.current_goal}.")
 
-        # 5. Greeting complete. Reset goal.
+        # 6. Greeting complete. Reset goal.
+        self.current_goal = self.job_default_goal() or "Idle"
+        self.current_goal_details = None
+        return
+
+    def _execute_small_talk(self, world: 'World'):
+        if not self.current_goal_details or "target_char_name" not in self.current_goal_details:
+            self.add_memory("Wanted to make small talk, but no target specified.")
+            self.current_goal = self.job_default_goal() or "Idle"
+            self.current_goal_details = None
+            return
+
+        target_name = self.current_goal_details["target_char_name"]
+        target_char = world.get_character_by_name(target_name)
+
+        if not target_char:
+            self.add_memory(f"Wanted to make small talk with {target_name}, but they could not be found.")
+            self.current_goal = self.job_default_goal() or "Idle"
+            self.current_goal_details = None
+            return
+
+        # Small talk should only be with known characters
+        if target_name not in self.known_characters:
+            self.add_memory(f"Wanted to make small talk with {target_name}, but I don't know them. Maybe I should introduce myself first.")
+            self.current_goal = "Introduce Self to Stranger" # Or just Idle
+            # current_goal_details remains the same
+            self._execute_introduce_self(world) # Attempt introduction
+            return
+
+        distance = abs(self.x - target_char.x) + abs(self.y - target_char.y)
+        max_interaction_distance = 2
+
+        if distance > max_interaction_distance:
+            self.add_memory(f"Trying to make small talk with {target_name}, moving closer.")
+            self.move_towards(target_char.x, target_char.y, world)
+            return
+
+        # --- At Interaction Distance with a Known Character ---
+        self.add_memory(f"Starting small talk with {target_name}.")
+
+        # 1. Relationship Impact (minor, can be neutral or slightly positive/negative)
+        initiator_friendly = "Friendly" in self.traits
+        initiator_grumpy = "Grumpy" in self.traits
+        initiator_chatty = "Chatty" in self.traits # New trait to consider
+        target_friendly = "Friendly" in target_char.traits
+        target_grumpy = "Grumpy" in target_char.traits
+
+        rel_change = 0
+        if initiator_chatty: rel_change +=1 # Chatty people enjoy small talk more
+        if initiator_friendly: rel_change +=1
+
+        if target_friendly: rel_change +=1
+        elif target_grumpy: rel_change -=1 # Grumpy people might dislike small talk
+
+        # Normalize change to be small
+        if rel_change > 1: rel_change = 1
+        if rel_change < 0 and not (initiator_grumpy and target_grumpy) : rel_change = 0 # Avoid negative impact unless both are grumpy
+        if initiator_grumpy and target_grumpy: rel_change = 0 # Grumpy people might not bond over small talk
+
+        if rel_change != 0:
+            self.modify_relationship(target_name, rel_change, world, reason=f"Had some small talk with {target_name}.")
+            target_char.modify_relationship(self.name, rel_change, world, reason=f"Had some small talk with {self.name}.")
+
+        # 2. Dialogue Snippets for Small Talk
+        # Initiator's line (topics: weather, work, general observation)
+        small_talk_topics_initiator = [
+            f"The weather's been something else lately, hasn't it, {target_name}?",
+            "Keeping busy with work, I imagine?",
+            "Anything interesting happen around here lately?",
+            "Just taking a moment. How are things with you?"
+        ]
+        if initiator_friendly:
+            small_talk_topics_initiator.extend([
+                f"Lovely day, {target_name}!",
+                f"Hope you're doing well, {target_name}."
+            ])
+        elif initiator_grumpy:
+            small_talk_topics_initiator = [ # Grumpy small talk is more like a statement
+                "Weather's terrible.",
+                "Work never ends.",
+                "Quiet around here... too quiet."
+            ]
+        dialogue_line_self = random.choice(small_talk_topics_initiator)
+
+        # Target's reply
+        small_talk_replies_target = [
+            "Indeed it has.", "Same old, same old.", "Not much to report.", "Doing alright, thanks."
+        ]
+        if target_friendly:
+            small_talk_replies_target.extend([
+                "Yes, quite lovely!", "Oh, you know, the usual hustle and bustle!", "Can't complain!"
+            ])
+        elif target_grumpy:
+            small_talk_replies_target = [
+                "Hmph.", "Suppose so.", "Busy enough.", "Fine."
+            ]
+        dialogue_line_target = random.choice(small_talk_replies_target)
+
+        dialogue_entry = {
+            "type": "small_talk",
+            "initiator": self.name,
+            "target": target_name,
+            "day": world.game_time.current_day if world.game_time else -1,
+            "dialogue_exchanges": [
+                {"speaker": self.name, "line": dialogue_line_self},
+                {"speaker": target_name, "line": dialogue_line_target}
+            ]
+        }
+        self.dialogue_history.append(dialogue_entry)
+        target_char.dialogue_history.append(dialogue_entry)
+
+        # 3. Form/Update Opinions based on small talk
+        # Opinion of target's engagement in small talk
+        if target_name not in self.opinions: self.opinions[target_name] = {}
+        opinion_tag_target = "small_talk_engagement"
+        current_opinion_target = self.opinions[target_name].get(opinion_tag_target, 0)
+        if target_friendly: current_opinion_target +=1
+        elif target_grumpy: current_opinion_target -=1
+        self.opinions[target_name][opinion_tag_target] = max(-5, min(5, current_opinion_target))
+
+        # Opinion of initiator's small talk quality (from target's perspective)
+        if self.name not in target_char.opinions: target_char.opinions[self.name] = {}
+        opinion_tag_initiator = "small_talk_quality"
+        current_opinion_initiator = target_char.opinions[self.name].get(opinion_tag_initiator, 0)
+        if initiator_chatty: current_opinion_initiator +=1
+        if initiator_friendly: current_opinion_initiator +=1
+        elif initiator_grumpy: current_opinion_initiator -=1 # Grumpy small talk might be seen as poor quality
+        target_char.opinions[self.name][opinion_tag_initiator] = max(-5, min(5, current_opinion_initiator))
+
+        self.add_memory(f"Made small talk with {target_name}. Topic: '{dialogue_line_self}'. My opinion of their engagement: {self.opinions[target_name][opinion_tag_target]}")
+        target_char.add_memory(f"Had small talk with {self.name}. My opinion of their quality: {target_char.opinions[self.name][opinion_tag_initiator]}. Replied: '{dialogue_line_target}'")
+        world.add_event_log_message(f"{self.name} and {target_name} made small talk.")
+
+        if target_char.current_goal not in ["Small Talk", "Greet Character", "Introduce Self to Stranger"]:
+             target_char.add_memory(f"Chatted briefly with {self.name} while I was {target_char.current_goal}.")
+
         self.current_goal = self.job_default_goal() or "Idle"
         self.current_goal_details = None
         return
@@ -2084,11 +2257,24 @@ class Character:
         self.dialogue_history.append(dialogue_entry)
         target_char.dialogue_history.append(dialogue_entry)
 
-        self.add_memory(f"Introduced myself to {target_name}. Said: '{dialogue_line_self}'")
-        target_char.add_memory(f"{self.name} introduced themselves. They said: '{dialogue_line_self}'. I replied: '{dialogue_line_target}'")
+        # 4. Form/Update Opinions based on the introduction
+        if target_name not in self.opinions: self.opinions[target_name] = {}
+        if target_friendly: self.opinions[target_name]["introduction_response"] = self.opinions[target_name].get("introduction_response", 0) + 1
+        elif target_grumpy: self.opinions[target_name]["introduction_response"] = self.opinions[target_name].get("introduction_response", 0) - 1
+        else: self.opinions[target_name]["introduction_response"] = self.opinions[target_name].get("introduction_response", 0) + 0
+        self.opinions[target_name]["introduction_response"] = max(-5, min(5, self.opinions[target_name].get("introduction_response",0)))
+
+        if self.name not in target_char.opinions: target_char.opinions[self.name] = {}
+        if initiator_friendly: target_char.opinions[self.name]["introduction_style"] = target_char.opinions[self.name].get("introduction_style", 0) + 1
+        elif initiator_grumpy: target_char.opinions[self.name]["introduction_style"] = target_char.opinions[self.name].get("introduction_style", 0) - 1
+        else: target_char.opinions[self.name]["introduction_style"] = target_char.opinions[self.name].get("introduction_style", 0) + 0
+        target_char.opinions[self.name]["introduction_style"] = max(-5, min(5, target_char.opinions[self.name].get("introduction_style",0)))
+
+        self.add_memory(f"Introduced myself to {target_name}. Said: '{dialogue_line_self}'. My opinion of their response: {self.opinions[target_name]['introduction_response']}")
+        target_char.add_memory(f"{self.name} introduced themselves. They said: '{dialogue_line_self}'. My opinion of their style: {target_char.opinions[self.name]['introduction_style']}. I replied: '{dialogue_line_target}'")
         world.add_event_log_message(f"{self.name} introduced themselves to {target_name}.")
 
-        if target_char.current_goal != "Introduce Self to Stranger": # Avoid interrupting if they were also trying to introduce
+        if target_char.current_goal != "Introduce Self to Stranger":
             target_char.add_memory(f"Met {self.name} while I was {target_char.current_goal}.")
 
         self.current_goal = self.job_default_goal() or "Idle"
