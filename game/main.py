@@ -115,6 +115,22 @@ def tick_simulation():
 
             # Daily needs update and goal reset for idle characters
             for char_daily_reset in game_world.characters:
+                # Sickness & Injury Chance
+                if not char_daily_reset.is_sick and random.random() < 0.005: # 0.5% chance per day to get sick
+                    char_daily_reset.is_sick = True
+                    char_daily_reset.sickness_severity = random.randint(1, 3) # Mild sickness
+                    game_world.add_event_log_message(f"{char_daily_reset.name} has fallen ill (Severity: {char_daily_reset.sickness_severity}).")
+                    char_daily_reset.add_memory("Fell ill.")
+
+                injury_chance = 0.002 # Base 0.2% chance
+                if char_daily_reset.job in ["Builder", "Woodcutter", "Stonemason", "Miner"]: # Example risky jobs
+                    injury_chance = 0.005 # 0.5% for riskier jobs
+                if not char_daily_reset.is_injured and random.random() < injury_chance:
+                    char_daily_reset.is_injured = True
+                    char_daily_reset.injury_severity = random.randint(1, 3) # Mild injury
+                    game_world.add_event_log_message(f"{char_daily_reset.name} has been injured (Severity: {char_daily_reset.injury_severity}).")
+                    char_daily_reset.add_memory("Got injured.")
+
                 char_daily_reset.needs['Hunger'] = max(0, char_daily_reset.needs.get('Hunger', 100) - random.randint(10, 20))
                 char_daily_reset.needs['Thirst'] = max(0, char_daily_reset.needs.get('Thirst', 100) - random.randint(15, 25))
                 # ... other needs updates

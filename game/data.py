@@ -148,6 +148,13 @@ JOB_TASK_DEFINITIONS = {
         "base_yield": 0,
         "base_time_per_yield": 0 # Action takes a certain number of ticks, not yield-based
     },
+    "Seek Medical Attention": {
+        "required_tool_type": None,
+        "skill_used": None, # Not a skilled task, but a state-driven need
+        "resource_produced": None,
+        "base_yield": 0,
+        "base_time_per_yield": 0 # Goal is to reach a medic/clinic
+    },
 }
 
 # It might also be useful to define tool types if they have specific properties beyond what's in blueprints

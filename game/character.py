@@ -503,24 +503,47 @@ class Character:
             self.current_goal = "Fetch Tool"; self.tool_to_fetch_type = tool_type; self.task_work_progress = 0; return False
 
         # --- Trait Effects on Progress ---
-        current_progress_gain = 1
+        current_progress_gain = 1.0 # Start with float for easier modification
         is_lazy_this_tick = False
+
+        # Health Effects on Progress
+        if self.is_sick:
+            if self.sickness_severity > 7: # Severe sickness
+                current_progress_gain *= 0.1 # Drastically reduced
+                self.add_memory(f"Feeling too sick to work effectively on {task_name} (Severity: {self.sickness_severity}).")
+            elif self.sickness_severity > 3: # Moderate sickness
+                current_progress_gain *= 0.5 # Halved
+                self.add_memory(f"Feeling sick, working slowly on {task_name} (Severity: {self.sickness_severity}).")
+            else: # Mild sickness
+                current_progress_gain *= 0.8 # Slightly reduced
+
+        if self.is_injured:
+            if self.injury_severity > 7: # Severe injury
+                current_progress_gain *= 0.05 # Almost no progress
+                self.add_memory(f"Too injured to work properly on {task_name} (Severity: {self.injury_severity}).")
+            elif self.injury_severity > 3: # Moderate injury
+                current_progress_gain *= 0.4 # Significantly reduced
+                self.add_memory(f"Working with difficulty due to injury on {task_name} (Severity: {self.injury_severity}).")
+            else: # Mild injury
+                current_progress_gain *= 0.75 # Noticeably reduced
 
         if "Lazy" in self.traits and not "Focused" in self.traits:
             if random.random() < 0.25: # 25% chance to be lazy
-                current_progress_gain = 0
+                current_progress_gain = 0 # Overrides health effects if lazy for this tick
                 is_lazy_this_tick = True
                 self.add_memory(f"Felt lazy and decided to slack off for a bit while working on '{task_name}'.")
 
-        if current_progress_gain > 0: # Don't apply positive progress traits if slacked off
+        if current_progress_gain > 0 and not is_lazy_this_tick: # Don't apply positive progress traits if slacked off or health brought to 0
             if "Diligent" in self.traits:
                 if random.random() < 0.25: # 25% chance for bonus progress
-                    current_progress_gain += 1
+                    current_progress_gain += 0.5 # Additive bonus, or could be multiplicative
                     self.add_memory(f"Worked with extra diligence on '{task_name}'.")
-            elif "Focused" in self.traits: # Focused but not Diligent, and not Lazy (or Lazy was overridden)
+            elif "Focused" in self.traits: # Focused but not Diligent
                 if random.random() < 0.10: # 10% chance for smaller bonus
-                    current_progress_gain += 1
+                    current_progress_gain += 0.25
                     self.add_memory(f"Remained focused and made good progress on '{task_name}'.")
+
+        current_progress_gain = max(0, current_progress_gain) # Ensure progress isn't negative
 
         self.task_work_progress += current_progress_gain
 
@@ -1033,27 +1056,42 @@ class Character:
             # For now, they are stuck this tick if no supplies.
             return
 
-        # Apply treatment effect (simplified)
-        treatment_potency = 1 # Base potency
-        if item_used_for_treatment == "Bandages": treatment_potency = 2 # Bandages are better
+        # Apply treatment effect
+        treatment_successful_this_tick = False
+        if item_used_for_treatment == "Bandages" and target_patient.is_injured:
+            reduction = random.randint(2, 3) # Bandages are quite effective for injuries
+            # Skill influence - e.g. higher skill more likely to get higher end of reduction or small bonus
+            if self.skills.get("Medicine", {}).get("level", 0) > 2: reduction += random.choice([0,1])
 
-        if target_patient.is_injured:
-            target_patient.injury_severity -= treatment_potency
-            self.add_memory(f"Treated {target_patient.name}'s injuries. Severity now {target_patient.injury_severity}.")
+            target_patient.injury_severity -= reduction
+            self.add_memory(f"Applied Bandages to {target_patient.name}'s injuries, severity reduced by {reduction} to {max(0, target_patient.injury_severity)}.")
+            treatment_successful_this_tick = True
             if target_patient.injury_severity <= 0:
                 target_patient.is_injured = False
                 target_patient.injury_severity = 0
-                self.add_memory(f"{target_patient.name} has recovered from injuries.")
+                self.add_memory(f"{target_patient.name} has fully recovered from their injuries!")
+                world.add_event_log_message(f"{target_patient.name} recovered from injuries thanks to {self.name}.")
 
-        if target_patient.is_sick: # Can treat sickness if not injured, or if injury is now handled
-            target_patient.sickness_severity -= treatment_potency
-            self.add_memory(f"Treated {target_patient.name}'s sickness. Severity now {target_patient.sickness_severity}.")
+        elif item_used_for_treatment == "Herbs" and target_patient.is_sick:
+            reduction = random.randint(1, 2) # Herbs are moderately effective for sickness
+            if self.skills.get("Medicine", {}).get("level", 0) > 1: reduction += random.choice([0,1])
+
+            target_patient.sickness_severity -= reduction
+            self.add_memory(f"Administered Herbs to {target_patient.name} for sickness, severity reduced by {reduction} to {max(0, target_patient.sickness_severity)}.")
+            treatment_successful_this_tick = True
             if target_patient.sickness_severity <= 0:
                 target_patient.is_sick = False
                 target_patient.sickness_severity = 0
-                self.add_memory(f"{target_patient.name} has recovered from sickness.")
+                self.add_memory(f"{target_patient.name} has fully recovered from their sickness!")
+                world.add_event_log_message(f"{target_patient.name} recovered from sickness thanks to {self.name}.")
 
-        self._grant_skill_experience("Medicine", 0.5 * treatment_potency, world) # Grant XP for treatment
+        elif item_used_for_treatment: # Used an item but it wasn't the right type for the condition
+            self.add_memory(f"Tried to use {item_used_for_treatment} on {target_patient.name}, but it wasn't effective for their current condition.")
+
+        if treatment_successful_this_tick:
+            self._grant_skill_experience("Medicine", 1.5, world) # More XP for successful application
+        else:
+            self._grant_skill_experience("Medicine", 0.2, world) # Minor XP for attempt
 
         # After treatment, Medic might look for another patient or return to standby.
         # For now, will re-evaluate from top next tick.
@@ -1103,7 +1141,8 @@ class Character:
 
         # Periodically review appointments
         if random.random() < 0.1: # 10% chance each time Mayor oversees settlement
-            self._execute_manage_appointments(world)
+            if self.job == "Mayor": # Ensure only mayor does this
+                self._execute_manage_appointments(world)
 
         # Chance to give a speech
         if random.random() < 0.02: # 2% chance each time Mayor oversees settlement
@@ -1293,6 +1332,49 @@ class Character:
         # Could add logic to return to a "Guardhouse" or report to Sheriff periodically.
         return
 
+    def _execute_seek_medical_attention(self, world: 'World'):
+        self.add_memory("Feeling unwell, seeking medical attention.")
+
+        # Find the nearest Medic or CMO
+        # For simplicity, find any character with job "Medic" or "Chief Medical Officer"
+        # Future: Could search for a "Clinic" building first.
+        medical_personnel: List['Character'] = []
+        for char in world.characters:
+            if char.job in ["Medic", "Chief Medical Officer"] and char.name != self.name:
+                medical_personnel.append(char)
+
+        if not medical_personnel:
+            self.add_memory("Cannot find any medical personnel. Resting and hoping for the best.")
+            # Potentially change goal to "Rest" if such a goal exists, or just Idle.
+            # For now, if no medic, they might just stop seeking.
+            self.current_goal = "Idle"
+            return
+
+        # Find the closest one (simple distance)
+        closest_medic: Optional['Character'] = None
+        min_dist = float('inf')
+        for medic in medical_personnel:
+            dist = abs(self.x - medic.x) + abs(self.y - medic.y)
+            if dist < min_dist:
+                min_dist = dist
+                closest_medic = medic
+
+        if closest_medic:
+            if (self.x, self.y) == (closest_medic.x, closest_medic.y):
+                self.add_memory(f"Reached {closest_medic.name} for medical help.")
+                # Now the medic should ideally take over. The sick person might just idle here,
+                # or a new "BeingTreated" state/goal could be introduced.
+                # For now, setting to Idle. The Medic's `_execute_provide_medical_care`
+                # should find this character as a patient.
+                self.current_goal = "Idle"
+            else:
+                self.add_memory(f"Moving towards {closest_medic.name} at ({closest_medic.x},{closest_medic.y}) for help.")
+                self.move_towards(closest_medic.x, closest_medic.y, world)
+        else: # Should not happen if medical_personnel list was populated
+            self.add_memory("Could not determine closest medic. Resting.")
+            self.current_goal = "Idle"
+        return
+
     def _execute_give_speech(self, world: 'World'):
         if self.job != "Mayor":
             self.current_goal = self.job_default_goal() or "Idle"
@@ -1341,6 +1423,30 @@ class Character:
         if not world.game_time:
             self.current_goal = "Idle"
             return
+
+        # Health check: If severely sick or injured, character may change goal
+        # Thresholds for "severe" can be defined in config later
+        # For now, let's use severity > 5 as a trigger to seek help.
+        if self.current_goal != "Seek Medical Attention": # Avoid interrupting if already seeking help
+            if self.is_sick and self.sickness_severity > 5:
+                self.add_memory(f"Feeling very sick (Severity: {self.sickness_severity}). Need medical attention.")
+                self.current_goal = "Seek Medical Attention"
+                # No return here, let the goal execution happen below if this is the first time it's set.
+            elif self.is_injured and self.injury_severity > 5:
+                self.add_memory(f"Badly injured (Severity: {self.injury_severity}). Need medical attention.")
+                self.current_goal = "Seek Medical Attention"
+
+        # If goal changed to Seek Medical Attention, execute that immediately this tick.
+        if self.current_goal == "Seek Medical Attention":
+            # _execute_seek_medical_attention will be added later. For now, just log and idle.
+            # self._execute_seek_medical_attention(world)
+            # For now, if they need medical attention but can't execute the goal yet, they might just idle.
+            # This ensures they don't attempt other work while severely ill/injured if the seek goal isn't fully implemented.
+            # To prevent them from doing normal work, we can return here if the goal was just set.
+            # Or, _execute_generic_task will handle reduced efficiency.
+            # For now, let's assume _execute_generic_task will handle reduced work.
+            # If _execute_seek_medical_attention is implemented, it would be called here.
+            pass # Let it fall through to goal execution or _execute_generic_task check
 
         # Minimal Needs Check (Energy for Builder) - can be expanded later
         # For this test, assume energy is not a blocker or handled by _execute_build_order
@@ -1424,6 +1530,9 @@ class Character:
             return
         elif self.current_goal == "Give Speech": # Added for Mayor
             self._execute_give_speech(world)
+            return
+        elif self.current_goal == "Seek Medical Attention": # Added for sick/injured
+            self._execute_seek_medical_attention(world)
             return
 
 
