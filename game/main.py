@@ -133,6 +133,7 @@ def tick_simulation():
 
                 char_daily_reset.needs['Hunger'] = max(0, char_daily_reset.needs.get('Hunger', 100) - random.randint(10, 20))
                 char_daily_reset.needs['Thirst'] = max(0, char_daily_reset.needs.get('Thirst', 100) - random.randint(15, 25))
+                char_daily_reset.needs['Energy'] = max(0, char_daily_reset.needs.get('Energy', 100) - random.randint(10, 15)) # Energy decay from general activity
 
                 # Social Need Decay
                 current_social_need = char_daily_reset.needs.get('Social', 70) # Default to 70 if somehow not set

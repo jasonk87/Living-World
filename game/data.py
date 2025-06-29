@@ -194,6 +194,30 @@ JOB_TASK_DEFINITIONS = {
         "base_yield": 0,
         "base_time_per_yield": 0 # Short interaction
     },
+    "Ask for Help": {
+        "description": "Character asks another for help with a task, a resource, or a tool.",
+        "required_tool_type": None,
+        "skill_used": "Social",
+        "resource_produced": None, # Indirectly might lead to resource acquisition or task progress
+        "base_yield": 0,
+        "base_time_per_yield": 0 # Interaction time
+    },
+    "Offer Help": {
+        "description": "Character proactively offers help or a resource to someone they perceive as needing it.",
+        "required_tool_type": None,
+        "skill_used": "Social", # Also influenced by traits like "Kind", "Generous"
+        "resource_produced": None, # Can result in resource transfer or task assistance
+        "base_yield": 0,
+        "base_time_per_yield": 0 # Interaction time
+    },
+    "Argue": {
+        "description": "Characters engage in a heated disagreement.",
+        "required_tool_type": None,
+        "skill_used": "Social", # Or perhaps a 'Temperament' related skill/check
+        "resource_produced": None, # Results in relationship/opinion changes
+        "base_yield": 0,
+        "base_time_per_yield": 0 # Short, impactful interaction
+    },
 }
 
 # It might also be useful to define tool types if they have specific properties beyond what's in blueprints

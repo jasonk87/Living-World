@@ -74,6 +74,8 @@ class Character:
 
         if 'Social' not in self.needs: # Initialize social need if not provided
             self.needs['Social'] = 70 # Default starting social level (0-100)
+        if 'Energy' not in self.needs: # Initialize energy need if not provided
+            self.needs['Energy'] = 100 # Default starting energy level
 
         # Attributes for build orders (re-adding them here as they were missed)
         self.active_build_order_id: Optional[str] = None
@@ -1459,6 +1461,35 @@ class Character:
             # If _execute_seek_medical_attention is implemented, it would be called here.
             pass # Let it fall through to goal execution or _execute_generic_task check
 
+        # --- Reactive "Ask for Help" for Critical Needs ---
+        # Check before proactive social interactions or job defaults if not already handling a critical state.
+        social_goals_for_ask_check = ["Ask for Help", "Seek Medical Attention"] # Goals that address critical states
+        if self.current_goal not in social_goals_for_ask_check:
+            # Example: Ask for food if critically hungry and has no food
+            if self.needs.get("Hunger", 100) < config.CRITICAL_NEED_THRESHOLD_FOR_HELP and self.inventory.get("Food", 0) == 0: # Assuming "Food" is an item type
+                if random.random() < config.ASK_FOR_HELP_CHANCE:
+                    potential_helpers: List[Character] = []
+                    for other_char in world.characters:
+                        if other_char.name == self.name or other_char.name not in self.known_characters:
+                            continue
+                        distance = abs(self.x - other_char.x) + abs(self.y - other_char.y)
+                        if distance <= 3 and other_char.inventory.get("Food", 0) > 0: # Nearby and has food
+                            potential_helpers.append(other_char)
+
+                    if potential_helpers:
+                        # Prefer helpers with higher relationship or "Generous" trait
+                        potential_helpers.sort(key=lambda h: (("Generous" in h.traits), self.get_relationship_score(h.name)), reverse=True)
+                        target_helper = potential_helpers[0]
+                        self.current_goal = "Ask for Help"
+                        self.current_goal_details = {
+                            "target_char_name": target_helper.name,
+                            "help_type": "resource",
+                            "item_name": "Food", # Assuming "Food" is the item name for generic food
+                            "quantity": 1
+                        }
+                        self.add_memory(f"Critically hungry, decided to ask {target_helper.name} for food.")
+                        return # Goal set, will be executed by main dispatcher
+
         # Minimal Needs Check (Energy for Builder) - can be expanded later
         # For this test, assume energy is not a blocker or handled by _execute_build_order
         # if self.job == "Builder" and self.needs.get("Energy", 100) < 10:
@@ -1564,12 +1595,17 @@ class Character:
 
         # If truly nothing else to do
         if self.current_goal == "Idle" or self.current_goal is None:
-            # print(f"{self.name} is Idle.")
-            return
+            # print(f"{self.name} is Idle, will wander a bit.")
+            self._execute_wander(world) # Make idle characters wander
+            # The return is removed so the social interaction block below can still be reached
+            # if they are idle/wandering.
 
-        if self.current_goal == "Wander":
+        elif self.current_goal == "Wander": # Explicit Wander goal
             self._execute_wander(world)
-            return
+            # The return is removed so the social interaction block below can still be reached
+
+        # --- Social Interaction Initiation (Basic) ---
+        # If idle or wandering, consider social interaction.
 
         # If a goal is set but not handled above (e.g. a generic task name directly set as goal)
         # This minimal version doesn't use generic tasks directly for builder.
@@ -1670,13 +1706,11 @@ class Character:
                 # No need to call _execute_* here, as the goal will be picked up by the elif chain.
                 return # Goal has been set, action for this tick is to initiate this.
 
-        # Reactive Social Interaction Check (e.g., Offer Comfort)
-        # This check happens even if not strictly Idle/Wandering, but not if already in a social goal.
-        # Higher priority than general idling if conditions are met.
-        social_goals = ["Greet Character", "Introduce Self to Stranger", "Small Talk", "Share Positive News", "Offer Comfort"]
-        if self.current_goal not in social_goals : # Avoid interrupting an ongoing social interaction
-            # Consider offering comfort if someone nearby is distressed
-            # Trait influence: "Kind", "Compassionate" characters are more likely to offer comfort.
+        # Reactive Social Interaction Checks (Offer Comfort, Argue)
+        # These checks happen even if not strictly Idle/Wandering, but not if already in a social goal.
+        social_goals = ["Greet Character", "Introduce Self to Stranger", "Small Talk", "Share Positive News", "Offer Comfort", "Argue", "Ask for Help"]
+        if self.current_goal not in social_goals :
+            # --- Offer Comfort Check ---
             comfort_chance_modifier = 0.0
             if "Kind" in self.traits: comfort_chance_modifier += 0.3
             if "Compassionate" in self.traits: comfort_chance_modifier += 0.4 # Stronger pull for compassionate
@@ -1714,6 +1748,53 @@ class Character:
                     self.add_memory(f"Noticed {target_for_comfort.name} seems distressed. Decided to offer comfort.")
                     # Execution will happen in the main goal dispatch elif chain.
                     return # Goal set.
+
+            # --- Potential for Argument Check ---
+            # Lower chance than comfort, but can be triggered by very bad relations/opinions or clashing volatile traits.
+            argue_chance_modifier = 0.0
+            if "Hot-headed" in self.traits: argue_chance_modifier += 0.15
+            if "Grumpy" in self.traits: argue_chance_modifier += 0.05
+
+            if random.random() < (0.05 + argue_chance_modifier): # Base 5% + trait bonus
+                potential_argue_targets: List[Character] = []
+                for other_char in world.characters:
+                    if other_char.name == self.name or other_char.name not in self.known_characters:
+                        continue
+
+                    distance = abs(self.x - other_char.x) + abs(self.y - other_char.y)
+                    if distance <= 2: # Arguments usually happen up close
+                        relationship_to_target = self.get_relationship_score(other_char.name)
+                        opinion_sum_of_target = sum(self.opinions.get(other_char.name, {}).values())
+
+                        # Conditions for considering an argument:
+                        # Very bad relationship OR very negative opinion OR both are hot-headed
+                        trigger_argument = False
+                        if relationship_to_target < -50: trigger_argument = True
+                        elif opinion_sum_of_target < -8: trigger_argument = True # Sum of opinion tags is very negative
+                        elif "Hot-headed" in self.traits and "Hot-headed" in other_char.traits and random.random() < 0.3: # Two hot-heads have a higher base chance
+                            trigger_argument = True
+
+                        if trigger_argument:
+                            # Avoid arguing with the same person too frequently if last interaction was already an argument
+                            recently_argued_with = False
+                            if self.dialogue_history:
+                                for entry in reversed(self.dialogue_history[-2:]): # Check last couple interactions
+                                    if entry.get("type") == "argue" and \
+                                       (entry.get("target") == other_char.name or entry.get("initiator") == other_char.name) and \
+                                       world.game_time and (world.game_time.current_day - entry.get("day", -100)) < 1:
+                                        recently_argued_with = True
+                                        break
+                            if not recently_argued_with:
+                                potential_argue_targets.append(other_char)
+
+                if potential_argue_targets:
+                    # Could add weighting here too (e.g. argue with most disliked)
+                    target_to_argue_with = random.choice(potential_argue_targets)
+                    self.current_goal = "Argue"
+                    self.current_goal_details = {"target_char_name": target_to_argue_with.name}
+                    self.add_memory(f"Feeling confrontational towards {target_to_argue_with.name}. Decided to argue.")
+                    return # Goal set
+
 
     # --- Management Actions ---
     def conduct_performance_review(self, subordinate_char_name: str, world: 'World'):
@@ -2098,6 +2179,251 @@ class Character:
         self.current_goal_details = None
         return
 
+    def _execute_argue(self, world: 'World'):
+        if not self.current_goal_details or "target_char_name" not in self.current_goal_details:
+            self.add_memory("Wanted to argue, but no target specified.")
+            self.current_goal = self.job_default_goal() or "Idle"
+            self.current_goal_details = None
+            return
+
+        target_name = self.current_goal_details["target_char_name"]
+        target_char = world.get_character_by_name(target_name)
+
+        # Reason for argument can be passed in current_goal_details if needed, e.g. {"reason": "conflicting_traits"}
+        # For now, the trigger logic is in decide_action.
+
+        if not target_char:
+            self.add_memory(f"Wanted to argue with {target_name}, but they could not be found.")
+            self.current_goal = self.job_default_goal() or "Idle"
+            self.current_goal_details = None
+            return
+
+        distance = abs(self.x - target_char.x) + abs(self.y - target_char.y)
+        max_interaction_distance = 2
+        if distance > max_interaction_distance:
+            self.add_memory(f"Trying to argue with {target_name}, moving closer.")
+            self.move_towards(target_char.x, target_char.y, world)
+            return
+
+        self.add_memory(f"Having an argument with {target_name}.")
+
+        initiator_hotheaded = "Hot-headed" in self.traits
+        initiator_grumpy = "Grumpy" in self.traits
+        target_hotheaded = "Hot-headed" in target_char.traits
+        target_grumpy = "Grumpy" in target_char.traits
+
+        # 1. Relationship Impact (Significant negative impact)
+        rel_penalty = -10
+        if initiator_hotheaded or target_hotheaded: rel_penalty -= 5 # Hot-headed arguments are worse
+        if initiator_grumpy and target_grumpy: rel_penalty -=2 # Two grumps arguing is extra bad
+
+        self.modify_relationship(target_name, rel_penalty, world, reason=f"Had an argument with {target_name}.")
+        target_char.modify_relationship(self.name, rel_penalty, world, reason=f"Had an argument with {self.name}.")
+
+        # 2. Dialogue (simple argumentative lines)
+        arg_lines_initiator = [
+            f"I completely disagree with your approach, {target_name}!",
+            "That's just not right, and you know it!",
+            "Are you even listening to yourself?"
+        ]
+        if initiator_hotheaded: arg_lines_initiator.append(f"This is outrageous, {target_name}!")
+        elif initiator_grumpy: arg_lines_initiator.append(f"Whatever, {target_name}. You're wrong.")
+
+        arg_lines_target = [
+            f"Oh, here we go again, {self.name}...",
+            "You're the one not making any sense!",
+            "I don't have time for this nonsense."
+        ]
+        if target_hotheaded: arg_lines_target.append(f"How dare you say that to me, {self.name}?!")
+        elif target_grumpy: arg_lines_target.append(f"Just leave me alone, {self.name}.")
+
+        dialogue_line_self = random.choice(arg_lines_initiator)
+        dialogue_line_target = random.choice(arg_lines_target)
+
+        dialogue_entry = {
+            "type": "argue", "initiator": self.name, "target": target_name,
+            "day": world.game_time.current_day if world.game_time else -1,
+            "dialogue_exchanges": [ {"speaker": self.name, "line": dialogue_line_self}, {"speaker": target_name, "line": dialogue_line_target} ]
+        }
+        self.dialogue_history.append(dialogue_entry)
+        target_char.dialogue_history.append(dialogue_entry)
+
+        # 3. Opinion Impact
+        if target_name not in self.opinions: self.opinions[target_name] = {}
+        self.opinions[target_name]["argumentative"] = self.opinions[target_name].get("argumentative", 0) - 2
+        self.opinions[target_name]["disagreeable"] = self.opinions[target_name].get("disagreeable", 0) -1
+        self.opinions[target_name]["argumentative"] = max(-5, min(5, self.opinions[target_name].get("argumentative",0)))
+        self.opinions[target_name]["disagreeable"] = max(-5, min(5, self.opinions[target_name].get("disagreeable",0)))
+
+
+        if self.name not in target_char.opinions: target_char.opinions[self.name] = {}
+        target_char.opinions[self.name]["argumentative"] = target_char.opinions[self.name].get("argumentative", 0) - 2
+        target_char.opinions[self.name]["disagreeable"] = target_char.opinions[self.name].get("disagreeable", 0) -1
+        target_char.opinions[self.name]["argumentative"] = max(-5, min(5, target_char.opinions[self.name].get("argumentative",0)))
+        target_char.opinions[self.name]["disagreeable"] = max(-5, min(5, target_char.opinions[self.name].get("disagreeable",0)))
+
+        # 4. Social Need Impact (Arguments are draining)
+        social_need_penalty = 15
+        self.needs['Social'] = max(0, self.needs.get('Social', 0) - social_need_penalty)
+        target_char.needs['Social'] = max(0, target_char.needs.get('Social', 0) - social_need_penalty)
+        self.add_memory(f"Argument with {target_name} was draining. Social need -{social_need_penalty} to {self.needs['Social']}.")
+        target_char.add_memory(f"Argument with {self.name} was draining. Social need -{social_need_penalty} to {target_char.needs['Social']}.")
+
+        self.add_memory(f"Argued with {target_name}. I said: '{dialogue_line_self}'. They said: '{dialogue_line_target}'.")
+        target_char.add_memory(f"Argued with {self.name}. They said: '{dialogue_line_self}'. I replied: '{dialogue_line_target}'.")
+        world.add_event_log_message(f"{self.name} and {target_name} had an argument.")
+
+        # Update relationships from opinions (even after an argument, general impression might shift)
+        self._update_relationship_from_opinions(target_name, world)
+        target_char._update_relationship_from_opinions(self.name, world)
+
+        # Listeners might form strong negative opinions or gain negative social fulfillment
+        self._process_nearby_listeners(world, target_char, "argue", self.traits, target_char.traits)
+
+
+        self.current_goal = self.job_default_goal() or "Idle"
+        self.current_goal_details = None
+        return
+
+    def _execute_ask_for_help(self, world: 'World'):
+        if not self.current_goal_details or "target_char_name" not in self.current_goal_details:
+            self.add_memory("Wanted to ask for help, but no target specified.")
+            self.current_goal = self.job_default_goal() or "Idle"
+            self.current_goal_details = None
+            return
+
+        target_name = self.current_goal_details["target_char_name"]
+        target_char = world.get_character_by_name(target_name)
+        help_type = self.current_goal_details.get("help_type", "general") # e.g., "resource", "tool", "task_assistance"
+        item_name_needed = self.current_goal_details.get("item_name") # e.g., "Wood", "Stone Axe"
+        quantity_needed = self.current_goal_details.get("quantity", 1)
+
+        if not target_char:
+            self.add_memory(f"Wanted to ask {target_name} for help, but they could not be found.")
+            self.current_goal = self.job_default_goal() or "Idle"
+            self.current_goal_details = None
+            return
+
+        if target_name not in self.known_characters:
+            self.add_memory(f"Wanted to ask {target_name} for help, but I don't know them.")
+            self.current_goal = self.job_default_goal() or "Idle"
+            self.current_goal_details = None
+            return
+
+        distance = abs(self.x - target_char.x) + abs(self.y - target_char.y)
+        max_interaction_distance = 2
+        if distance > max_interaction_distance:
+            self.add_memory(f"Trying to ask {target_name} for help, moving closer.")
+            self.move_towards(target_char.x, target_char.y, world)
+            return
+
+        self.add_memory(f"Approaching {target_name} to ask for {help_type} help" + (f" with {item_name_needed}" if item_name_needed else "") + ".")
+
+        # Determine target's willingness and ability to help
+        can_help = False
+        willing_to_help = False
+
+        # Willingness based on relationship and traits
+        relationship_score = self.get_relationship_score(target_name)
+        if "Generous" in target_char.traits or "Kind" in target_char.traits: willing_to_help = True
+        elif relationship_score > 30: willing_to_help = random.random() < 0.8 # High relationship, high chance
+        elif relationship_score > 0: willing_to_help = random.random() < 0.5 # Positive relationship, moderate chance
+        elif not ("Selfish" in target_char.traits or "Grumpy" in target_char.traits): willing_to_help = random.random() < 0.2 # Neutral/low rel, low chance unless not selfish/grumpy
+
+        if "Selfish" in target_char.traits: willing_to_help = False # Selfish people rarely help
+
+        # Ability to help
+        dialogue_line_self = f"Excuse me, {target_name}, I was wondering if you could help me?"
+        if help_type == "resource" and item_name_needed:
+            dialogue_line_self = f"{target_name}, I'm in a bit of a bind. Could you spare {quantity_needed} {item_name_needed}?"
+            if target_char.inventory.get(item_name_needed, 0) >= quantity_needed:
+                can_help = True
+        elif help_type == "tool" and item_name_needed: # Simplistic: asking for a specific tool by name
+            dialogue_line_self = f"{target_name}, I desperately need a {item_name_needed}. Do you have one I could borrow/have?"
+            if target_char.inventory.get(item_name_needed, 0) > 0: # TODO: check if it's their equipped tool
+                can_help = True
+        elif help_type == "task_assistance": # Conceptual for now
+            dialogue_line_self = f"{target_name}, I'm really struggling with this task. Any chance you could lend a hand?"
+            # For task assistance, 'can_help' could depend on target's skills vs. task requirements.
+            # For now, assume they can always conceptually offer some task assistance if willing.
+            can_help = True # Simplified for now
+
+        dialogue_line_target = ""
+        outcome_message = ""
+
+        if willing_to_help and can_help:
+            # --- Help is given ---
+            if help_type == "resource" and item_name_needed:
+                target_char.inventory[item_name_needed] -= quantity_needed
+                if target_char.inventory[item_name_needed] <= 0: del target_char.inventory[item_name_needed]
+                self.inventory[item_name_needed] = self.inventory.get(item_name_needed, 0) + quantity_needed
+                outcome_message = f"{target_name} gave {quantity_needed} {item_name_needed} to {self.name}."
+                dialogue_line_target = f"Of course, {self.name}. Here you go."
+            elif help_type == "tool" and item_name_needed:
+                # TODO: More complex tool lending/giving logic, for now, simple transfer
+                target_char.inventory[item_name_needed] -= 1
+                if target_char.inventory[item_name_needed] <= 0: del target_char.inventory[item_name_needed]
+                self.inventory[item_name_needed] = self.inventory.get(item_name_needed, 0) + 1
+                outcome_message = f"{target_name} gave a {item_name_needed} to {self.name}."
+                dialogue_line_target = f"Certainly, {self.name}, take this {item_name_needed}."
+            elif help_type == "task_assistance":
+                outcome_message = f"{target_name} agreed to help {self.name} with their task."
+                dialogue_line_target = f"Sure, {self.name}, I can help with that for a bit."
+                # Future: Target might get a temporary work order or their goal changes.
+
+            self.modify_relationship(target_name, 5, world, reason="They helped me when I asked.") # Grateful
+            target_char.modify_relationship(self.name, 3, world, reason="I helped them out.") # Feels good to help
+
+            if target_name not in self.opinions: self.opinions[target_name] = {}
+            self.opinions[target_name]["helpful"] = self.opinions[target_name].get("helpful",0) + 2
+            if self.name not in target_char.opinions: target_char.opinions[self.name] = {}
+            target_char.opinions[self.name]["grateful"] = target_char.opinions[self.name].get("grateful",0) + 1
+
+        elif willing_to_help and not can_help:
+            outcome_message = f"{target_name} was willing but unable to help {self.name}."
+            dialogue_line_target = f"I'd like to help, {self.name}, but I don't have any {item_name_needed} to spare right now." if item_name_needed else f"I wish I could help, {self.name}, but I'm not able to at the moment."
+            self.modify_relationship(target_name, 1, world, reason="They were willing to help, even if they couldn't.")
+            if target_name not in self.opinions: self.opinions[target_name] = {}
+            self.opinions[target_name]["willing_but_unable"] = self.opinions[target_name].get("willing_but_unable",0) + 1
+        else: # Unwilling to help (or unable and unwilling)
+            outcome_message = f"{target_name} declined to help {self.name}."
+            dialogue_line_target = f"Sorry, {self.name}, I can't help you with that right now."
+            if "Grumpy" in target_char.traits: dialogue_line_target = f"Not my problem, {self.name}."
+            elif "Selfish" in target_char.traits: dialogue_line_target = f"I need to look out for myself, {self.name}."
+
+            self.modify_relationship(target_name, -3, world, reason="They wouldn't help when I asked.")
+            if target_name not in self.opinions: self.opinions[target_name] = {}
+            self.opinions[target_name]["unhelpful"] = self.opinions[target_name].get("unhelpful",0) -1
+            if can_help: # If they could have helped but chose not to
+                 self.opinions[target_name]["unhelpful"] -=1 # Extra negative mark
+
+        # Log dialogue and outcome
+        dialogue_entry = {
+            "type": "ask_for_help", "initiator": self.name, "target": target_name,
+            "day": world.game_time.current_day if world.game_time else -1,
+            "details_of_request": {"type": help_type, "item": item_name_needed, "qty": quantity_needed},
+            "dialogue_exchanges": [ {"speaker": self.name, "line": dialogue_line_self}, {"speaker": target_name, "line": dialogue_line_target} ]
+        }
+        self.dialogue_history.append(dialogue_entry)
+        target_char.dialogue_history.append(dialogue_entry)
+
+        self.add_memory(f"Asked {target_name} for help. They said: '{dialogue_line_target}'. Outcome: {outcome_message}")
+        target_char.add_memory(f"{self.name} asked me for help. I said: '{dialogue_line_target}'. Outcome: {outcome_message}")
+        world.add_event_log_message(outcome_message)
+
+        # Social Need Fulfillment (if help was positive or attempted earnestly)
+        if willing_to_help: # Even if unable, the attempt can be socially bonding
+            self.needs['Social'] = min(100, self.needs.get('Social', 0) + config.SOCIAL_FULFILLMENT_GREET_INTRODUCE) # Generic small boost
+            target_char.needs['Social'] = min(100, target_char.needs.get('Social', 0) + config.SOCIAL_FULFILLMENT_GREET_INTRODUCE)
+
+        self._update_relationship_from_opinions(target_name, world)
+        target_char._update_relationship_from_opinions(self.name, world)
+        self._process_nearby_listeners(world, target_char, "ask_for_help", self.traits, target_char.traits)
+
+        self.current_goal = self.job_default_goal() or "Idle"
+        self.current_goal_details = None
+        return
+
     def _execute_offer_comfort(self, world: 'World'):
         if not self.current_goal_details or "target_char_name" not in self.current_goal_details:
             self.add_memory("Wanted to offer comfort, but no target specified.")
@@ -2228,7 +2554,7 @@ class Character:
         target_char._update_relationship_from_opinions(self.name, world)
 
         # Process listeners
-        self._process_nearby_listeners(world, target_char, "introduction", self.traits, target_char.traits)
+        self._process_nearby_listeners(world, target_char, "offer_comfort", self.traits, target_char.traits)
 
         self.current_goal = self.job_default_goal() or "Idle"
         self.current_goal_details = None
@@ -2391,7 +2717,7 @@ class Character:
         target_char._update_relationship_from_opinions(self.name, world)
 
         # Process listeners
-        self._process_nearby_listeners(world, target_char, "small_talk", self.traits, target_char.traits)
+        self._process_nearby_listeners(world, target_char, "share_positive_news", self.traits, target_char.traits)
 
         self.current_goal = self.job_default_goal() or "Idle"
         self.current_goal_details = None
@@ -2777,9 +3103,8 @@ class Character:
         self._update_relationship_from_opinions(target_name, world)
         target_char._update_relationship_from_opinions(self.name, world)
 
-        # Process listeners (comforting might be a more private or intense interaction,
-        # but listeners could still form opinions, e.g., about the comforter's empathy)
-        self._process_nearby_listeners(world, target_char, "offer_comfort", self.traits, target_char.traits)
+        # Process listeners
+        self._process_nearby_listeners(world, target_char, "introduction", self.traits, target_char.traits)
 
         self.current_goal = self.job_default_goal() or "Idle"
         self.current_goal_details = None
