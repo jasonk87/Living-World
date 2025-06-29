@@ -70,6 +70,10 @@ class Character:
         self.opinions: Dict[str, Dict[str, int]] = {} # e.g. {"Liam": {"greeting_style": 1, "small_talk_quality": -1}}
         self.dialogue_history: List[Dict[str, Any]] = [] # List of dialogue interaction dicts
         self.current_goal_details: Optional[Dict[str, Any]] = None # For goals needing specific targets, like greeting
+        self.known_events: List[str] = [] # List of event IDs the character knows about
+
+        if 'Social' not in self.needs: # Initialize social need if not provided
+            self.needs['Social'] = 70 # Default starting social level (0-100)
 
         # Attributes for build orders (re-adding them here as they were missed)
         self.active_build_order_id: Optional[str] = None
@@ -1579,11 +1583,21 @@ class Character:
         # Reactive interactions like "Offer Comfort" will be handled by a separate check.
 
         # Proactive Social Interaction Check
-        if self.current_goal in ["Idle", "Wander"] and random.random() < config.SOCIAL_INTERACTION_CHANCE:
+        current_social_interaction_chance = config.SOCIAL_INTERACTION_CHANCE
+        if self.needs.get('Social', 70) < config.LOW_SOCIAL_NEED_THRESHOLD:
+            current_social_interaction_chance += config.SOCIAL_INTERACTION_CHANCE_LOW_NEED_BONUS
+
+        if self.current_goal in ["Idle", "Wander"] and random.random() < current_social_interaction_chance:
             potential_strangers: List[Character] = []
             potential_known_to_greet: List[Character] = []
             potential_known_for_smalltalk: List[Character] = []
             potential_known_for_news: List[Character] = []
+
+            # Calculate overall impression scores for known characters to influence choice
+            # This is a simplified approach for weighting choices.
+            target_weights: Dict[str, float] = {}
+            min_opinion_to_avoid = -3 # If sum of opinion tags is this or lower, less likely to interact
+            min_opinion_to_prefer = 3  # If sum of opinion tags is this or higher, more likely
 
             for other_char in world.characters:
                 if other_char.name == self.name:
@@ -1605,29 +1619,47 @@ class Character:
                         if other_char.name not in self.known_characters:
                             potential_strangers.append(other_char)
                         else: # Character is known
+                            current_impression = sum(self.opinions.get(other_char.name, {}).values())
+                            weight = 1.0
+                            if current_impression <= min_opinion_to_avoid:
+                                weight = 0.2 # Significantly less likely
+                            elif current_impression >= min_opinion_to_prefer:
+                                weight = 2.0 # Twice as likely
+                            target_weights[other_char.name] = weight
+
                             potential_known_for_smalltalk.append(other_char)
                             potential_known_for_news.append(other_char)
-                            potential_known_to_greet.append(other_char) # Greeting is always an option if others aren't chosen
+                            potential_known_to_greet.append(other_char)
 
             target_char_for_interaction: Optional[Character] = None
             interaction_type = None
 
-            # Determine interaction based on priority and chance
-            # Trait influence for choosing to share news (e.g., "Chatty")
+            # Helper function to select a weighted random choice
+            def weighted_random_choice(choices: List[Character], weights: Dict[str, float]) -> Optional[Character]:
+                if not choices: return None
+
+                weighted_choices = []
+                for choice_char in choices:
+                    # Default weight is 1.0 if not in target_weights (e.g. for strangers, though not used here directly)
+                    weight = weights.get(choice_char.name, 1.0)
+                    weighted_choices.extend([choice_char] * int(weight * 10)) # Multiply by 10 for better granularity with floats
+
+                return random.choice(weighted_choices) if weighted_choices else None
+
             chatty_bonus_for_news = 0.2 if "Chatty" in self.traits else 0.0
 
             if potential_strangers:
-                target_char_for_interaction = random.choice(potential_strangers)
+                target_char_for_interaction = random.choice(potential_strangers) # Strangers are chosen purely randomly for now
                 interaction_type = "Introduce Self to Stranger"
-            elif potential_known_for_news and random.random() < (0.3 + chatty_bonus_for_news): # 30-50% chance to share news
-                target_char_for_interaction = random.choice(potential_known_for_news)
-                interaction_type = "Share Positive News"
-            elif potential_known_for_smalltalk and random.random() < 0.6: # 60% chance for small talk over just greeting
-                target_char_for_interaction = random.choice(potential_known_for_smalltalk)
-                interaction_type = "Small Talk"
+            elif potential_known_for_news and random.random() < (0.3 + chatty_bonus_for_news):
+                target_char_for_interaction = weighted_random_choice(potential_known_for_news, target_weights)
+                if target_char_for_interaction: interaction_type = "Share Positive News"
+            elif potential_known_for_smalltalk and random.random() < 0.6:
+                target_char_for_interaction = weighted_random_choice(potential_known_for_smalltalk, target_weights)
+                if target_char_for_interaction: interaction_type = "Small Talk"
             elif potential_known_to_greet:
-                target_char_for_interaction = random.choice(potential_known_to_greet)
-                interaction_type = "Greet Character"
+                target_char_for_interaction = weighted_random_choice(potential_known_to_greet, target_weights)
+                if target_char_for_interaction: interaction_type = "Greet Character"
 
             if target_char_for_interaction and interaction_type:
                 self.current_goal = interaction_type
@@ -2047,7 +2079,21 @@ class Character:
         if target_char.current_goal != "Greet Character":
             target_char.add_memory(f"Acknowledged greeting from {self.name} while I was {target_char.current_goal}.")
 
-        # 6. Greeting complete. Reset goal.
+        # 6. Fulfill Social Need
+        fulfillment = config.SOCIAL_FULFILLMENT_GREET_INTRODUCE
+        self.needs['Social'] = min(100, self.needs.get('Social', 0) + fulfillment)
+        target_char.needs['Social'] = min(100, target_char.needs.get('Social', 0) + fulfillment)
+        self.add_memory(f"Social need increased by {fulfillment} to {self.needs['Social']} after greeting {target_name}.")
+        target_char.add_memory(f"Social need increased by {fulfillment} to {target_char.needs['Social']} after being greeted by {self.name}.")
+
+        # Update relationships based on overall opinions
+        self._update_relationship_from_opinions(target_name, world)
+        target_char._update_relationship_from_opinions(self.name, world)
+
+        # Process listeners
+        self._process_nearby_listeners(world, target_char, "greeting", self.traits, target_char.traits)
+
+        # 7. Greeting complete. Reset goal.
         self.current_goal = self.job_default_goal() or "Idle"
         self.current_goal_details = None
         return
@@ -2170,6 +2216,20 @@ class Character:
         if target_char.current_goal not in ["Offer Comfort", "Seek Medical Attention"]:
             target_char.add_memory(f"{self.name} comforted me while I was {target_char.current_goal}.")
 
+        # 4. Fulfill Social Need
+        # Initiator gets fulfillment for being kind, target for receiving comfort.
+        self.needs['Social'] = min(100, self.needs.get('Social', 0) + config.SOCIAL_FULFILLMENT_OFFER_COMFORT_INITIATOR)
+        target_char.needs['Social'] = min(100, target_char.needs.get('Social', 0) + config.SOCIAL_FULFILLMENT_OFFER_COMFORT_TARGET)
+        self.add_memory(f"Social need increased by {config.SOCIAL_FULFILLMENT_OFFER_COMFORT_INITIATOR} to {self.needs['Social']} after comforting {target_name}.")
+        target_char.add_memory(f"Social need increased by {config.SOCIAL_FULFILLMENT_OFFER_COMFORT_TARGET} to {target_char.needs['Social']} after being comforted by {self.name}.")
+
+        # Update relationships based on overall opinions
+        self._update_relationship_from_opinions(target_name, world)
+        target_char._update_relationship_from_opinions(self.name, world)
+
+        # Process listeners
+        self._process_nearby_listeners(world, target_char, "introduction", self.traits, target_char.traits)
+
         self.current_goal = self.job_default_goal() or "Idle"
         self.current_goal_details = None
         return
@@ -2226,34 +2286,65 @@ class Character:
             self.modify_relationship(target_name, rel_change, world, reason=f"Shared some news with {target_name}.")
             target_char.modify_relationship(self.name, rel_change, world, reason=f"{self.name} shared some news.")
 
-        # 2. Dialogue
-        available_chars_for_gossip = [c.name for c in world.characters if c.name != self.name and c.name != target_name]
-        gossip_subject_name = random.choice(available_chars_for_gossip) if available_chars_for_gossip else "someone"
+        # 2. Dialogue (Potentially about a notable event)
+        dialogue_line_self = ""
+        dialogue_line_target = ""
+        shared_event_id: Optional[str] = None
 
-        news_items_templates = [
-            "Heard the hunters had a good catch today!",
-            f"I saw {gossip_subject_name} looking particularly cheerful earlier.",
-            "They say the weather's going to be perfect for the next few days.",
-            "Someone mentioned finding an unusually large berry patch nearby.",
-            "Word is the builders are making great progress on that new structure."
-        ]
-        if initiator_grumpy: # Grumpy "positive" news is more like a grudging admission
-            news_items_templates = [
-                "Suppose the harvest wasn't a total disaster.",
-                "That new building isn't as bad as I expected.",
-                "At least it's not raining for once.",
-                f"Heard {gossip_subject_name} actually did something useful. Surprising."
+        # Attempt to share a notable event
+        # Higher chance if "Chatty" or if the news queue isn't empty
+        event_share_chance = 0.4 + (0.2 if initiator_chatty else 0.0)
+        if world.recent_notable_events and random.random() < event_share_chance:
+            unknown_events_to_target = [
+                event for event in world.recent_notable_events
+                if event["id"] not in target_char.known_events and event["id"] in self.known_events
             ]
+            if not unknown_events_to_target and world.recent_notable_events: # If target knows all I know, or I know none, try to learn one myself to share
+                 potential_new_event_for_me = [event for event in world.recent_notable_events if event["id"] not in self.known_events]
+                 if potential_new_event_for_me:
+                     event_to_learn = random.choice(potential_new_event_for_me)
+                     self.known_events.append(event_to_learn["id"])
+                     self.add_memory(f"Learned about event: {event_to_learn.get('details',{}).get('summary', event_to_learn['type'])}")
+                     # Re-check if this newly learned event can be shared
+                     if event_to_learn["id"] not in target_char.known_events:
+                         unknown_events_to_target.append(event_to_learn)
 
-        dialogue_line_self = random.choice(news_items_templates)
+            if unknown_events_to_target:
+                event_to_share = random.choice(unknown_events_to_target)
+                shared_event_id = event_to_share["id"]
+                event_summary = event_to_share.get("details", {}).get("summary", f"something about {event_to_share['type']}")
 
-        replies_target = ["Oh, that's good to hear!", "Is that so? Interesting.", "Thanks for letting me know."]
-        if target_friendly: replies_target.extend(["Wonderful news!", "That's fantastic!"])
-        elif target_grumpy: replies_target = ["Hmph. Alright.", "And?", "Noted."]
-        dialogue_line_target = random.choice(replies_target)
+                dialogue_line_self = f"Have you heard about {event_summary}?"
+                if initiator_grumpy: dialogue_line_self = f"Guess you heard about {event_summary} already."
+                elif initiator_friendly: dialogue_line_self = f"Oh, {target_name}, guess what! {event_summary}!"
+
+                if target_friendly: dialogue_line_target = random.choice(["Oh, really? Tell me more!", "That's interesting news!", f"About {event_summary}? No, what happened?"])
+                elif target_grumpy: dialogue_line_target = random.choice(["And?", "So?", "Old news probably."])
+                else: dialogue_line_target = random.choice(["I hadn't heard.", "What about it?", "Okay."])
+
+                target_char.known_events.append(shared_event_id) # Target now knows
+                target_char.add_memory(f"Learned from {self.name} about: {event_summary}")
+
+
+        if not dialogue_line_self: # Fallback to generic news/gossip if no event shared
+            available_chars_for_gossip = [c.name for c in world.characters if c.name != self.name and c.name != target_name]
+            gossip_subject_name = random.choice(available_chars_for_gossip) if available_chars_for_gossip else "someone"
+            news_items_templates = [
+                "Heard the hunters had a good catch today!",
+                f"I saw {gossip_subject_name} looking particularly cheerful earlier.",
+                "They say the weather's going to be perfect for the next few days.",
+            ]
+            if initiator_grumpy:
+                news_items_templates = [ "Suppose the harvest wasn't a total disaster.", f"Heard {gossip_subject_name} actually did something useful. Surprising." ]
+            dialogue_line_self = random.choice(news_items_templates)
+
+            replies_target_generic = ["Oh, that's good to hear!", "Is that so? Interesting."]
+            if target_friendly: replies_target_generic.extend(["Wonderful news!", "That's fantastic!"])
+            elif target_grumpy: replies_target_generic = ["Hmph. Alright.", "Noted."]
+            dialogue_line_target = random.choice(replies_target_generic)
 
         dialogue_entry = {
-            "type": "share_positive_news",
+            "type": "share_positive_news", # Could be "share_event_news" if shared_event_id is not None
             "initiator": self.name,
             "target": target_name,
             "day": world.game_time.current_day if world.game_time else -1,
@@ -2288,9 +2379,71 @@ class Character:
         if target_char.current_goal not in ["Share Positive News", "Small Talk", "Greet Character", "Introduce Self to Stranger"]:
             target_char.add_memory(f"Heard some news from {self.name} while I was {target_char.current_goal}.")
 
+        # 4. Fulfill Social Need
+        fulfillment = config.SOCIAL_FULFILLMENT_POSITIVE_NEWS
+        self.needs['Social'] = min(100, self.needs.get('Social', 0) + fulfillment)
+        target_char.needs['Social'] = min(100, target_char.needs.get('Social', 0) + fulfillment)
+        self.add_memory(f"Social need increased by {fulfillment} to {self.needs['Social']} after sharing news with {target_name}.")
+        target_char.add_memory(f"Social need increased by {fulfillment} to {target_char.needs['Social']} after hearing news from {self.name}.")
+
+        # Update relationships based on overall opinions
+        self._update_relationship_from_opinions(target_name, world)
+        target_char._update_relationship_from_opinions(self.name, world)
+
+        # Process listeners
+        self._process_nearby_listeners(world, target_char, "small_talk", self.traits, target_char.traits)
+
         self.current_goal = self.job_default_goal() or "Idle"
         self.current_goal_details = None
         return
+
+    def _process_nearby_listeners(self, world: 'World', target_char: 'Character', interaction_type: str, initiator_traits: List[str], target_traits: List[str]):
+        """
+        Processes characters who might be listening to an interaction.
+        Listeners form opinions and might gain some social fulfillment.
+        """
+        listener_radius = 2 # How close a character needs to be to "overhear"
+        social_goals = ["Greet Character", "Introduce Self to Stranger", "Small Talk", "Share Positive News", "Offer Comfort"]
+
+        for listener in world.characters:
+            if listener.name == self.name or listener.name == target_char.name:
+                continue # Skip initiator and direct target
+
+            # Listener must be idle or wandering, and not already in a social goal themselves
+            if listener.current_goal not in ["Idle", "Wander"] or listener.current_goal in social_goals:
+                continue
+
+            distance_to_initiator = abs(listener.x - self.x) + abs(listener.y - self.y)
+            distance_to_target = abs(listener.x - target_char.x) + abs(listener.y - target_char.y)
+
+            if distance_to_initiator <= listener_radius or distance_to_target <= listener_radius:
+                # Listener is close enough to one of the participants
+                listener.add_memory(f"Overheard {self.name} and {target_char.name} interacting ({interaction_type}).")
+
+                # Listener forms opinions about initiator's observed behavior
+                if self.name not in listener.opinions: listener.opinions[self.name] = {}
+                observed_tag_initiator = f"observed_{interaction_type}_style" # e.g., observed_greeting_style
+                opinion_change_initiator = 0
+                if "Friendly" in initiator_traits: opinion_change_initiator += 1
+                if "Grumpy" in initiator_traits: opinion_change_initiator -=1
+                listener.opinions[self.name][observed_tag_initiator] = max(-5, min(5, listener.opinions[self.name].get(observed_tag_initiator, 0) + opinion_change_initiator))
+
+                # Listener forms opinions about target's observed behavior (response)
+                if target_char.name not in listener.opinions: listener.opinions[target_char.name] = {}
+                observed_tag_target = f"observed_{interaction_type}_response_style"
+                opinion_change_target = 0
+                if "Friendly" in target_traits: opinion_change_target += 1
+                if "Grumpy" in target_traits: opinion_change_target -=1
+                listener.opinions[target_char.name][observed_tag_target] = max(-5, min(5, listener.opinions[target_char.name].get(observed_tag_target, 0) + opinion_change_target))
+
+                # Minor social fulfillment for listening to a neutral/positive interaction
+                # (Excluding if the interaction itself was negative, e.g. an argument - future)
+                if interaction_type not in ["Offer Comfort"]: # Comfort is specific, others are general
+                    listener.needs['Social'] = min(100, listener.needs.get('Social', 0) + config.SOCIAL_FULFILLMENT_LISTEN_POSITIVE)
+                    listener.add_memory(f"Social need slightly up from overhearing conversation.")
+
+                # Optional: Listener Dialogue History (Step 4.C) - can be added here if desired
+                # For now, just a memory.
 
     def _execute_small_talk(self, world: 'World'):
         if not self.current_goal_details or "target_char_name" not in self.current_goal_details:
@@ -2423,9 +2576,57 @@ class Character:
         if target_char.current_goal not in ["Small Talk", "Greet Character", "Introduce Self to Stranger"]:
              target_char.add_memory(f"Chatted briefly with {self.name} while I was {target_char.current_goal}.")
 
+        # 4. Fulfill Social Need
+        fulfillment = config.SOCIAL_FULFILLMENT_SMALL_TALK
+        self.needs['Social'] = min(100, self.needs.get('Social', 0) + fulfillment)
+        target_char.needs['Social'] = min(100, target_char.needs.get('Social', 0) + fulfillment)
+        self.add_memory(f"Social need increased by {fulfillment} to {self.needs['Social']} after small talk with {target_name}.")
+        target_char.add_memory(f"Social need increased by {fulfillment} to {target_char.needs['Social']} after small talk with {self.name}.")
+
+        # Update relationships based on overall opinions
+        self._update_relationship_from_opinions(target_name, world)
+        target_char._update_relationship_from_opinions(self.name, world)
+
+        # Process listeners
+        self._process_nearby_listeners(world, target_char, "share_positive_news", self.traits, target_char.traits)
+
         self.current_goal = self.job_default_goal() or "Idle"
         self.current_goal_details = None
         return
+
+    def _update_relationship_from_opinions(self, target_name: str, world: 'World'):
+        if target_name not in self.opinions:
+            return # No opinions formed yet
+
+        opinion_tags = self.opinions.get(target_name, {})
+        if not opinion_tags:
+            return
+
+        # Simple sum of opinion tag scores. More complex weighting could be added later.
+        # Positive tags increase score, negative tags decrease it.
+        overall_impression_score = sum(opinion_tags.values())
+
+        # Determine a subtle adjustment factor.
+        # Example: if overall_impression is +5, relationship might adjust by +0.5 or +1.
+        # If -5, relationship might adjust by -0.5 or -1.
+        # This should be a slow, gradual influence.
+        adjustment_factor = 0.1 # How much 1 point of impression score translates to relationship points
+        relationship_adjustment = int(round(overall_impression_score * adjustment_factor))
+
+        # Max adjustment per call to prevent rapid swings based on single interactions,
+        # especially if this is called frequently.
+        max_adjustment_per_call = 1
+        relationship_adjustment = max(-max_adjustment_per_call, min(max_adjustment_per_call, relationship_adjustment))
+
+
+        if relationship_adjustment != 0:
+            current_relationship = self.get_relationship_score(target_name)
+            self.modify_relationship(target_name, relationship_adjustment, world,
+                                     reason=f"General impression ({overall_impression_score}) led to adjustment.")
+            # self.add_memory(f"My general impression of {target_name} ({overall_impression_score}) subtly changed our relationship from {current_relationship} by {relationship_adjustment}.")
+
+        # Optional: Decay or normalization of opinion tags over time if they are meant to be more fluid.
+        # For now, opinions are cumulative until directly changed by new interactions.
 
     def _execute_introduce_self(self, world: 'World'):
         if not self.current_goal_details or "target_char_name" not in self.current_goal_details:
@@ -2564,6 +2765,21 @@ class Character:
 
         if target_char.current_goal != "Introduce Self to Stranger":
             target_char.add_memory(f"Met {self.name} while I was {target_char.current_goal}.")
+
+        # 5. Fulfill Social Need
+        fulfillment = config.SOCIAL_FULFILLMENT_GREET_INTRODUCE # Same as greeting for now
+        self.needs['Social'] = min(100, self.needs.get('Social', 0) + fulfillment)
+        target_char.needs['Social'] = min(100, target_char.needs.get('Social', 0) + fulfillment)
+        self.add_memory(f"Social need increased by {fulfillment} to {self.needs['Social']} after introducing to {target_name}.")
+        target_char.add_memory(f"Social need increased by {fulfillment} to {target_char.needs['Social']} after {self.name} introduced themselves.")
+
+        # Update relationships based on overall opinions
+        self._update_relationship_from_opinions(target_name, world)
+        target_char._update_relationship_from_opinions(self.name, world)
+
+        # Process listeners (comforting might be a more private or intense interaction,
+        # but listeners could still form opinions, e.g., about the comforter's empathy)
+        self._process_nearby_listeners(world, target_char, "offer_comfort", self.traits, target_char.traits)
 
         self.current_goal = self.job_default_goal() or "Idle"
         self.current_goal_details = None

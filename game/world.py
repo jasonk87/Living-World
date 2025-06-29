@@ -33,6 +33,7 @@ class World:
         self.work_orders: List[WorkOrder] = []
         self.event_log: List[str] = []
         self.active_world_effects: Dict[str, Any] = {}
+        self.recent_notable_events: List[Dict[str, Any]] = [] # For rumor spreading
 
 
     def __str__(self):
@@ -169,6 +170,27 @@ class World:
             if abs(other_char.x - character.x) + abs(other_char.y - character.y) <= radius:
                 nearby.append(other_char)
         return nearby
+
+    def add_notable_event(self, event_type: str, details: Dict[str, Any], max_events: int = 10):
+        """Adds a notable event to the world's recent memory, used for rumor spreading."""
+        if not self.game_time:
+            print("Warning: Cannot add notable event, game_time not set in world.")
+            return
+
+        event_id = f"{event_type}_{self.game_time.current_day}_{random.randint(1000,9999)}" # Simple unique enough ID
+        event_data = {
+            "id": event_id,
+            "type": event_type,
+            "day": self.game_time.current_day,
+            "details": details # e.g., {"subject": "Harvest", "outcome": "bountiful"} or {"structure_name": "Town Hall"}
+        }
+        self.recent_notable_events.append(event_data)
+        # Keep the list from growing too large
+        if len(self.recent_notable_events) > max_events:
+            self.recent_notable_events.pop(0) # Remove the oldest event
+
+        self.add_event_log_message(f"Notable Event: {event_type} - {details.get('summary', str(details))}")
+
 
     def add_stockpile(self, stockpile: Stockpile):
         if stockpile not in self.stockpiles:

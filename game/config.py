@@ -27,3 +27,13 @@ ELECTION_CYCLE_DAYS = 30 # How often mayoral elections are held
 
 # Social Interaction
 SOCIAL_INTERACTION_CHANCE = 0.02 # Chance per tick (if idle/wandering) to initiate a social interaction like greeting
+SOCIAL_NEED_DECAY_RATE_PER_DAY = 10 # How much social need decays each day (0-100 scale)
+SOCIAL_FULFILLMENT_GREET_INTRODUCE = 5 # Social points gained from a greeting or introduction
+SOCIAL_FULFILLMENT_SMALL_TALK = 8      # Social points from small talk
+SOCIAL_FULFILLMENT_POSITIVE_NEWS = 7   # Social points from sharing positive news
+SOCIAL_FULFILLMENT_OFFER_COMFORT_INITIATOR = 10 # Social points for offering comfort
+SOCIAL_FULFILLMENT_OFFER_COMFORT_TARGET = 12  # Social points for receiving comfort (higher as it's a direct positive)
+SOCIAL_FULFILLMENT_LISTEN_POSITIVE = 2 # Minor social gain from overhearing positive/neutral interactions
+LOW_SOCIAL_NEED_THRESHOLD = 30 # Below this, character might actively seek more social interaction
+VERY_LOW_SOCIAL_NEED_THRESHOLD = 15 # Below this, other negative effects might occur (mood, productivity - future)
+SOCIAL_INTERACTION_CHANCE_LOW_NEED_BONUS = 0.03 # Additional chance to interact if social need is low

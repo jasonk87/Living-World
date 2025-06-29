@@ -133,6 +133,17 @@ def tick_simulation():
 
                 char_daily_reset.needs['Hunger'] = max(0, char_daily_reset.needs.get('Hunger', 100) - random.randint(10, 20))
                 char_daily_reset.needs['Thirst'] = max(0, char_daily_reset.needs.get('Thirst', 100) - random.randint(15, 25))
+
+                # Social Need Decay
+                current_social_need = char_daily_reset.needs.get('Social', 70) # Default to 70 if somehow not set
+                decay_amount = config.SOCIAL_NEED_DECAY_RATE_PER_DAY
+                # Trait influence on decay: e.g., "Outgoing" might decay faster, "Loner" slower
+                if "Loner" in char_daily_reset.traits: # Assuming "Loner" trait exists
+                    decay_amount *= 0.5
+                if "Outgoing" in char_daily_reset.traits: # Assuming "Outgoing" trait exists
+                    decay_amount *= 1.5
+                char_daily_reset.needs['Social'] = max(0, current_social_need - int(decay_amount))
+
                 # ... other needs updates
                 if char_daily_reset.current_goal in ["Wander", None, "Idle"] and \
                    not char_daily_reset.active_work_order_id and \
