@@ -1,15 +1,16 @@
 # game/character.py
-from typing import TYPE_CHECKING, Optional, Dict, List, Tuple
+from typing import TYPE_CHECKING, Optional, Dict, List, Tuple, Any
 import random
 from .llm_integration import generate_dialogue
 from .stockpile import Stockpile
 from .work_order import WorkOrder
-from .data import BLUEPRINTS, JOB_TASK_DEFINITIONS, STRUCTURE_BLUEPRINTS # Added STRUCTURE_BLUEPRINTS
+from .data import BLUEPRINTS, JOB_TASK_DEFINITIONS, STRUCTURE_BLUEPRINTS
 from . import config # Import config
+from .goal import Goal, GoalType, GoalStatus, DEFAULT_IDLE_GOAL, create_goal_from_job # Import Goal related classes
 
 if TYPE_CHECKING:
     from .world import World
-    from .character import Character as OtherCharacter
+    # from .character import Character as OtherCharacter # Already have Character in this file
 
 # STALE_THRESHOLD_DAYS = 2 # Now in config
 ORDER_SPAM_PREVENTION_DAYS = 3
@@ -18,13 +19,13 @@ class Character:
     def __init__(self, name: str, personality: str, traits: list[str],
                  skills: dict[str, int], x: int = 0, y: int = 0,
                  needs: Optional[Dict[str, int]] = None,
-                 current_goal: Optional[str] = None,
+                 current_goal_obj: Optional[Goal] = None, # Changed from current_goal: Optional[str]
                  job: Optional[str] = None,
                  max_inventory_items: int = 10,
-                 rank: str = "Worker"): # Added rank parameter
+                 rank: str = "Worker"):
         self.name = name; self.personality = personality; self.traits = traits;
-        self.skills: Dict[str, Dict[str, Any]] = {} # Initialize as empty dict
-        if skills: # Original skills is Dict[str, int] (level)
+        self.skills: Dict[str, Dict[str, Any]] = {}
+        if skills:
             for skill_name, level_val in skills.items():
                 self.skills[skill_name] = {
                     "level": level_val,
@@ -33,56 +34,58 @@ class Character:
                 }
 
         self.x = x; self.y = y; self.inventory = {}; self.memory = [];
-        self.needs = needs if needs else {}; self.current_goal = current_goal
-        self.relationships = {}; self.job = job; self.max_inventory_items = max_inventory_items
-        self.hauling_info: Optional[Dict] = None
-        self.counting_target_stockpile_name: Optional[str] = None
+        self.needs = needs if needs else {};
+        # Initialize current_goal with a Goal object
+        self.job = job # Set job before calling create_goal_from_job
+        self.current_goal: Goal = current_goal_obj if current_goal_obj else create_goal_from_job(self.job or "Unemployed", self.name)
+        if not self.current_goal: # Fallback if create_goal_from_job returns None
+             self.current_goal = Goal(GoalType.IDLE, originator_id="SystemInit", assignee_id=self.name)
+        if self.current_goal.assignee_id is None: # Ensure assignee is set
+            self.current_goal.assignee_id = self.name
+
+
+        self.relationships = {}; self.max_inventory_items = max_inventory_items # self.job already set
+        self.hauling_info: Optional[Dict] = None # Used by Haul Resource, parameters can go into Goal object
+        self.counting_target_stockpile_name: Optional[str] = None # Used by Count Stockpile, can go into Goal
         self.supervisor_name: Optional[str] = None; self.subordinates_names: List[str] = []
         self.managed_item_targets: Dict[str, int] = {}; self.order_cooldown: Dict[str, int] = {}
         self.active_work_order_id: Optional[str] = None; self.crafting_progress: int = 0
         self.materials_gathered_for_wo: bool = False; self.items_crafted_for_wo: bool = False
 
-        # New attributes for hierarchy and accountability
-        self.rank: str = rank  # Use parameter, default to "Worker"
-        self.assigned_tasks: List[Dict] = []  # Tasks assigned by a supervisor
-        self.performance_rating: str = "Not Evaluated"  # e.g., "Excellent", "Good", "Needs Improvement", "Poor"
+        self.rank: str = rank
+        self.assigned_tasks: List[Dict] = [] # TODO: Re-evaluate if this is needed with Goal objects
+        self.performance_rating: str = "Not Evaluated"
         self.last_performance_review_day: Optional[int] = None
         self.warning_count: int = 0
-        self.resource_to_fetch: Optional[Dict] = None; self.workshop_location: Optional[Tuple[int,int]] = None
+        self.resource_to_fetch: Optional[Dict] = None # Params for Fetch Resource goals
+        self.workshop_location: Optional[Tuple[int,int]] = None # Params for Craft Order goal
         self.equipped_tool: Optional[Dict] = None
-        self.task_work_progress: int = 0
-        self.tool_to_fetch_type: Optional[str] = None
-        self.fetching_tool_info: Optional[Dict] = None
-        self.goal_before_fetching_tool: Optional[str] = None
-        self.current_task_def_name: Optional[str] = None
+        self.task_work_progress: int = 0 # Progress for generic tasks
+        self.tool_to_fetch_type: Optional[str] = None # Parameter for FETCH_TOOL goal
+        self.fetching_tool_info: Optional[Dict] = None # Intermediate state for FETCH_TOOL
+        self.goal_before_fetching_tool: Optional[Goal] = None # Store previous Goal object
+        self.current_task_def_name: Optional[str] = None # For _execute_generic_task, could be part of GATHER_RESOURCE params
         self._mc_item_check_idx: int = 0
 
-        # Health States
         self.is_sick: bool = False
-        self.sickness_severity: int = 0 # 0: healthy, 1-3: mild, 4-6: moderate, 7-9: severe, 10: critical/dying
+        self.sickness_severity: int = 0
         self.is_injured: bool = False
-        self.injury_severity: int = 0 # Similar scale to sickness
-        self.appointed_by: Optional[str] = None # Tracks who appointed this character to their current key role
+        self.injury_severity: int = 0
+        self.appointed_by: Optional[str] = None
 
-        # Social Attributes
-        self.known_characters: List[str] = [] # List of names of characters met
-        # self.relationships is already Dict[str, int] from before, suitable for relationship scores
-        self.opinions: Dict[str, Dict[str, int]] = {} # e.g. {"Liam": {"greeting_style": 1, "small_talk_quality": -1}}
-        self.dialogue_history: List[Dict[str, Any]] = [] # List of dialogue interaction dicts
-        self.current_goal_details: Optional[Dict[str, Any]] = None # For goals needing specific targets, like greeting
-        self.known_events: List[str] = [] # List of event IDs the character knows about
+        self.known_characters: List[str] = []
+        self.opinions: Dict[str, Dict[str, int]] = {}
+        self.dialogue_history: List[Dict[str, Any]] = []
+        # self.current_goal_details removed, now part of self.current_goal.parameters
+        self.known_events: List[str] = []
 
-        if 'Social' not in self.needs: # Initialize social need if not provided
-            self.needs['Social'] = 70 # Default starting social level (0-100)
-        if 'Energy' not in self.needs: # Initialize energy need if not provided
-            self.needs['Energy'] = 100 # Default starting energy level
+        if 'Social' not in self.needs: self.needs['Social'] = 70
+        if 'Energy' not in self.needs: self.needs['Energy'] = 100
 
-        # Attributes for build orders (re-adding them here as they were missed)
-        self.active_build_order_id: Optional[str] = None
+        self.active_build_order_id: Optional[str] = None # ID of the WorkOrder
         self.materials_gathered_for_build: bool = False
-        self.building_site_target: Optional[Tuple[int, int]] = None
-        self.current_building_project: Optional[str] = None
-        # self.resource_to_fetch is already part of the minimal __init__
+        self.building_site_target: Optional[Tuple[int, int]] = None # Parameter for EXECUTE_BUILD_ORDER
+        self.current_building_project: Optional[str] = None # Blueprint key, parameter for EXECUTE_BUILD_ORDER
 
     def _calculate_exp_for_level(self, level: int) -> float:
         if level < 0: level = 0

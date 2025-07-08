@@ -261,3 +261,263 @@ STRUCTURE_BLUEPRINTS = {
         "map_char_complete": "X" # Should not complete as this type
     }
 }
+
+# --- Roles, Hierarchy, and Capabilities ---
+
+# Defines the reporting structure for different jobs/roles.
+# Key: Role/Job Title, Value: Supervisor's Role/Job Title (or None if top-level)
+ROLE_HIERARCHY = {
+    # Top Level
+    "Mayor": None,
+
+    # Report to Mayor
+    "Manager": "Mayor",
+    "Militia Commander": "Mayor",
+    "Chief Medical Officer": "Mayor",
+    "Sheriff": "Mayor",
+    "Noble Lord": "Mayor",  # For settlement-level concerns, even if landed.
+    "Baron": "Mayor",       # Similar to Noble Lord, potentially higher standing.
+
+    # Report to Manager
+    "Master Craftsman": "Manager",
+    "Bookkeeper": "Manager",
+    "Builder": "Manager",
+    "Woodcutter": "Manager",
+    "Stonemason": "Manager",
+    "Miner": "Manager", # Assuming Miner reports to Manager
+    # TODO: Add other production worker roles as they are defined
+
+    # Report to Militia Commander
+    "Militia Captain": "Militia Commander",
+    # TODO: Add individual soldier roles if they need direct hierarchy entry, e.g., "Militia Soldier": "Militia Captain"
+
+    # Report to Chief Medical Officer
+    "Medic": "Chief Medical Officer",
+
+    # Report to Sheriff
+    "Deputy": "Sheriff",
+}
+
+# Defines which jobs or ranks are considered part of the "nobility"
+# This can be used for social interactions, access to certain areas, or game mechanics.
+NOBLE_RANKS_OR_JOBS = ["Mayor", "Noble Lord", "Baron"]
+
+# Defines key official positions that the Mayor (or equivalent top leader) can appoint.
+MAYORAL_APPOINTMENTS = ["Manager", "Militia Commander", "Chief Medical Officer", "Sheriff"]
+
+
+# Design documentation for Role Responsibilities and Capabilities.
+# This is not directly parsed by the game logic yet but serves as a blueprint for AI development.
+ROLE_DETAILS = {
+    "Mayor": {
+        "description": "The elected or appointed leader of the settlement.",
+        "responsibilities": [
+            "Overall settlement well-being and strategic direction.",
+            "Final authority on major projects and policies.",
+            "Managing top-level official appointments.",
+            "Representing the settlement in external affairs (if applicable)."
+        ],
+        "capabilities": [
+            "IssueStrategicDirective(target_role, details_dict)",
+            "EnactPolicy(policy_name, policy_details)",
+            "AppointKeyOfficial(character_name, role_to_appoint)",
+            "FireKeyOfficial(character_name)",
+            "ApproveMajorProject(project_name, project_details)",
+            "HostEvent(event_type, details)", # e.g., HoldTownMeeting, GiveSpeech
+            "AllocateSettlementBudget(category, amount)" # Future
+        ],
+        "job_default_goal": "Oversee Settlement" # From character.py
+    },
+    "Manager": {
+        "description": "Oversees civilian production, construction, and resource management.",
+        "reports_to": "Mayor",
+        "responsibilities": [
+            "Managing workforce for production and gathering.",
+            "Ensuring resource availability for projects and consumption.",
+            "Overseeing construction of non-military structures.",
+            "Maintaining efficiency in production chains."
+        ],
+        "capabilities": [
+            "CreateWorkOrder(type, details)", # CraftItem, BuildStructure, GatherResource
+            "AssignWorkerToTask(worker_name, task_details, priority)",
+            "PrioritizeProductionQueue(item_or_project_name, new_priority)",
+            "RequestResourcesOrTools(item_name, quantity, reason)",
+            "ManageSubordinates(subordinate_name, action_type, details)", # Review, Warn, Fire (for workers like Craftsmen, Bookkeeper)
+            "ReportToSupervisor(report_type, details_dict)" # e.g., production_status, resource_levels
+        ],
+        "job_default_goal": "Manage Subordinates" # From character.py, covers work order approval too
+    },
+    "Militia Commander": {
+        "description": "Responsible for the settlement's defense and military readiness.",
+        "reports_to": "Mayor",
+        "responsibilities": [
+            "Organizing settlement defense against external threats.",
+            "Training and equipping the militia.",
+            "Maintaining order during emergencies (assisting Sheriff).",
+            "Leading military operations as directed."
+        ],
+        "capabilities": [
+            "OrganizePatrolSchedule(area, frequency, squad_composition_details)",
+            "InitiateMilitiaTrainingDrill(drill_type, duration)",
+            "RequestArmsAndArmor(item_list_and_quantities)",
+            "RecruitMilitiaMember(candidate_character_name)", # or just "RecruitMilitia(quantity_needed)"
+            "LeadForce(target_location_or_objective, force_composition_details)", # For defense or expeditions
+            "ManageSubordinates(subordinate_name, action_type, details)", # For Militia Captains
+            "ReportToSupervisor(report_type, details_dict)" # e.g., readiness_status, threat_assessment
+        ],
+        "job_default_goal": "Oversee Expedition" # Placeholder; needs better default e.g., "MaintainDefenses"
+    },
+    "Sheriff": {
+        "description": "Maintains day-to-day peace and enforces local laws.",
+        "reports_to": "Mayor",
+        "responsibilities": [
+            "Enforcing settlement laws and policies.",
+            "Investigating minor crimes and disturbances.",
+            "Ensuring public safety in common areas."
+        ],
+        "capabilities": [
+            "AssignPatrolArea(deputy_name, area_name, schedule_details)",
+            "InvestigateDisturbance(location, witness_names)",
+            "DetainCharacter(character_name, reason, duration_or_next_step)", # Requires jail system
+            "ReportCrimeAndOrderStats(period_summary)",
+            "ManageSubordinates(subordinate_name, action_type, details)", # For Deputies
+            "RequestAssistanceFromMilitia(reason_for_request)" # In major situations
+        ],
+        "job_default_goal": "Maintain Peace in Settlement" # From character.py
+    },
+    "Chief Medical Officer": {
+        "description": "Oversees public health and medical services.",
+        "reports_to": "Mayor",
+        "responsibilities": [
+            "Managing medical facilities and personnel (Medics).",
+            "Ensuring availability of medical supplies.",
+            "Developing and implementing public health strategies (e.g., sanitation, disease prevention).",
+            "Handling medical emergencies and outbreaks."
+        ],
+        "capabilities": [
+            "AssignMedicToDuty(medic_name, duty_type, location_or_patient)", # e.g., clinic_duty, patient_care
+            "RequestMedicalSupplies(item_name, quantity)",
+            "ImplementPublicHealthMeasure(measure_name, details)", # e.g., QuarantineArea, SanitationCampaign
+            "OverseeMedicalTrainingProgram(program_details)",
+            "ManageSubordinates(subordinate_name, action_type, details)", # For Medics
+            "ReportHealthStatusToSupervisor(summary_of_settlement_health, outbreaks, supply_levels)"
+        ],
+        "job_default_goal": "Oversee Medical Operations" # From character.py
+    },
+    "Noble Lord": { # Can also apply to Baron, or have Baron as a more senior version
+        "description": "A person of high social standing, may or may not have direct land responsibilities.",
+        "reports_to": "Mayor", # For settlement context; could be None/other if purely feudal outside settlement
+        "responsibilities": [
+            "(If Landed) Managing their personal domain/estate: ensuring its productivity, welfare of its inhabitants, and contributing agreed resources/levies to the settlement.",
+            "(If Courtier/Unlanded) Advising the Mayor or other high nobles, undertaking special assignments (e.g., diplomatic), social maneuvering, upholding noble customs."
+        ],
+        "capabilities": [
+            # Landed Noble Capabilities
+            "CollectRevenueFromDomain(revenue_type)", # e.g., taxes, tithes
+            "IssueDomainEdict(edict_details, scope_is_own_domain_only)",
+            "ManageDomainWorkersAndResources(project_name, resource_allocation)",
+            "RaiseLevyFromDomain(number_of_troops, equipment_level_details)", # Local forces
+            # General Noble Capabilities
+            "AttendCourtOrSocialEvent(event_name)",
+            "AttemptToInfluenceNoble(target_noble_name, decision_or_opinion_to_influence, method_of_influence)",
+            "UndertakeSpecialAssignment(assignment_details, given_by_whom)", # e.g., diplomatic mission
+            "HostSocialGathering(guest_list, purpose_of_gathering)"
+        ],
+        "job_default_goal": "Oversee Domain" # (if landed), or "MaintainInfluence" (if courtier) - needs refinement in Character.job_default_goal
+    },
+    "Baron": { # Largely same as Noble Lord, could have higher base influence or larger domain by convention
+        "description": "A noble of significant standing, often with land and titles.",
+        "reports_to": "Mayor",
+        "responsibilities": ["Similar to Noble Lord, potentially with greater scope or expectation."],
+        "capabilities": ["Similar to Noble Lord, potentially with greater impact or access."],
+        "job_default_goal": "Oversee Domain"
+    },
+    # --- Lower Tier Roles ---
+    "Master Craftsman": {
+        "description": "A highly skilled artisan supervising a specific type of workshop.",
+        "reports_to": "Manager",
+        "responsibilities": [
+            "Overseeing production in their workshop type (e.g., Blacksmith, Carpenter).",
+            "Training apprentices and journeymen.",
+            "Ensuring quality of crafted goods.",
+            "Maintaining tools and equipment for their workshop.",
+            "Fulfilling crafting work orders assigned by the Manager."
+        ],
+        "capabilities": [
+            "TrainApprentice(apprentice_name, skill_to_train)",
+            "InspectCraftedItemQuality(item_id_or_batch)",
+            "RequestWorkshopSuppliesOrMaintenance(details)",
+            "RecommendCraftingPriorities(based_on_skill_and_available_mats_for_their_shop_type)"
+        ],
+        "job_default_goal": "Assess Production Needs" # From character.py (might need to be more workshop-specific)
+    },
+    "Militia Captain": {
+        "description": "Leads a squad or unit within the militia.",
+        "reports_to": "Militia Commander",
+        "responsibilities": [
+            "Leading their assigned unit in patrols, training, and combat.",
+            "Ensuring discipline and readiness of their squad.",
+            "Reporting to the Militia Commander."
+        ],
+        "capabilities": [
+            "ExecutePatrolOrder(route_details, squad_members)",
+            "LeadSquadInCombat(tactics_details)",
+            "ReportSquadStatus(readiness, morale, equipment_needs)"
+        ],
+        "job_default_goal": "Lead Unit" # Needs to be added to Character.job_default_goal
+    },
+    "Deputy": {
+        "description": "Assists the Sheriff in maintaining peace and order.",
+        "reports_to": "Sheriff",
+        "responsibilities": [
+            "Performing patrols as assigned.",
+            "Assisting in investigations.",
+            "Responding to minor disturbances."
+        ],
+        "capabilities": [
+            "PerformPatrol(area_name)",
+            "QuestionWitnessOrSuspect(character_name)",
+            "ReportIncidentDetails(incident_log)"
+        ],
+        "job_default_goal": "Patrol Area" # From character.py
+    },
+    "Medic": {
+        "description": "Provides medical care to the sick and injured.",
+        "reports_to": "Chief Medical Officer",
+        "responsibilities": [
+            "Treating patients directly.",
+            "Assisting the CMO in managing medical supplies and facilities.",
+            "Gathering herbs or compounding medicines if needed."
+        ],
+        "capabilities": [
+            "TreatPatient(patient_name, ailment_details, treatment_method)",
+            "RequestSpecificMedicalSupply(item_name, quantity_needed_urgently)",
+            "GatherHerbsInArea(area_name)"
+        ],
+        "job_default_goal": "Provide Medical Care" # From character.py
+    },
+    "Bookkeeper": {
+        "description": "Maintains the settlement's financial and resource records.",
+        "reports_to": "Manager",
+        "responsibilities": ["Accurately recording resource movements in stockpiles.", "Preparing financial summaries if/when economy is added."],
+        "capabilities": ["CountStockpileContents(stockpile_name)", "UpdateLedgerRecord(stockpile_name, inventory_data, current_day)"],
+        "job_default_goal": "Maintain Ledger" # From character.py
+    },
+    # Generic worker roles
+    "Builder": {"reports_to": "Manager", "job_default_goal": "Perform Builder Duties"},
+    "Woodcutter": {"reports_to": "Manager", "job_default_goal": "Perform Woodcutter Duties"},
+    "Stonemason": {"reports_to": "Manager", "job_default_goal": "Perform Stonemason Duties"},
+    "Miner": {"reports_to": "Manager", "job_default_goal": "Perform Miner Duties"} # Assuming a "Perform Miner Duties" goal
+}
+
+# Update JOB_TASK_DEFINITIONS with default goals for new roles if they perform specific tasks
+# For roles that are purely decision-making, their "task" is their job_default_goal in character.py,
+# which then calls specific _execute_ methods.
+
+# Example: If Militia Commander has a default task beyond "Oversee Expedition"
+# JOB_TASK_DEFINITIONS["Maintain Defenses"] = {
+#     "skill_used": "Leadership", # or "Strategy"
+#     # ... other fields if it's a task that can be "worked on"
+# }
+# Ensure character.py's job_default_goal() is updated for these.
+# For now, the ROLE_DETAILS includes a "job_default_goal" field for easy reference to Character.py
