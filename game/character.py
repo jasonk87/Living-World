@@ -96,6 +96,57 @@ class Character:
         self.building_site_target: Optional[Tuple[int, int]] = None # Parameter for EXECUTE_BUILD_ORDER
         self.current_building_project: Optional[str] = None # Blueprint key, parameter for EXECUTE_BUILD_ORDER
 
+        # Mood related attributes
+        self.mood_score: int = config.MOOD_SCORE_NEUTRAL_START
+        self.mood: str = "Neutral" # Initial descriptive mood, will be updated by _determine_mood_level
+        # self.mood_tendency: Optional[str] = None # Example: "Optimistic", "Pessimistic" - for future enhancement
+        self._determine_mood_level() # Set initial mood string based on score
+
+    def _determine_mood_level(self) -> str:
+        """Determines descriptive mood based on mood_score."""
+        # Iterate MOOD_LEVELS (sorted by score descending) to find the first match
+        sorted_mood_levels = sorted(config.MOOD_LEVELS.items(), key=lambda item: item[1], reverse=True)
+
+        current_mood_name = "Neutral" # Default if no thresholds met (should not happen with Neutral at -20)
+        for mood_name, threshold in sorted_mood_levels:
+            if self.mood_score >= threshold:
+                current_mood_name = mood_name
+                break
+        # Special case for Neutral, as its threshold is a lower bound of a band
+        if self.mood_score < config.MOOD_LEVELS["Neutral"] and self.mood_score > config.MOOD_LEVELS.get("Displeased", -50): # Check if it's above Displeased but below Neutral's lower bound
+             # This logic ensures that scores between Displeased's threshold and Neutral's threshold are correctly Neutral if not caught by other positive moods.
+             # E.g. if Neutral is -20, Content is 20. A score of 5 should be Content. A score of -10 should be Neutral.
+             # A score of -30 should be Displeased.
+             # The sort order handles positive moods. For negative, we need to ensure Neutral band.
+             if self.mood_score >= config.MOOD_LEVELS["Neutral"]: # Scores from -20 up to Content's threshold (20)
+                 pass # Already correctly assigned by sorted list or will be Neutral if nothing else matches above it
+             elif self.mood_score > config.MOOD_LEVELS.get("Displeased", -50): # e.g. -20 < score < -50
+                 # This means it fell through all positive moods and Content, so it should be Neutral if above Displeased.
+                 # However, the sorted list from highest to lowest should correctly assign "Neutral" for scores like -10.
+                 # Let's re-verify the logic for MOOD_LEVELS["Neutral"] = -20
+                 # If score is 10, "Neutral" is chosen (correct, as it's < 20 for Content)
+                 # If score is -10, "Neutral" is chosen (correct)
+                 # If score is -30, "Displeased" is chosen (correct, as it's < -20 for Neutral and >= -50 for Displeased)
+                 # The initial sort and break should handle this correctly.
+                 pass
+
+
+        if self.mood != current_mood_name:
+            self.add_memory(f"My mood changed to {current_mood_name} (Score: {self.mood_score}).")
+            self.mood = current_mood_name
+        return self.mood
+
+    def update_mood_score(self, change: int, reason: Optional[str] = None):
+        """Updates mood score, clamps it, and updates descriptive mood."""
+        old_score = self.mood_score
+        self.mood_score += change
+        self.mood_score = max(config.MOOD_SCORE_MIN, min(config.MOOD_SCORE_MAX, self.mood_score))
+
+        if reason and old_score != self.mood_score:
+            self.add_memory(f"Mood score changed by {change} to {self.mood_score}. Reason: {reason}")
+
+        self._determine_mood_level() # Update descriptive mood
+
     def _calculate_exp_for_level(self, level: int) -> float:
         if level < 0: level = 0
         return float(int(config.BASE_EXP_TO_NEXT_LEVEL * ((level + 1) ** config.EXP_LEVEL_SCALING_FACTOR)))
@@ -311,15 +362,25 @@ class Character:
                 )
                 world.add_building(target_building)
                 self.add_memory(f"Laid foundation for {target_building.display_name} at {self.building_site_target}.")
+                self.update_mood_score(config.MOOD_CHANGE_SUCCESSFUL_TASK_MINOR, f"Laid foundation for {target_building.display_name}")
+
 
             # Work on the building
             if target_building and not target_building.is_operational:
-                progress_this_tick = 1.0
+                base_build_progress = 1.0 # Base progress per tick for construction
+                mood_productivity_modifier = config.MOOD_EFFECT_PRODUCTIVITY.get(self.mood, 1.0)
+                progress_this_tick = base_build_progress * mood_productivity_modifier
+                if mood_productivity_modifier != 1.0:
+                    self.add_memory(f"My mood ({self.mood}) is affecting my work on {target_building.display_name} (Modifier: {mood_productivity_modifier:.2f}).")
+
                 construction_skill_level = self.skills.get("Construction", {}).get("level", 0)
-                progress_this_tick *= (1 + construction_skill_level * 0.1)
+                progress_this_tick *= (1 + construction_skill_level * 0.1) # Skill modifier
+
+                # Could add trait effects (Diligent, Lazy) here similar to generic_task if desired
+                # For now, primarily mood and skill.
 
                 prev_phase_idx = target_building.current_phase_index
-                actual_progress = target_building.work_on(progress_this_tick)
+                actual_progress = target_building.work_on(max(0, progress_this_tick)) # Ensure progress isn't negative
 
                 if actual_progress > 0:
                     self._grant_skill_experience("Construction", actual_progress * 0.5, world)
@@ -332,13 +393,17 @@ class Character:
                 if target_building.is_operational:
                     order.status = "Completed"
                     self.add_memory(f"Completed Build WO {order.order_id} for {target_building.display_name}.")
+                    self.update_mood_score(config.MOOD_CHANGE_SUCCESSFUL_TASK_MAJOR, f"Completed building {target_building.display_name}")
                     self._reset_building_state()
-                    self.current_goal = create_goal_from_job(self.job, self.name) or DEFAULT_IDLE_GOAL(self.name)
+                    self.current_goal = self.get_default_goal() # Changed from create_goal_from_job
                     return
-            elif target_building and target_building.is_operational: # Already completed
-                order.status = "Completed"
+            elif target_building and target_building.is_operational: # Already completed (e.g. found it already done)
+                if order.status != "Completed": # Only give mood boost if we are the one marking it complete
+                    order.status = "Completed"
+                    self.add_memory(f"Found Build WO {order.order_id} for {target_building.display_name} was already completed.")
+                    self.update_mood_score(config.MOOD_CHANGE_SUCCESSFUL_TASK_MAJOR / 2, f"Found building {target_building.display_name} already complete") # Half points for finding it done
                 self._reset_building_state()
-                self.current_goal = create_goal_from_job(self.job, self.name) or DEFAULT_IDLE_GOAL(self.name)
+                self.current_goal = self.get_default_goal() # Changed from create_goal_from_job
                 return
 
         # Attributes for build orders
@@ -559,49 +624,53 @@ class Character:
             self.task_work_progress = 0
             return False
 
-        # --- Trait Effects on Progress ---
-        current_progress_gain = 1.0 # Start with float for easier modification
+        # --- Mood, Trait & Health Effects on Progress ---
+        base_progress_per_tick = 1.0
+
+        # Mood Effect
+        mood_productivity_modifier = config.MOOD_EFFECT_PRODUCTIVITY.get(self.mood, 1.0)
+        current_progress_gain = base_progress_per_tick * mood_productivity_modifier
+        if mood_productivity_modifier != 1.0:
+            self.add_memory(f"My mood ({self.mood}) is affecting my work on {task_name} (Modifier: {mood_productivity_modifier:.2f}).")
+
         is_lazy_this_tick = False
 
-        # Health Effects on Progress
+        # Health Effects on Progress (Applied multiplicatively to mood-adjusted progress)
         if self.is_sick:
-            if self.sickness_severity > 7: # Severe sickness
-                current_progress_gain *= 0.1 # Drastically reduced
-                self.add_memory(f"Feeling too sick to work effectively on {task_name} (Severity: {self.sickness_severity}).")
-            elif self.sickness_severity > 3: # Moderate sickness
-                current_progress_gain *= 0.5 # Halved
-                self.add_memory(f"Feeling sick, working slowly on {task_name} (Severity: {self.sickness_severity}).")
-            else: # Mild sickness
-                current_progress_gain *= 0.8 # Slightly reduced
+            severity_modifier = 1.0
+            if self.sickness_severity > 7: severity_modifier = 0.1
+            elif self.sickness_severity > 3: severity_modifier = 0.5
+            else: severity_modifier = 0.8
+            current_progress_gain *= severity_modifier
+            if severity_modifier < 1.0: self.add_memory(f"Feeling sick, working slowly on {task_name} (S_Sev: {self.sickness_severity}, Mod: {severity_modifier:.2f}).")
 
         if self.is_injured:
-            if self.injury_severity > 7: # Severe injury
-                current_progress_gain *= 0.05 # Almost no progress
-                self.add_memory(f"Too injured to work properly on {task_name} (Severity: {self.injury_severity}).")
-            elif self.injury_severity > 3: # Moderate injury
-                current_progress_gain *= 0.4 # Significantly reduced
-                self.add_memory(f"Working with difficulty due to injury on {task_name} (Severity: {self.injury_severity}).")
-            else: # Mild injury
-                current_progress_gain *= 0.75 # Noticeably reduced
+            severity_modifier = 1.0
+            if self.injury_severity > 7: severity_modifier = 0.05
+            elif self.injury_severity > 3: severity_modifier = 0.4
+            else: severity_modifier = 0.75
+            current_progress_gain *= severity_modifier
+            if severity_modifier < 1.0: self.add_memory(f"Working with difficulty due to injury on {task_name} (I_Sev: {self.injury_severity}, Mod: {severity_modifier:.2f}).")
 
-        if "Lazy" in self.traits and not "Focused" in self.traits:
+        # Trait Effects on Progress
+        # Lazy trait can override everything if triggered
+        if "Lazy" in self.traits and not "Focused" in self.traits: # Focused can counteract Lazy's slacking
             if random.random() < 0.25: # 25% chance to be lazy
-                current_progress_gain = 0 # Overrides health effects if lazy for this tick
+                current_progress_gain = 0
                 is_lazy_this_tick = True
                 self.add_memory(f"Felt lazy and decided to slack off for a bit while working on '{task_name}'.")
 
-        if current_progress_gain > 0 and not is_lazy_this_tick: # Don't apply positive progress traits if slacked off or health brought to 0
+        if current_progress_gain > 0 and not is_lazy_this_tick: # Positive traits only apply if not slacking and some progress is possible
             if "Diligent" in self.traits:
-                if random.random() < 0.25: # 25% chance for bonus progress
-                    current_progress_gain += 0.5 # Additive bonus, or could be multiplicative
+                if random.random() < 0.25:
+                    current_progress_gain += 0.5 * base_progress_per_tick # Diligent bonus based on base, not already modified
                     self.add_memory(f"Worked with extra diligence on '{task_name}'.")
-            elif "Focused" in self.traits: # Focused but not Diligent
-                if random.random() < 0.10: # 10% chance for smaller bonus
-                    current_progress_gain += 0.25
+            elif "Focused" in self.traits:
+                if random.random() < 0.10:
+                    current_progress_gain += 0.25 * base_progress_per_tick
                     self.add_memory(f"Remained focused and made good progress on '{task_name}'.")
 
-        current_progress_gain = max(0, current_progress_gain) # Ensure progress isn't negative
-
+        current_progress_gain = max(0, current_progress_gain)
         self.task_work_progress += current_progress_gain
 
         if is_lazy_this_tick and current_progress_gain == 0: # If slacked, end tick here
@@ -644,7 +713,12 @@ class Character:
                 self.equipped_tool["durability"] -= durability_loss
                 if self.equipped_tool["durability"] <= 0:
                     self.add_memory(f"{self.equipped_tool['name']} broke!"); print(f"Oh no! {self.name}'s {self.equipped_tool['name']} BROKE!")
-                    self.unequip_tool()
+                    self.update_mood_score(config.MOOD_CHANGE_TOOL_BROKE, f"My {self.equipped_tool['name']} broke during task '{task_name}'")
+                    self.unequip_tool() # unequip_tool sets self.equipped_tool to None
+
+            # Mood boost for successful yield
+            if actual_yield_taken > 0 and res_prod: # Ensure something was actually yielded
+                self.update_mood_score(config.MOOD_CHANGE_SUCCESSFUL_TASK_MINOR, f"Successfully gathered {res_prod} from task '{task_name}'")
         return True
 
     def _execute_craft_order(self, world: 'World'):
@@ -668,26 +742,32 @@ class Character:
 
             craft_time_per_unit = blueprint.get("craft_time_per_unit", 5)
 
-            # --- Trait Effects on Crafting Progress ---
-            current_crafting_progress_gain = 1
+            # --- Mood, Trait Effects on Crafting Progress ---
+            base_craft_progress = 1.0
+            mood_productivity_modifier = config.MOOD_EFFECT_PRODUCTIVITY.get(self.mood, 1.0)
+            current_crafting_progress_gain = base_craft_progress * mood_productivity_modifier
+            if mood_productivity_modifier != 1.0:
+                 self.add_memory(f"My mood ({self.mood}) is affecting my crafting of {item_name} (Modifier: {mood_productivity_modifier:.2f}).")
+
             is_slacking_craft = False
 
             if "Lazy" in self.traits and not "Focused" in self.traits:
-                if random.random() < 0.25: # 25% chance to be lazy
+                if random.random() < 0.25:
                     current_crafting_progress_gain = 0
                     is_slacking_craft = True
                     self.add_memory(f"Felt lazy and slacked off while crafting {item_name} for WO {order.order_id}.")
 
-            if current_crafting_progress_gain > 0: # Don't apply positive progress traits if slacked
+            if current_crafting_progress_gain > 0 and not is_slacking_craft:
                 if "Diligent" in self.traits:
-                    if random.random() < 0.25: # 25% chance for bonus progress
-                        current_crafting_progress_gain += 1
+                    if random.random() < 0.25:
+                        current_crafting_progress_gain += 0.5 * base_craft_progress # Bonus based on base
                         self.add_memory(f"Worked with extra diligence crafting {item_name}.")
-                elif "Focused" in self.traits: # Focused but not Diligent, and not Lazy (or Lazy overridden)
-                    if random.random() < 0.10: # 10% chance for smaller bonus
-                        current_crafting_progress_gain += 1
+                elif "Focused" in self.traits:
+                    if random.random() < 0.10:
+                        current_crafting_progress_gain += 0.25 * base_craft_progress
                         self.add_memory(f"Remained focused while crafting {item_name}.")
 
+            current_crafting_progress_gain = max(0, current_crafting_progress_gain)
             self.crafting_progress += current_crafting_progress_gain
 
             if is_slacking_craft and current_crafting_progress_gain == 0:
@@ -699,17 +779,31 @@ class Character:
                     if self.inventory[res] <= 0: self.inventory.pop(res,None)
                 self.inventory[item_name] = self.inventory.get(item_name, 0) + 1 ; self.add_memory(f"Crafted 1 {item_name} for WO {order.order_id}.")
                 print(f"{self.name} CRAFTED 1 {item_name}. Inv has: {self.inventory.get(item_name,0)}/{item_qty_total} for WO {order.order_id}.")
+                self.update_mood_score(config.MOOD_CHANGE_SUCCESSFUL_TASK_MINOR, f"Crafted a {item_name}")
                 self.crafting_progress = 0; self.materials_gathered_for_wo = False
-                if self.inventory.get(item_name,0) >= item_qty_total: self.items_crafted_for_wo = True
+                if self.inventory.get(item_name,0) >= item_qty_total:
+                    self.items_crafted_for_wo = True
+                    self.add_memory(f"All {item_qty_total} {item_name}(s) for WO {order.order_id} crafted.")
+                    # Bigger mood boost for finishing all crafting for the order
+                    self.update_mood_score(config.MOOD_CHANGE_SUCCESSFUL_TASK_MAJOR / 2, f"Finished crafting all items for WO {order.order_id}") # Halved as hauling is next
             return
-        if self.items_crafted_for_wo:
-            if not self.hauling_info and self.inventory.get(item_name, 0) > 0:
-                self.hauling_info = {"resource":item_name, "quantity":self.inventory.get(item_name,0), "for_wo_id":order.order_id, "is_crafted_item":True}
-                # self.current_goal = "Initiate Hauling"
-                self.current_goal = Goal(GoalType.INITIATE_HAULING, assignee_id=self.name, originator_id=self.name, parameters=self.hauling_info.copy())
+        if self.items_crafted_for_wo: # This block means all items are crafted and now handles hauling/completion
+            # Check if items are still in inventory (i.e., not yet hauled)
+            items_to_haul_qty = self.inventory.get(item_name, 0)
+
+            if items_to_haul_qty > 0: # Still items to haul
+                # The old self.hauling_info is now directly passed as parameters.
+                haul_params = {"resource":item_name, "quantity":items_to_haul_qty, "for_wo_id":order.order_id, "is_crafted_item":True}
+                self.current_goal = Goal(GoalType.INITIATE_HAULING, assignee_id=self.name, originator_id=self.name, parameters=haul_params)
                 return
-            elif self.hauling_info is None and self.inventory.get(item_name, 0) == 0:
-                 order.status = "Completed"; self.add_memory(f"Completed/Stocked WO {order.order_id} ({item_name})."); print(f"{self.name} COMPLETED/STOCKED WO {order.order_id} ({item_name})."); self._reset_crafting_state(); self.current_goal = self.get_default_goal(); return
+            else: # All items crafted AND all items hauled (inventory of this item is 0)
+                 order.status = "Completed"
+                 self.add_memory(f"Completed and Stocked all items for WO {order.order_id} ({item_name}).")
+                 print(f"{self.name} COMPLETED/STOCKED WO {order.order_id} ({item_name}).")
+                 self.update_mood_score(config.MOOD_CHANGE_SUCCESSFUL_TASK_MAJOR, f"Fully completed WO {order.order_id}")
+                 self._reset_crafting_state()
+                 self.current_goal = self.get_default_goal()
+                 return
 
     def _execute_fetch_resource_for_wo(self, world:'World', blueprint:Dict):
         if not self.resource_to_fetch: return
@@ -1661,11 +1755,21 @@ class Character:
         if self.current_goal.type != GoalType.SEEK_MEDICAL_ATTENTION: # Avoid interrupting if already seeking help
             if self.is_sick and self.sickness_severity > 5:
                 self.add_memory(f"Feeling very sick (Severity: {self.sickness_severity}). Need medical attention.")
+                self.update_mood_score(config.MOOD_CHANGE_NEED_CRITICAL * 2, f"Severely sick (severity: {self.sickness_severity})") # Larger mood hit for severe sickness
                 self.current_goal = Goal(GoalType.SEEK_MEDICAL_ATTENTION, assignee_id=self.name, originator_id=self.name)
-                # No return here, let the goal execution happen below if this is the first time it's set.
             elif self.is_injured and self.injury_severity > 5:
                 self.add_memory(f"Badly injured (Severity: {self.injury_severity}). Need medical attention.")
+                self.update_mood_score(config.MOOD_CHANGE_NEED_CRITICAL * 2, f"Severely injured (severity: {self.injury_severity})") # Larger mood hit
                 self.current_goal = Goal(GoalType.SEEK_MEDICAL_ATTENTION, assignee_id=self.name, originator_id=self.name)
+
+        # Mood-driven goal check (simple example: seek solitude if very sad/stressed)
+        # This should ideally be before job-default goals but after critical needs like medical attention.
+        if self.current_goal.type not in [GoalType.SEEK_MEDICAL_ATTENTION, GoalType.ASK_FOR_HELP]: # Don't override critical states
+            if self.mood in ["Sad", "Stressed", "Furious"] and random.random() < config.MOOD_DRIVEN_GOAL_CHANCE:
+                # For now, SEEK_SOLITUDE will just make them Wander.
+                # A more complex implementation could make them avoid others or go to a quiet spot.
+                self.add_memory(f"Feeling {self.mood}, I need some time alone.")
+                self.current_goal = Goal(GoalType.WANDER, assignee_id=self.name, originator_id=self.name, details="Seeking solitude due to mood.") # Wander is a simple proxy for solitude
 
         # If goal changed to Seek Medical Attention, execute that immediately this tick.
         if self.current_goal.type == GoalType.SEEK_MEDICAL_ATTENTION:
@@ -1708,6 +1812,7 @@ class Character:
                         }
                         self.current_goal = Goal(GoalType.ASK_FOR_HELP, assignee_id=self.name, originator_id=self.name, parameters=goal_params)
                         self.add_memory(f"Critically hungry, decided to ask {target_helper.name} for food.")
+                        self.update_mood_score(config.MOOD_CHANGE_NEED_CRITICAL, "Critically hungry")
                         return # Goal set, will be executed by main dispatcher
 
         # Minimal Needs Check (Energy for Builder) - can be expanded later
@@ -2192,11 +2297,20 @@ class Character:
         elif final_rating == "Poor": relationship_change_value = -10
 
         if relationship_change_value != 0:
-            # Supervisor's feeling towards subordinate might change less, or be more dispositional
-            # For now, let's make it a smaller, more tempered change for the supervisor
             self.modify_relationship(subordinate.name, relationship_change_value // 2, world, reason=f"Performance review outcome: {final_rating}")
-            # Subordinate's feeling towards supervisor
             subordinate.modify_relationship(self.name, relationship_change_value, world, reason=f"Performance review outcome from {self.name}: {final_rating}")
+
+        # Manager's mood from conducting review
+        manager_mood_change = 0
+        if final_rating in ["Excellent", "Good"]: manager_mood_change = 3
+        elif final_rating in ["Poor"]: manager_mood_change = -3
+        if "Strict" in self.traits and final_rating == "Poor": manager_mood_change -=2
+        if "Compassionate" in self.traits and final_rating == "Poor": manager_mood_change +=1
+        self.update_mood_score(manager_mood_change, f"Conducted review for {subordinate.name} (Rated: {final_rating})")
+
+        # Subordinate's mood
+        sub_mood_change = {"Excellent": config.MOOD_CHANGE_PROMOTED, "Good": 10, "Satisfactory": 2, "Needs Improvement": -8, "Poor": config.MOOD_CHANGE_RECEIVED_WARNING}.get(final_rating,0)
+        subordinate.update_mood_score(sub_mood_change, f"Performance review: {final_rating}")
 
         # Reset warnings only if performance is not "Poor" or "Needs Improvement" as a result of this review.
         if final_rating not in ["Poor", "Needs Improvement"]:
@@ -2234,6 +2348,13 @@ class Character:
         print(f"{self.name} issued WARNING to {subordinate.name} for '{reason_message}'. Total warnings: {subordinate.warning_count}.")
 
         subordinate.add_memory(f"Received warning from {self.name} regarding: {reason_message}. Current warnings: {subordinate.warning_count}.")
+        subordinate.update_mood_score(config.MOOD_CHANGE_RECEIVED_WARNING, f"Received warning: {reason_message}")
+
+        # Manager's mood
+        manager_mood_hit = -5
+        if "Strict" in self.traits: manager_mood_hit -=2
+        elif "Forgiving" in self.traits: manager_mood_hit +=2
+        self.update_mood_score(manager_mood_hit, f"Issued warning to {subordinate.name}")
 
         if subordinate.warning_count >= config.FIRING_WARNING_THRESHOLD: # Threshold for automatic performance degradation
             if subordinate.performance_rating != "Poor":
@@ -2241,6 +2362,8 @@ class Character:
                 self.add_memory(f"{subordinate.name}'s performance set to Poor due to {subordinate.warning_count} warnings (Threshold: {config.FIRING_WARNING_THRESHOLD}).")
                 subordinate.add_memory(f"Performance automatically set to Poor due to reaching {subordinate.warning_count} warnings.")
                 print(f"{subordinate.name}'s performance automatically set to Poor due to {subordinate.warning_count} warnings.")
+                subordinate.update_mood_score(-10, "Performance set to Poor due to warnings")
+
 
     def fire_subordinate(self, subordinate_char_name: str, world: 'World'):
         if self.name == subordinate_char_name:
@@ -2258,6 +2381,12 @@ class Character:
         if subordinate.supervisor_name != self.name:
             self.add_memory(f"Attempted to fire {subordinate_char_name}, but I am not their supervisor."); return
 
+        # Manager's mood for firing someone
+        manager_mood_change = -10 # Base stress/unpleasantness
+        if "Ruthless" in self.traits: manager_mood_change += 8 # Ruthless managers might feel less bad or even good
+        elif "Compassionate" in self.traits: manager_mood_change -= 5 # Compassionate managers feel worse
+        self.update_mood_score(manager_mood_change, f"Fired {subordinate.name}")
+
         # Remove from supervisor's list
         if subordinate.name in self.subordinates_names:
             self.remove_subordinate(subordinate.name) # Uses existing method
@@ -2267,9 +2396,10 @@ class Character:
         subordinate.supervisor_name = None
         subordinate.job = "Unemployed"
         subordinate.rank = "Commoner" # Or some other default non-noble/non-worker rank
-        subordinate.current_goal = DEFAULT_IDLE_GOAL(subordinate.name) # Or "Find New Job" in the future
+        subordinate.current_goal = DEFAULT_IDLE_GOAL(subordinate.name)
         subordinate.assigned_tasks = []
         subordinate.performance_rating = "Fired"
+        subordinate.update_mood_score(config.MOOD_CHANGE_FIRED, f"Fired from job as {original_job}")
         subordinate.warning_count = 0
         # Consider if active work order should be dropped/cancelled
         if subordinate.active_work_order_id:
@@ -2482,6 +2612,18 @@ class Character:
         self._update_relationship_from_opinions(target_name, world)
         target_char._update_relationship_from_opinions(self.name, world)
 
+        # Mood change from greeting
+        mood_change_initiator = config.MOOD_CHANGE_POSITIVE_SOCIAL
+        mood_change_target = config.MOOD_CHANGE_POSITIVE_SOCIAL
+        if initiator_grumpy: mood_change_initiator -= 2 # Grumpy people might not enjoy initiating as much
+        if target_grumpy: mood_change_target -= 2    # Grumpy people might not enjoy being greeted as much
+        if "Friendly" in self.traits and "Friendly" in target_char.traits: # Extra bonus for mutual friendliness
+            mood_change_initiator += 2
+            mood_change_target += 2
+
+        self.update_mood_score(mood_change_initiator, f"Greeted {target_name}")
+        target_char.update_mood_score(mood_change_target, f"Was greeted by {self.name}")
+
         # Process listeners
         self._process_nearby_listeners(world, target_char, "greeting", self.traits, target_char.traits)
 
@@ -2586,6 +2728,16 @@ class Character:
         self._update_relationship_from_opinions(target_name, world)
         target_char._update_relationship_from_opinions(self.name, world)
 
+        # Mood change from argument (already applied in social need penalty, but can be more direct)
+        argue_mood_penalty = config.MOOD_CHANGE_NEGATIVE_SOCIAL - 5 # Arguments are worse than just negative social
+        if initiator_hotheaded: argue_mood_penalty -=5
+        if target_hotheaded: # Target also gets more upset if they are hotheaded
+             target_char.update_mood_score(argue_mood_penalty -5, f"Argued with hot-headed {self.name}")
+        else:
+             target_char.update_mood_score(argue_mood_penalty, f"Argued with {self.name}")
+        self.update_mood_score(argue_mood_penalty, f"Argued with {target_name}")
+
+
         # Listeners might form strong negative opinions or gain negative social fulfillment
         self._process_nearby_listeners(world, target_char, "argue", self.traits, target_char.traits)
 
@@ -2628,14 +2780,25 @@ class Character:
         can_help = False
         willing_to_help = False
 
-        # Willingness based on relationship and traits
+        # Willingness based on relationship and traits, modified by initiator's mood
         relationship_score = self.get_relationship_score(target_name)
-        if "Generous" in target_char.traits or "Kind" in target_char.traits: willing_to_help = True
-        elif relationship_score > 30: willing_to_help = random.random() < 0.8 # High relationship, high chance
-        elif relationship_score > 0: willing_to_help = random.random() < 0.5 # Positive relationship, moderate chance
-        elif not ("Selfish" in target_char.traits or "Grumpy" in target_char.traits): willing_to_help = random.random() < 0.2 # Neutral/low rel, low chance unless not selfish/grumpy
+        base_willingness_chance = 0.2 # Base chance for neutral target to help neutral requester
 
-        if "Selfish" in target_char.traits: willing_to_help = False # Selfish people rarely help
+        if "Generous" in target_char.traits or "Kind" in target_char.traits: base_willingness_chance = 0.7
+        elif "Selfish" in target_char.traits or "Grumpy" in target_char.traits: base_willingness_chance = 0.05
+
+        if relationship_score > 50: base_willingness_chance += 0.3 # Strong positive relationship
+        elif relationship_score > 10: base_willingness_chance += 0.15 # Mildly positive
+        elif relationship_score < -50: base_willingness_chance -= 0.2 # Strong negative relationship
+        elif relationship_score < -10: base_willingness_chance -= 0.1
+
+        # Initiator's mood effect on target's willingness
+        initiator_mood_social_modifier = config.MOOD_EFFECT_SOCIAL_SUCCESS_MOD.get(self.mood, 0.0)
+        final_willingness_chance = base_willingness_chance + initiator_mood_social_modifier
+        final_willingness_chance = max(0.0, min(1.0, final_willingness_chance)) # Clamp between 0 and 1
+
+        willing_to_help = random.random() < final_willingness_chance
+        if "Selfish" in target_char.traits and random.random() > 0.1: willing_to_help = False # Selfish people very rarely help unless other strong positives
 
         # Ability to help
         dialogue_line_self = f"Excuse me, {target_name}, I was wondering if you could help me?"
@@ -2678,6 +2841,9 @@ class Character:
 
             self.modify_relationship(target_name, 5, world, reason="They helped me when I asked.") # Grateful
             target_char.modify_relationship(self.name, 3, world, reason="I helped them out.") # Feels good to help
+            self.update_mood_score(config.MOOD_CHANGE_NEED_FULFILLED_FROM_CRITICAL, f"Received help from {target_name}")
+            target_char.update_mood_score(config.MOOD_CHANGE_POSITIVE_SOCIAL, f"Helped {self.name}")
+
 
             if target_name not in self.opinions: self.opinions[target_name] = {}
             self.opinions[target_name]["helpful"] = self.opinions[target_name].get("helpful",0) + 2
@@ -2688,6 +2854,7 @@ class Character:
             outcome_message = f"{target_name} was willing but unable to help {self.name}."
             dialogue_line_target = f"I'd like to help, {self.name}, but I don't have any {item_name_needed} to spare right now." if item_name_needed else f"I wish I could help, {self.name}, but I'm not able to at the moment."
             self.modify_relationship(target_name, 1, world, reason="They were willing to help, even if they couldn't.")
+            self.update_mood_score(config.MOOD_CHANGE_NEGATIVE_SOCIAL // 2, f"Was unable to get help from {target_name}, but they were willing.") # Lesser hit
             if target_name not in self.opinions: self.opinions[target_name] = {}
             self.opinions[target_name]["willing_but_unable"] = self.opinions[target_name].get("willing_but_unable",0) + 1
         else: # Unwilling to help (or unable and unwilling)
@@ -2697,6 +2864,9 @@ class Character:
             elif "Selfish" in target_char.traits: dialogue_line_target = f"I need to look out for myself, {self.name}."
 
             self.modify_relationship(target_name, -3, world, reason="They wouldn't help when I asked.")
+            self.update_mood_score(config.MOOD_CHANGE_NEGATIVE_SOCIAL, f"Denied help by {target_name}")
+            target_char.update_mood_score(-2, f"Declined to help {self.name}") # Small mood hit for being unhelpful
+
             if target_name not in self.opinions: self.opinions[target_name] = {}
             self.opinions[target_name]["unhelpful"] = self.opinions[target_name].get("unhelpful",0) -1
             if can_help: # If they could have helped but chose not to
@@ -2852,6 +3022,14 @@ class Character:
         # Update relationships based on overall opinions
         self._update_relationship_from_opinions(target_name, world)
         target_char._update_relationship_from_opinions(self.name, world)
+
+        # Mood change from offering/receiving comfort
+        initiator_comfort_mood_boost = config.MOOD_CHANGE_POSITIVE_SOCIAL + (5 if initiator_kind else 0)
+        target_comfort_mood_boost = config.MOOD_CHANGE_POSITIVE_SOCIAL + 10 # Receiving comfort is very positive
+        if target_grumpy: target_comfort_mood_boost -=5 # Grumpy people are less cheered
+
+        self.update_mood_score(initiator_comfort_mood_boost, f"Offered comfort to {target_name}")
+        target_char.update_mood_score(target_comfort_mood_boost, f"Received comfort from {self.name}")
 
         # Process listeners
         self._process_nearby_listeners(world, target_char, "offer_comfort", self.traits, target_char.traits)
@@ -3011,6 +3189,16 @@ class Character:
         # Update relationships based on overall opinions
         self._update_relationship_from_opinions(target_name, world)
         target_char._update_relationship_from_opinions(self.name, world)
+
+        # Mood change from sharing/receiving news
+        news_mood_boost = config.MOOD_CHANGE_POSITIVE_SOCIAL
+        if initiator_chatty: news_mood_boost += 3 # Chatty people enjoy sharing news more
+        if target_grumpy: # Grumpy target might not care for news
+            target_char.update_mood_score(news_mood_boost // 2, f"Heard news from {self.name}, but wasn't very interested.")
+        else:
+            target_char.update_mood_score(news_mood_boost, f"Heard news from {self.name}")
+        self.update_mood_score(news_mood_boost + (3 if initiator_chatty else 0), f"Shared news with {target_name}")
+
 
         # Process listeners
         self._process_nearby_listeners(world, target_char, "share_positive_news", self.traits, target_char.traits)
@@ -3210,6 +3398,18 @@ class Character:
         # Corrected interaction type for listeners of small talk
         self._process_nearby_listeners(world, target_char, "small_talk", self.traits, target_char.traits)
 
+        # Mood change from small talk
+        small_talk_mood_change = config.MOOD_CHANGE_POSITIVE_SOCIAL -2 # Small talk is less impactful
+        if initiator_chatty: small_talk_mood_change += 2
+        if target_grumpy: # Grumpy people dislike small talk
+            target_char.update_mood_score(-3, f"Endured small talk with {self.name}")
+            if initiator_grumpy: # If initiator also grumpy, less negative for target
+                 target_char.update_mood_score(1, f"Grudgingly acknowledged {self.name}'s small talk") # net -2
+        else:
+            target_char.update_mood_score(small_talk_mood_change, f"Small talk with {self.name}")
+
+        self.update_mood_score(small_talk_mood_change, f"Small talk with {target_name}")
+
         self.current_goal = self.get_default_goal()
         return
 
@@ -3393,6 +3593,14 @@ class Character:
         # Update relationships based on overall opinions
         self._update_relationship_from_opinions(target_name, world)
         target_char._update_relationship_from_opinions(self.name, world)
+
+        # Mood change from introduction (generally positive)
+        intro_mood_boost = config.MOOD_CHANGE_POSITIVE_SOCIAL + 1 # Slightly more than a generic greeting
+        if "Friendly" in self.traits: intro_mood_boost +=2
+        if "Friendly" in target_char.traits: intro_mood_boost +=2
+
+        self.update_mood_score(intro_mood_boost, f"Introduced myself to {target_name}")
+        target_char.update_mood_score(intro_mood_boost, f"Met {self.name}")
 
         # Process listeners
         self._process_nearby_listeners(world, target_char, "introduction", self.traits, target_char.traits)

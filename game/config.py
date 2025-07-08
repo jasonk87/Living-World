@@ -43,3 +43,65 @@ VERY_LOW_SOCIAL_NEED_THRESHOLD = 15 # Below this, other negative effects might o
 SOCIAL_INTERACTION_CHANCE_LOW_NEED_BONUS = 0.03 # Additional chance to interact if social need is low
 CRITICAL_NEED_THRESHOLD_FOR_HELP = 10 # e.g., if Hunger drops below this, might ask for food
 ASK_FOR_HELP_CHANCE = 0.25 # Base chance to ask for help when in critical need and a suitable target is nearby
+
+# Mood System Configs
+MOOD_SCORE_MIN = -100
+MOOD_SCORE_MAX = 100
+MOOD_SCORE_NEUTRAL_START = 0
+
+# Mood Levels (Score Thresholds and Names)
+# Thresholds are lower bounds. e.g. score > 75 is Ecstatic.
+MOOD_LEVELS = {
+    "Ecstatic": 75,
+    "Happy": 50,
+    "Content": 20,
+    "Neutral": -20, # Neutral is a band around 0
+    "Displeased": -50,
+    "Sad": -75,
+    "Furious": -90, # Reserved for very strong negative triggers, might override Sad/Stressed
+    "Stressed": -60 # Might be a parallel mood or override others depending on source
+}
+# Note: For simplicity, Furious and Stressed might be special flags rather than just score-based.
+# Or, specific events directly set these moods bypassing score temporarily.
+
+# Base Mood Change Values (Examples - can be tuned extensively)
+MOOD_CHANGE_POSITIVE_SOCIAL = 5
+MOOD_CHANGE_NEGATIVE_SOCIAL = -10
+MOOD_CHANGE_SUCCESSFUL_TASK_MAJOR = 10 # e.g. completing a WO
+MOOD_CHANGE_SUCCESSFUL_TASK_MINOR = 3  # e.g. gathering one unit of resource
+MOOD_CHANGE_FAILED_TASK = -5
+MOOD_CHANGE_NEED_CRITICAL = -8         # Per critical need, per check
+MOOD_CHANGE_NEED_FULFILLED_FROM_CRITICAL = 10
+MOOD_CHANGE_TOOL_BROKE = -7
+MOOD_CHANGE_RECEIVED_WARNING = -15
+MOOD_CHANGE_FIRED = -50
+MOOD_CHANGE_PROMOTED = 20 # Example for future use
+MOOD_CHANGE_NEW_FRIEND = 10 # Example for future use
+
+# Mood Effects (Examples - can be tuned)
+# Productivity: 1.0 is baseline.
+MOOD_EFFECT_PRODUCTIVITY = {
+    "Ecstatic": 1.2,
+    "Happy": 1.1,
+    "Content": 1.05,
+    "Neutral": 1.0,
+    "Displeased": 0.9,
+    "Sad": 0.75,
+    "Stressed": 0.8,
+    "Furious": 0.5 # Hard to work when furious
+}
+
+# Social Success Chance Modifier (additive: +0.1 means +10% chance)
+MOOD_EFFECT_SOCIAL_SUCCESS_MOD = {
+    "Ecstatic": 0.15,
+    "Happy": 0.1,
+    "Content": 0.05,
+    "Neutral": 0.0,
+    "Displeased": -0.05,
+    "Sad": -0.1,
+    "Stressed": -0.1,
+    "Furious": -0.25
+}
+
+# Chance to initiate specific mood-driven goals (if mood is very low/high)
+MOOD_DRIVEN_GOAL_CHANCE = 0.1 # e.g. 10% chance per tick if mood is extreme
