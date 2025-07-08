@@ -168,3 +168,27 @@ RUMOR_SPREAD_CHATTY_BONUS = 0.15 # Additional chance if character is "Chatty"
 RUMOR_OPINION_EFFECT_STRENGTH_FACTOR = 0.1 # e.g. rumor strength 50 * 0.1 = 5 opinion points
 MIN_RUMOR_STRENGTH_FOR_OPINION_EFFECT = 20 # Rumor needs this strength to affect opinion
 MAX_OPINION_CHANGE_FROM_RUMOR = 5 # Max opinion points a single rumor instance can change
+
+# Complex Needs System
+NEED_SCORE_MIN = 0
+NEED_SCORE_MAX = 100
+NEED_SAFETY_DEFAULT = 70
+NEED_BELONGING_DEFAULT = 60 # Social is primary, this is a deeper sense of community
+NEED_ESTEEM_DEFAULT = 50
+
+NEED_SAFETY_DECAY_DAILY = 3
+NEED_BELONGING_DECAY_DAILY = 5 # Decays a bit faster, encouraging social upkeep
+NEED_ESTEEM_DECAY_DAILY = 2
+
+# Critical Thresholds for Needs (when they start causing significant mood/behavioral changes)
+NEED_SAFETY_CRITICAL_THRESHOLD = 20
+NEED_BELONGING_CRITICAL_THRESHOLD = 25
+NEED_ESTEEM_CRITICAL_THRESHOLD = 15
+
+# Mood changes related to complex needs
+MOOD_CHANGE_SAFETY_CRITICAL = -12
+MOOD_CHANGE_BELONGING_CRITICAL = -10
+MOOD_CHANGE_ESTEEM_CRITICAL = -8
+MOOD_CHANGE_SAFETY_FULFILLED = 10      # When safety significantly improves from low
+MOOD_CHANGE_BELONGING_FULFILLED = 8    # When belonging significantly improves
+MOOD_CHANGE_ESTEEM_FULFILLED = 7       # When esteem significantly improves

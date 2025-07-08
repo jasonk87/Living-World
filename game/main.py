@@ -125,6 +125,9 @@ def tick_simulation():
                     char_daily_reset.sickness_severity = random.randint(1, 3) # Mild sickness
                     game_world.add_event_log_message(f"{char_daily_reset.name} has fallen ill (Severity: {char_daily_reset.sickness_severity}).")
                     char_daily_reset.add_memory("Fell ill.")
+                    char_daily_reset.needs['Safety'] = max(config.NEED_SCORE_MIN, char_daily_reset.needs.get('Safety', config.NEED_SAFETY_DEFAULT) - 15) # Sickness reduces safety
+                    char_daily_reset.add_memory(f"Sickness reduced my safety. Safety: {char_daily_reset.needs['Safety']}")
+
 
                 injury_chance = 0.002 # Base 0.2% chance
                 if char_daily_reset.job in ["Builder", "Woodcutter", "Stonemason", "Miner"]: # Example risky jobs
@@ -134,6 +137,8 @@ def tick_simulation():
                     char_daily_reset.injury_severity = random.randint(1, 3) # Mild injury
                     game_world.add_event_log_message(f"{char_daily_reset.name} has been injured (Severity: {char_daily_reset.injury_severity}).")
                     char_daily_reset.add_memory("Got injured.")
+                    char_daily_reset.needs['Safety'] = max(config.NEED_SCORE_MIN, char_daily_reset.needs.get('Safety', config.NEED_SAFETY_DEFAULT) - 20) # Injury significantly reduces safety
+                    char_daily_reset.add_memory(f"Injury reduced my safety. Safety: {char_daily_reset.needs['Safety']}")
 
                 char_daily_reset.needs['Hunger'] = max(0, char_daily_reset.needs.get('Hunger', 100) - random.randint(10, 20))
                 char_daily_reset.needs['Thirst'] = max(0, char_daily_reset.needs.get('Thirst', 100) - random.randint(15, 25))
@@ -148,6 +153,11 @@ def tick_simulation():
                 if "Outgoing" in char_daily_reset.traits: # Assuming "Outgoing" trait exists
                     decay_amount *= 1.5
                 char_daily_reset.needs['Social'] = max(0, current_social_need - int(decay_amount))
+
+                # Decay for new complex needs
+                char_daily_reset.needs['Safety'] = max(config.NEED_SCORE_MIN, char_daily_reset.needs.get('Safety', config.NEED_SAFETY_DEFAULT) - config.NEED_SAFETY_DECAY_DAILY)
+                char_daily_reset.needs['Belonging'] = max(config.NEED_SCORE_MIN, char_daily_reset.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) - config.NEED_BELONGING_DECAY_DAILY)
+                char_daily_reset.needs['Esteem'] = max(config.NEED_SCORE_MIN, char_daily_reset.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) - config.NEED_ESTEEM_DECAY_DAILY)
 
                 # ... other needs updates
                 if char_daily_reset.current_goal in ["Wander", None, "Idle"] and \
