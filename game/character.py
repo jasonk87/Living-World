@@ -1,18 +1,17 @@
 # game/character.py
 from typing import TYPE_CHECKING, Optional, Dict, List, Tuple, Any
 import random
-from .llm_integration import generate_dialogue
-from .stockpile import Stockpile
-from .work_order import WorkOrder
+from .llm_integration import generate_dialogue # Kept as it's used
+# from .stockpile import Stockpile # Not directly used by Character methods
+# from .work_order import WorkOrder # Not directly used by Character methods
 from .data import BLUEPRINTS, JOB_TASK_DEFINITIONS, STRUCTURE_BLUEPRINTS
-from . import config # Import config
-from .goal import Goal, GoalType, GoalStatus, DEFAULT_IDLE_GOAL, create_goal_from_job # Import Goal related classes
+from . import config
+from .goal import Goal, GoalType, GoalStatus, DEFAULT_IDLE_GOAL, create_goal_from_job
 
 if TYPE_CHECKING:
     from .world import World
-    # from .character import Character as OtherCharacter # Already have Character in this file
+    # Character can self-reference with 'Character' string hint if needed later
 
-# STALE_THRESHOLD_DAYS = 2 # Now in config
 ORDER_SPAM_PREVENTION_DAYS = 3
 
 class Character:
@@ -35,18 +34,29 @@ class Character:
 
         self.x = x; self.y = y; self.inventory = {}; self.memory = [];
         self.needs = needs if needs else {};
-        # Initialize current_goal with a Goal object
         self.job = job # Set job before calling create_goal_from_job
-        self.current_goal: Goal = current_goal_obj if current_goal_obj else create_goal_from_job(self.job or "Unemployed", self.name)
-        if not self.current_goal: # Fallback if create_goal_from_job returns None
-             self.current_goal = Goal(GoalType.IDLE, originator_id="SystemInit", assignee_id=self.name)
-        if self.current_goal.assignee_id is None: # Ensure assignee is set
+
+        # Initialize current_goal with a Goal object
+        if current_goal_obj:
+            self.current_goal: Goal = current_goal_obj
+        else:
+            # Try to create a job-specific goal
+            job_goal = create_goal_from_job(self.job or "Unemployed", self.name)
+            if job_goal:
+                self.current_goal: Goal = job_goal
+            else:
+                # Fallback to a default idle goal if job goal creation fails or job is "Unemployed" and has no default
+                self.current_goal: Goal = DEFAULT_IDLE_GOAL(assignee_id=self.name, originator_id="SystemInit")
+
+        # Ensure assignee_id is always set on the initial goal
+        if self.current_goal.assignee_id is None:
             self.current_goal.assignee_id = self.name
+        if not self.current_goal.originator_id: # Ensure originator is set if not already
+            self.current_goal.originator_id = self.name if self.current_goal.type != GoalType.IDLE else "SystemInit"
 
-
-        self.relationships = {}; self.max_inventory_items = max_inventory_items # self.job already set
-        self.hauling_info: Optional[Dict] = None # Used by Haul Resource, parameters can go into Goal object
-        self.counting_target_stockpile_name: Optional[str] = None # Used by Count Stockpile, can go into Goal
+        self.relationships = {}; self.max_inventory_items = max_inventory_items
+        # self.hauling_info attribute is fully removed. Logic relies on current_goal.parameters.
+        # self.counting_target_stockpile_name: Optional[str] = None # Attribute removed.
         self.supervisor_name: Optional[str] = None; self.subordinates_names: List[str] = []
         self.managed_item_targets: Dict[str, int] = {}; self.order_cooldown: Dict[str, int] = {}
         self.active_work_order_id: Optional[str] = None; self.crafting_progress: int = 0
@@ -76,7 +86,6 @@ class Character:
         self.known_characters: List[str] = []
         self.opinions: Dict[str, Dict[str, int]] = {}
         self.dialogue_history: List[Dict[str, Any]] = []
-        # self.current_goal_details removed, now part of self.current_goal.parameters
         self.known_events: List[str] = []
 
         if 'Social' not in self.needs: self.needs['Social'] = 70
@@ -175,13 +184,13 @@ class Character:
     def _execute_build_order(self, world: 'World'):
         if not self.active_build_order_id or not self.current_building_project or not self.building_site_target:
             self._reset_building_state()
-            self.current_goal = self.job_default_goal() or "Idle"
+            self.current_goal = create_goal_from_job(self.job, self.name) or DEFAULT_IDLE_GOAL(self.name)
             return
 
         order = world.get_work_order_by_id(self.active_build_order_id)
         if not order or order.status != "InProgress" or order.assigned_to != self.name:
             self._reset_building_state()
-            self.current_goal = self.job_default_goal() or "Idle"
+            self.current_goal = create_goal_from_job(self.job, self.name) or DEFAULT_IDLE_GOAL(self.name)
             return
 
         # Ensure needs are imported if used here, for now, assume energy is checked in decide_action
@@ -193,7 +202,7 @@ class Character:
         structure_bp_data = STRUCTURE_BLUEPRINTS.get(structure_blueprint_key) # Access directly after import
         if not structure_bp_data:
             order.status = "Denied"; order.denial_reason = f"Unknown blueprint {structure_blueprint_key}"
-            self._reset_building_state(); self.current_goal = "Idle"; return
+            self._reset_building_state(); self.current_goal = DEFAULT_IDLE_GOAL(self.name); return
 
         # --- Material Gathering Phase ---
         if not self.materials_gathered_for_build:
@@ -324,12 +333,12 @@ class Character:
                     order.status = "Completed"
                     self.add_memory(f"Completed Build WO {order.order_id} for {target_building.display_name}.")
                     self._reset_building_state()
-                    self.current_goal = self.job_default_goal() or "Idle"
+                    self.current_goal = create_goal_from_job(self.job, self.name) or DEFAULT_IDLE_GOAL(self.name)
                     return
             elif target_building and target_building.is_operational: # Already completed
                 order.status = "Completed"
                 self._reset_building_state()
-                self.current_goal = self.job_default_goal() or "Idle"
+                self.current_goal = create_goal_from_job(self.job, self.name) or DEFAULT_IDLE_GOAL(self.name)
                 return
 
         # Attributes for build orders
@@ -349,10 +358,12 @@ class Character:
     def _reset_crafting_state(self):
         self.active_work_order_id = None; self.materials_gathered_for_wo = False
         self.items_crafted_for_wo = False; self.resource_to_fetch = None
-        self.crafting_progress = 0; self.hauling_info = None; self.workshop_location = None
+        self.crafting_progress = 0; self.workshop_location = None
+        # self.hauling_info = None # Attribute removed
 
     def __str__(self):
-        base_info = (f"Character(Name: {self.name}, Rank: {self.rank}, Job: {self.job}, Pos: ({self.x},{self.y}), Goal: {self.current_goal}, WO: {self.active_work_order_id}, Load: {self.get_inventory_load()}/{self.max_inventory_items})")
+        goal_str = str(self.current_goal) if self.current_goal else "None"
+        base_info = (f"Character(Name: {self.name}, Rank: {self.rank}, Job: {self.job}, Pos: ({self.x},{self.y}), Goal: {goal_str}, WO: {self.active_work_order_id}, Load: {self.get_inventory_load()}/{self.max_inventory_items})")
         supervisor_info = f"  Supervisor: {self.supervisor_name if self.supervisor_name else 'None'}"
         subordinates_info = f"  Subordinates: {len(self.subordinates_names)}"
         performance_info = f"  Performance: {self.performance_rating} (Warnings: {self.warning_count}, Last Review: Day {self.last_performance_review_day if self.last_performance_review_day is not None else 'N/A'})"
@@ -467,11 +478,11 @@ class Character:
     def gather_resource(self, resource_name: str, world: 'World'): pass
     def build(self, structure_type: str, world: 'World') -> bool: return False
 
-    def job_default_goal(self) -> str:
+    def job_default_goal_type_str(self) -> str: # Returns a string representing the goal type or job title
         if self.job == "Woodcutter": return "Perform Woodcutter Duties"
         if self.job == "Stonemason": return "Perform Stonemason Duties"
         if self.job == "Master Craftsman": return "Assess Production Needs"
-        if self.job == "Manager": return "Manage Subordinates" # Changed from "Manage Work Orders"
+        if self.job == "Manager": return "Manage Subordinates"
         if self.job == "Bookkeeper": return "Maintain Ledger"
         if self.job == "Expedition Leader": return "Oversee Expedition"
         if self.job == "Mayor": return "Oversee Settlement"
@@ -479,15 +490,22 @@ class Character:
         if self.job == "Medic": return "Provide Medical Care"
         if self.job == "Sheriff": return "Maintain Peace in Settlement"
         if self.job == "Deputy": return "Patrol Area"
-        # Add a check for rank if we want Nobles who aren't "Manager" to also manage
-        if self.rank in ["Noble Lord", "Baron"] and not self.subordinates_names: # Example: A noble without a specific job might just idle or have other duties
-            return "Oversee Domain" # Placeholder for other noble tasks
+        if self.rank in ["Noble Lord", "Baron"] and not self.subordinates_names:
+            return "Oversee Domain"
         elif self.rank in ["Noble Lord", "Baron"]:
             return "Manage Subordinates"
-        return "Idle"
+        return "Idle" # Corresponds to GoalType.IDLE
+
+    def get_default_goal(self) -> Goal:
+        job_goal_str = self.job_default_goal_type_str()
+        goal = create_goal_from_job(job_goal_str, self.name)
+        return goal if goal else DEFAULT_IDLE_GOAL(self.name)
 
     def _execute_fetch_tool(self, world: 'World') -> bool: # True if still fetching, False if done/failed
-        if not self.tool_to_fetch_type: self.current_goal = self.goal_before_fetching_tool or self.job_default_goal(); self.goal_before_fetching_tool = None; return False
+        if not self.tool_to_fetch_type:
+            self.current_goal = self.goal_before_fetching_tool or self.get_default_goal()
+            self.goal_before_fetching_tool = None
+            return False
         target_tool_name, stockpile_to_search = None, None
         if self.fetching_tool_info:
             target_tool_name = self.fetching_tool_info.get("name_to_fetch"); sp_name = self.fetching_tool_info.get("stockpile_name")
@@ -499,24 +517,47 @@ class Character:
                     if qty > 0 and item in BLUEPRINTS and BLUEPRINTS[item].get("tool_type") == self.tool_to_fetch_type:
                         self.fetching_tool_info = {"name_to_fetch": item, "stockpile_name": sp.name}; stockpile_to_search, target_tool_name = sp, item; break
                 if self.fetching_tool_info: break
-            if not self.fetching_tool_info: print(f"{self.name} needs a {self.tool_to_fetch_type} but none are available!"); self.current_goal = self.goal_before_fetching_tool or self.job_default_goal(); self.tool_to_fetch_type = None; self.goal_before_fetching_tool = None; return False
-        if not stockpile_to_search or not target_tool_name : self.current_goal = self.goal_before_fetching_tool or self.job_default_goal(); self.tool_to_fetch_type = None; self.goal_before_fetching_tool = None; return False
+            if not self.fetching_tool_info:
+                print(f"{self.name} needs a {self.tool_to_fetch_type} but none are available!")
+                self.current_goal = self.goal_before_fetching_tool or self.get_default_goal()
+                self.tool_to_fetch_type = None; self.goal_before_fetching_tool = None
+                return False
+        if not stockpile_to_search or not target_tool_name:
+            self.current_goal = self.goal_before_fetching_tool or self.get_default_goal()
+            self.tool_to_fetch_type = None; self.goal_before_fetching_tool = None
+            return False
         spot = (stockpile_to_search.rect[0], stockpile_to_search.rect[1])
         if (self.x, self.y) == spot:
             s, qr = stockpile_to_search.remove_item(target_tool_name, 1)
             if s and qr > 0:
-                if self.equip_tool(target_tool_name): self.current_goal = self.goal_before_fetching_tool or self.job_default_goal(); self.tool_to_fetch_type = None; self.fetching_tool_info = None; self.goal_before_fetching_tool = None; return False
-                else: self.current_goal = self.goal_before_fetching_tool or "Idle"; self.tool_to_fetch_type = None; self.fetching_tool_info = None; self.goal_before_fetching_tool = None; return False
-            else: self.fetching_tool_info = None; return True
-        else: self.move_towards(spot[0], spot[1], world); return True
+                if self.equip_tool(target_tool_name):
+                    self.current_goal = self.goal_before_fetching_tool or self.get_default_goal()
+                    self.tool_to_fetch_type = None; self.fetching_tool_info = None; self.goal_before_fetching_tool = None
+                    return False
+                else: # Failed to equip for some reason
+                    self.current_goal = self.goal_before_fetching_tool or DEFAULT_IDLE_GOAL(self.name)
+                    self.tool_to_fetch_type = None; self.fetching_tool_info = None; self.goal_before_fetching_tool = None
+                    return False
+            else: # Failed to remove from stockpile (e.g. suddenly empty)
+                self.fetching_tool_info = None # Force re-scan for tool
+                return True # Still trying to fetch
+        else:
+            self.move_towards(spot[0], spot[1], world)
+            return True
 
     def _execute_generic_task(self, world: 'World', task_name: str) -> bool: # True if task action taken, False if tool fetch needed
-        if task_name not in JOB_TASK_DEFINITIONS: self.current_goal = "Idle"; return False
+        if task_name not in JOB_TASK_DEFINITIONS:
+            self.current_goal = DEFAULT_IDLE_GOAL(self.name)
+            return False
         task_def = JOB_TASK_DEFINITIONS[task_name]; tool_type = task_def.get("required_tool_type")
         # self.current_task_def_name = task_name # This is already set by the calling gather function
         if tool_type and (not self.equipped_tool or self.equipped_tool.get("tool_type") != tool_type):
             if not self.goal_before_fetching_tool : self.goal_before_fetching_tool = self.current_goal
-            self.current_goal = "Fetch Tool"; self.tool_to_fetch_type = tool_type; self.task_work_progress = 0; return False
+            # self.current_goal = "Fetch Tool"
+            self.current_goal = Goal(GoalType.FETCH_TOOL, assignee_id=self.name, originator_id=self.name, parameters={"tool_type": tool_type})
+            self.tool_to_fetch_type = tool_type # Still needed by _execute_fetch_tool internal logic
+            self.task_work_progress = 0
+            return False
 
         # --- Trait Effects on Progress ---
         current_progress_gain = 1.0 # Start with float for easier modification
@@ -608,7 +649,10 @@ class Character:
 
     def _execute_craft_order(self, world: 'World'):
         order = world.get_work_order_by_id(self.active_work_order_id)
-        if not order or order.status != "InProgress" or order.assigned_to != self.name : self._reset_crafting_state(); self.current_goal=self.job_default_goal() or "Idle"; return
+        if not order or order.status != "InProgress" or order.assigned_to != self.name :
+            self._reset_crafting_state()
+            self.current_goal = self.get_default_goal()
+            return
         item_name = order.details["item_name"]; item_qty_total = order.details["quantity"]; blueprint = BLUEPRINTS.get(item_name)
         if not self.materials_gathered_for_wo:
             all_mats_one_unit = True
@@ -661,9 +705,11 @@ class Character:
         if self.items_crafted_for_wo:
             if not self.hauling_info and self.inventory.get(item_name, 0) > 0:
                 self.hauling_info = {"resource":item_name, "quantity":self.inventory.get(item_name,0), "for_wo_id":order.order_id, "is_crafted_item":True}
-                self.current_goal = "Initiate Hauling"; return
+                # self.current_goal = "Initiate Hauling"
+                self.current_goal = Goal(GoalType.INITIATE_HAULING, assignee_id=self.name, originator_id=self.name, parameters=self.hauling_info.copy())
+                return
             elif self.hauling_info is None and self.inventory.get(item_name, 0) == 0:
-                 order.status = "Completed"; self.add_memory(f"Completed/Stocked WO {order.order_id} ({item_name})."); print(f"{self.name} COMPLETED/STOCKED WO {order.order_id} ({item_name})."); self._reset_crafting_state(); self.current_goal = self.job_default_goal() or "Idle"; return
+                 order.status = "Completed"; self.add_memory(f"Completed/Stocked WO {order.order_id} ({item_name})."); print(f"{self.name} COMPLETED/STOCKED WO {order.order_id} ({item_name})."); self._reset_crafting_state(); self.current_goal = self.get_default_goal(); return
 
     def _execute_fetch_resource_for_wo(self, world:'World', blueprint:Dict):
         if not self.resource_to_fetch: return
@@ -689,11 +735,17 @@ class Character:
         else: self.move_towards(spot[0], spot[1], world)
 
     def _execute_assess_production_needs(self, world: 'World'):
-        if self.job != "Master Craftsman": self.current_goal = self.job_default_goal(); return
+        if self.job != "Master Craftsman":
+            self.current_goal = self.get_default_goal()
+            return
         item_processed_this_tick = False;
-        if not self.managed_item_targets: self.current_goal = "Idle"; return
+        if not self.managed_item_targets:
+            self.current_goal = DEFAULT_IDLE_GOAL(self.name)
+            return
         target_item_names = list(self.managed_item_targets.keys())
-        if not target_item_names: self.current_goal = "Idle"; return
+        if not target_item_names:
+            self.current_goal = DEFAULT_IDLE_GOAL(self.name)
+            return
         for i in range(len(target_item_names)):
             current_idx = (self._mc_item_check_idx + i) % len(target_item_names)
             item_name = target_item_names[current_idx]; target_qty = self.managed_item_targets[item_name]
@@ -714,12 +766,15 @@ class Character:
                 world.add_work_order(new_order); self.order_cooldown[item_name] = world.game_time.current_day
                 self.add_memory(f"Generated WO for {qty_to_order} {item_name}."); print(f"{self.name} (MC) generated WO for {qty_to_order} {item_name}(s).")
                 item_processed_this_tick = True; self._mc_item_check_idx = (current_idx + 1) % len(target_item_names); break
-        if not item_processed_this_tick: self.current_goal = "Idle"; self._mc_item_check_idx = 0
+        if not item_processed_this_tick:
+            self.current_goal = DEFAULT_IDLE_GOAL(self.name)
+            self._mc_item_check_idx = 0
 
     # Renamed from _execute_manage_work_orders to _execute_manage_subordinates
     def _execute_manage_subordinates(self, world: 'World'):
         if not (self.job == "Manager" or self.rank in ["Noble Lord", "Baron"]) or not self.subordinates_names:
-            self.current_goal = self.job_default_goal(); return # Not a manager or no one to manage
+            self.current_goal = self.get_default_goal()
+            return # Not a manager or no one to manage
 
         # Prioritize managing work orders if also a Manager (dual role)
         if self.job == "Manager":
@@ -748,7 +803,7 @@ class Character:
                 self.conduct_performance_review(subordinate.name, world)
                 # After a review, the supervisor might be "done" for this cycle of Manage Subordinates.
                 # Or they could continue to check other subordinates. For now, one action is enough.
-                self.current_goal = "Idle" # Re-evaluate next tick; prevents multiple manager actions in one tick
+                self.current_goal = DEFAULT_IDLE_GOAL(self.name) # Re-evaluate next tick
                 return
 
             # 2. Warning/Firing Logic (if review not just conducted or if performance dictates immediate action)
@@ -780,7 +835,7 @@ class Character:
                     # Issuing a warning affects relationships
                     self.modify_relationship(subordinate.name, -10, world, reason=f"Issued warning to them for {reason_for_warning}")
                     subordinate.modify_relationship(self.name, -15, world, reason=f"Received warning from them about {reason_for_warning}")
-                    self.current_goal = "Idle" # Action taken
+                    self.current_goal = DEFAULT_IDLE_GOAL(self.name) # Action taken
                     return
 
             # --- Firing Logic ---
@@ -803,14 +858,14 @@ class Character:
                     # Firing drastically affects relationship (mostly for the record now)
                     self.modify_relationship(subordinate.name, -100, world, reason="Fired them.")
                     # No need for subordinate to update relationship, they are 'gone' in terms of this dynamic with this supervisor
-                    self.current_goal = "Idle" # Action taken
+                    self.current_goal = DEFAULT_IDLE_GOAL(self.name) # Action taken
                     return
 
         # If no specific management action taken for any subordinate, manager might do other things or idle.
         # Or, if they just managed work orders, they might still want to check subordinates in the same tick if logic allows.
         # For now, one significant management action (review, warn, fire) or WO approval per "Manage Subordinates" cycle.
         # For now, just idle and wait for next cycle.
-        self.current_goal = "Idle"
+        self.current_goal = DEFAULT_IDLE_GOAL(self.name)
 
 
     def _execute_manage_work_orders_as_part_of_supervision(self, world: 'World'):
@@ -835,105 +890,259 @@ class Character:
         if can_approve: order_to_process.status = "Approved"; order_to_process.approved_by = self.name; order_to_process.approval_day = world.game_time.current_day; self.add_memory(f"Approved WO {order_to_process.order_id}"); print(f"{self.name} (Manager) APPROVED {order_to_process.order_id[:8]}.")
         else: order_to_process.status = "Denied"; order_to_process.denied_by = self.name; order_to_process.denial_reason = f"Insuff: {', '.join(missing_notes) or 'stale data'}"; self.add_memory(f"Denied WO {order_to_process.order_id}"); print(f"{self.name} (Manager) DENIED {order_to_process.order_id[:8]}. Reason: {order_to_process.denial_reason}")
     def _execute_maintain_ledger(self, world: 'World'):
-        if self.job != "Bookkeeper": self.current_goal = self.job_default_goal(); return
+        if self.job != "Bookkeeper":
+            self.current_goal = self.get_default_goal()
+            return
         stockpiles_to_check=world.stockpiles; target_sp=None; min_day=float('inf')
-        if not stockpiles_to_check: self.current_goal = "Idle"; return
+        if not stockpiles_to_check:
+            self.current_goal = DEFAULT_IDLE_GOAL(self.name)
+            return
         for sp_obj in stockpiles_to_check:
             day=world.ledger.get_stockpile_last_update_day(sp_obj.name)
             if day is None:target_sp=sp_obj;break
             if day<world.game_time.current_day and day<min_day:min_day=day;target_sp=sp_obj
-        if target_sp is None : self.current_goal="Idle";return
-        self.counting_target_stockpile_name=target_sp.name;self.current_goal="Count Stockpile";self.decide_action(world)
+        if target_sp is None :
+            self.current_goal = DEFAULT_IDLE_GOAL(self.name)
+            return
+        # self.counting_target_stockpile_name=target_sp.name # Removed
+        self.current_goal = Goal(GoalType.COUNT_STOCKPILE, assignee_id=self.name, originator_id=self.name, parameters={"stockpile_name": target_sp.name})
+        self.decide_action(world) # To immediately process the new goal if possible
+
     def _execute_count_stockpile(self, world: 'World'):
-        if self.job != "Bookkeeper" or not self.counting_target_stockpile_name: self.current_goal = "Maintain Ledger"; self.counting_target_stockpile_name = None; self.decide_action(world); return
-        stockpile_obj=world.get_stockpile_by_name(self.counting_target_stockpile_name)
-        if not stockpile_obj:self.current_goal="Maintain Ledger";self.counting_target_stockpile_name=None;self.decide_action(world);return
+        if not self.current_goal or not self.current_goal.parameters or not self.current_goal.parameters.get("stockpile_name"): # Ensure goal and params exist
+            self.current_goal = create_goal_from_job("Maintain Ledger", self.name) or DEFAULT_IDLE_GOAL(self.name)
+            self.decide_action(world)
+            return
+
+        target_stockpile_name = self.current_goal.parameters.get("stockpile_name")
+        if self.job != "Bookkeeper" or not target_stockpile_name : # Check job and if name is actually there
+            self.current_goal = create_goal_from_job("Maintain Ledger", self.name) or DEFAULT_IDLE_GOAL(self.name)
+            self.decide_action(world)
+            return
+
+        stockpile_obj=world.get_stockpile_by_name(target_stockpile_name)
+
+        if not stockpile_obj:
+            self.current_goal = create_goal_from_job("Maintain Ledger", self.name) or DEFAULT_IDLE_GOAL(self.name)
+            self.decide_action(world)
+            return
         spot=stockpile_obj.deposit_tiles[0] if stockpile_obj.deposit_tiles else (stockpile_obj.rect[0],stockpile_obj.rect[1])
         if(self.x,self.y)==spot:
             actual_inventory = stockpile_obj.inventory.copy()
-            recorded_inventory = actual_inventory.copy() # Start with the correct inventory
+            recorded_inventory = actual_inventory.copy()
 
             if "Careless" in self.traits:
                 miscounted_items = []
                 for item_name, actual_qty in actual_inventory.items():
-                    if random.random() < 0.10: # 10% chance to miscount this item type
+                    if random.random() < 0.10:
                         error_amount = random.choice([-1, 1])
                         recorded_qty = actual_qty + error_amount
-
-                        # Ensure recorded quantity doesn't go below zero
                         recorded_inventory[item_name] = max(0, recorded_qty)
-
                         if recorded_inventory[item_name] != actual_qty:
                              miscounted_items.append(f"{item_name} (actual: {actual_qty}, recorded: {recorded_inventory[item_name]})")
-
                 if miscounted_items:
-                    self.add_memory(f"Was a bit careless counting stockpile {stockpile_obj.name}. Might have miscounted: {', '.join(miscounted_items)}.")
-                    print(f"{self.name} (Bookkeeper, Careless) may have miscounted {stockpile_obj.name}. Actual: {actual_inventory}, Recorded for Ledger: {recorded_inventory}")
+                    self.add_memory(f"Careless counting {target_stockpile_name}. Miscounted: {', '.join(miscounted_items)}.")
+                    # print(f"{self.name} (Bookkeeper, Careless) may have miscounted {target_stockpile_name}. Actual: {actual_inventory}, Recorded for Ledger: {recorded_inventory}")
 
-            world.ledger.update_stockpile_record(stockpile_obj.name, recorded_inventory, world.game_time.current_day)
-            self.add_memory(f"Counted {stockpile_obj.name}"); print(f"{self.name} (Bookkeeper) finished counting {stockpile_obj.name}. Ledger updated with: {recorded_inventory}. Day: {world.game_time.current_day}.")
-            self.counting_target_stockpile_name=None;self.current_goal="Maintain Ledger";self.decide_action(world)
+            world.ledger.update_stockpile_record(target_stockpile_name, recorded_inventory, world.game_time.current_day)
+            self.add_memory(f"Counted {target_stockpile_name}"); print(f"{self.name} (Bookkeeper) finished counting {target_stockpile_name}. Ledger updated with: {recorded_inventory}. Day: {world.game_time.current_day}.")
+            self.current_goal = create_goal_from_job("Maintain Ledger", self.name) or DEFAULT_IDLE_GOAL(self.name)
+            self.decide_action(world)
         else:self.move_towards(spot[0],spot[1],world)
+
     def _execute_perform_woodcutter_duties(self, world: 'World'):
-        if self.job!="Woodcutter":self.current_goal=self.job_default_goal();return
-        quota=self.needs.get("Wood",5);inv_val=self.inventory.get("Wood",0)
-        if self.get_inventory_load()>=self.max_inventory_items and inv_val>0:self.current_goal="Initiate Hauling";self.hauling_info={"resource":"Wood"}
-        elif inv_val<quota:self.current_goal="Gather Wood"
-        else:self.current_goal="Initiate Hauling";self.hauling_info={"resource":"Wood"}
-        if self.current_goal != "Perform Woodcutter Duties": self.decide_action(world)
-    def _execute_perform_stonemason_duties(self, world: 'World'):
-        if self.job != "Stonemason": self.current_goal = self.job_default_goal(); return
-        quota = self.needs.get("Stone", 5); inv_val = self.inventory.get("Stone", 0)
-        if self.get_inventory_load() >= self.max_inventory_items and inv_val > 0: self.current_goal = "Initiate Hauling"; self.hauling_info = {"resource": "Stone"}
-        elif inv_val < quota: self.current_goal = "Gather Stone"
-        else: self.current_goal = "Initiate Hauling"; self.hauling_info = {"resource": "Stone"}
-        if self.current_goal != "Perform Stonemason Duties": self.decide_action(world)
-    def _execute_initiate_hauling(self, world: 'World'):
-        if not self.hauling_info: self.current_goal=self.job_default_goal() or "Idle"; return
-        res=self.hauling_info.get("resource")
-        if not res or self.inventory.get(res,0)==0:self.current_goal=self.job_default_goal() or "Idle";self.hauling_info=None;self.decide_action(world);return
-        qty=self.inventory.get(res,0);sps=[s_obj for s_obj in world.get_stockpiles_for_resource(res)if s_obj.has_space_for(res,1)]
-        if not sps:self.current_goal="Wander"; return
-        sp_chosen=sps[0];self.hauling_info["target_stockpile_name"]=sp_chosen.name;self.hauling_info["quantity_to_haul"]=qty
-        self.current_goal="Haul Resource to Stockpile";self.decide_action(world)
-    def _execute_haul_resource(self, world: 'World'):
-        if not self.hauling_info: self.current_goal = self.job_default_goal() or "Idle"; return
-        sp_name=self.hauling_info.get("target_stockpile_name");res=self.hauling_info.get("resource")
-        if not res or self.inventory.get(res,0)==0:self.current_goal=self.job_default_goal() or "Idle";self.hauling_info=None;self.decide_action(world);return
-        sp_obj=world.get_stockpile_by_name(sp_name)
-        if not sp_obj:self.current_goal="Wander";self.hauling_info=None;return
-        spot=sp_obj.deposit_tiles[0]if sp_obj.deposit_tiles else None
-        if not spot:self.current_goal="Wander";self.hauling_info=None;return
-        if(self.x,self.y)==spot:
-            qty_dep=self.inventory.get(res,0);s_success,qty_add=sp_obj.add_item(res,qty_dep)
-            if s_success and qty_add>0: self.inventory[res]-=qty_add; self.add_memory(f"Hauled {qty_add} {res} to {sp_obj.name}.")
-            current_res_in_inv = self.inventory.get(res,0)
-            if current_res_in_inv <= 0 :
-                if res in self.inventory: del self.inventory[res]
-            if self.hauling_info and self.hauling_info.get("is_crafted_item") and self.inventory.get(res,0) == 0: # Check specific resource hauled
-                wo_id = self.hauling_info.get("for_wo_id")
-                order = world.get_work_order_by_id(wo_id) if wo_id else None
-                if order and order.assigned_to == self.name and order.status == "InProgress":
-                    order.status = "Completed"; print(f"{self.name} COMPLETED and STOCKED Work Order {order.order_id} ({res})."); self.add_memory(f"Completed WO {order.order_id} ({res}).")
-                self._reset_crafting_state(); self.current_goal=self.job_default_goal() or "Idle"
-            else: self.current_goal=self.job_default_goal() or "Idle";self.hauling_info=None
-        else:self.move_towards(spot[0],spot[1],world)
-    def _execute_gather_wood(self, world: 'World'):
-        task_loc = self.find_task_location("Chop Wood", world)
-        if not task_loc : print(f"{self.name} can't find Forest for Chop Wood."); self.current_goal = "Idle"; return
-        if (self.x, self.y) != task_loc: self.move_towards(task_loc[0], task_loc[1], world); return
-        if not self._execute_generic_task(world, "Chop Wood"): return
-        inv_wood = self.inventory.get("Wood",0); job_quota = self.needs.get("Wood",5) if self.job == "Woodcutter" else float('inf')
-        if self.get_inventory_load()>=self.max_inventory_items or inv_wood >= job_quota : self.current_goal = "Perform Woodcutter Duties"
-    def _execute_gather_stone(self, world: 'World'):
-        task_loc = self.find_task_location("Mine Stone", world)
-        if not task_loc : print(f"{self.name} can't find Rocks for Mine Stone."); self.current_goal = "Idle"; return
-        if (self.x, self.y) != task_loc: self.move_towards(task_loc[0], task_loc[1], world); return
-        if not self._execute_generic_task(world, "Mine Stone"): return
-        inv_stone = self.inventory.get("Stone",0); job_quota = self.needs.get("Stone",5) if self.job == "Stonemason" else float('inf')
-        if self.get_inventory_load()>=self.max_inventory_items or inv_stone >= job_quota: self.current_goal = "Perform Stonemason Duties"
+        if self.job!="Woodcutter":
+            self.current_goal = self.get_default_goal()
+            return
+        quota=self.needs.get("Wood",5);inv_val=self.inventory.get("Wood",0) # Default quota, can be overridden by Goal params
+        # Check current_goal parameters for specific quota if set by a manager, etc.
+        if self.current_goal and self.current_goal.parameters.get("quota"):
+            quota = self.current_goal.parameters["quota"]
 
-    def _execute_gather_herbs(self, world: 'World'):
+        next_goal_type = None
+        params_for_next_goal = {}
+        if self.get_inventory_load()>=self.max_inventory_items and inv_val>0:
+            next_goal_type = GoalType.INITIATE_HAULING
+            params_for_next_goal={"resource":"Wood"}
+        elif inv_val<quota:
+            next_goal_type = GoalType.GATHER_RESOURCE
+            params_for_next_goal = {"resource_name": "Wood", "task_name": "Chop Wood", "quota": quota}
+        else:
+            next_goal_type = GoalType.INITIATE_HAULING
+            params_for_next_goal={"resource":"Wood"}
+
+        if next_goal_type:
+            self.current_goal = Goal(next_goal_type, assignee_id=self.name, originator_id=self.name, parameters=params_for_next_goal)
+            self.decide_action(world) # Process new goal
+        # If no next_goal_type, means current logic is fine, or it's already Idle/Wander
+    def _execute_perform_stonemason_duties(self, world: 'World'):
+        if self.job != "Stonemason":
+            self.current_goal = self.get_default_goal()
+            return
+        quota = self.current_goal.parameters.get("quota", self.needs.get("Stone",5)) # Corrected: Use current_goal.parameters
+        inv_val = self.inventory.get("Stone", 0)
+
+        next_goal_type = None
+        params_for_next_goal = {}
+        if self.get_inventory_load() >= self.max_inventory_items and inv_val > 0:
+            next_goal_type = GoalType.INITIATE_HAULING
+            params_for_next_goal = {"resource": "Stone"}
+        elif inv_val < quota:
+            next_goal_type = GoalType.GATHER_RESOURCE
+            params_for_next_goal = {"resource_name": "Stone", "task_name": "Mine Stone", "quota": quota}
+        else:
+            next_goal_type = GoalType.INITIATE_HAULING
+            params_for_next_goal = {"resource": "Stone"}
+
+        if next_goal_type:
+            self.current_goal = Goal(next_goal_type, assignee_id=self.name, originator_id=self.name, parameters=params_for_next_goal)
+                 self.current_goal = self.get_default_goal()
+            self.decide_action(world) # Process new goal
+        # If no next_goal_type, means current logic is fine, or it's already Idle/Wander
+
+    def _execute_perform_stonemason_duties(self, world: 'World'):
+        if self.job != "Stonemason":
+            self.current_goal = self.get_default_goal()
+            return
+        quota = self.needs.get("Stone", 5); inv_val = self.inventory.get("Stone", 0)
+        if self.current_goal and self.current_goal.parameters.get("quota"):
+            quota = self.current_goal.parameters["quota"]
+
+        next_goal_type = None
+        if self.get_inventory_load() >= self.max_inventory_items and inv_val > 0:
+            next_goal_type = GoalType.INITIATE_HAULING
+            self.hauling_info = {"resource": "Stone"}
+        elif inv_val < quota:
+            next_goal_type = GoalType.GATHER_RESOURCE # e.g. GATHER_STONE
+        else:
+            next_goal_type = GoalType.INITIATE_HAULING
+            self.hauling_info = {"resource": "Stone"}
+
+        if next_goal_type:
+            if next_goal_type == GoalType.INITIATE_HAULING:
+                self.current_goal = Goal(next_goal_type, assignee_id=self.name, originator_id=self.name, parameters=self.hauling_info.copy())
+            elif next_goal_type == GoalType.GATHER_RESOURCE:
+                self.current_goal = Goal(next_goal_type, assignee_id=self.name, originator_id=self.name, parameters={"resource_name": "Stone", "task_name": "Mine Stone"})
+            else:
+                self.current_goal = self.get_default_goal()
+            self.decide_action(world)
+
+    def _execute_initiate_hauling(self, world: 'World'):
+        # Parameters should be in self.current_goal.parameters
+        if not self.current_goal or not self.current_goal.parameters:
+            self.current_goal = self.get_default_goal()
+            return
+
+        current_params = self.current_goal.parameters
+        res = current_params.get("resource")
+
+        if not res or self.inventory.get(res,0) == 0:
+            self.current_goal = self.get_default_goal()
+            self.decide_action(world)
+            return
+
+        qty = self.inventory.get(res,0)
+        sps = [s_obj for s_obj in world.get_stockpiles_for_resource(res) if s_obj.has_space_for(res,1)]
+        if not sps:
+            self.current_goal = Goal(GoalType.WANDER, assignee_id=self.name, originator_id=self.name)
+            return
+
+        sp_chosen = sps[0]
+        new_params = current_params.copy()
+        new_params["target_stockpile_name"] = sp_chosen.name
+        new_params["quantity_to_haul"] = qty
+        self.current_goal = Goal(GoalType.HAUL_RESOURCE_TO_STOCKPILE, assignee_id=self.name, originator_id=self.name, parameters=new_params)
+        self.decide_action(world)
+
+    def _execute_haul_resource(self, world: 'World'):
+        if not self.current_goal or not self.current_goal.parameters:
+            self.current_goal = self.get_default_goal()
+            return
+
+        current_params = self.current_goal.parameters
+        sp_name = current_params.get("target_stockpile_name")
+        res = current_params.get("resource")
+
+        if not res or self.inventory.get(res,0) == 0:
+            self.current_goal = self.get_default_goal()
+            self.decide_action(world)
+            return
+
+        sp_obj = world.get_stockpile_by_name(sp_name)
+        if not sp_obj:
+            self.current_goal = Goal(GoalType.WANDER, assignee_id=self.name, originator_id=self.name)
+            return
+
+        spot = sp_obj.deposit_tiles[0] if sp_obj.deposit_tiles else (sp_obj.rect[0],sp_obj.rect[1])
+        if not spot:
+            self.current_goal = Goal(GoalType.WANDER, assignee_id=self.name, originator_id=self.name)
+            return
+
+        if (self.x,self.y) == spot:
+            qty_dep = self.inventory.get(res,0)
+            s_success, qty_add = sp_obj.add_item(res,qty_dep)
+            if s_success and qty_add > 0:
+                self.inventory[res] -= qty_add
+                self.add_memory(f"Hauled {qty_add} {res} to {sp_obj.name}.")
+
+            if self.inventory.get(res,0) <= 0 and res in self.inventory:
+                del self.inventory[res]
+
+            is_crafted_item_haul = current_params.get("is_crafted_item", False)
+            for_wo_id = current_params.get("for_wo_id")
+
+            if is_crafted_item_haul and self.inventory.get(res,0) == 0 and for_wo_id:
+                order = world.get_work_order_by_id(for_wo_id)
+                if order and order.assigned_to == self.name and order.status == "InProgress":
+                    order.status = "Completed"
+                    self.add_memory(f"Completed WO {order.order_id} ({res}).")
+                self._reset_crafting_state()
+            self.current_goal = self.get_default_goal()
+        else:
+            self.move_towards(spot[0],spot[1],world)
+
+    def _execute_gather_wood(self, world: 'World'): # Assumes current_goal is GATHER_RESOURCE for Wood
+        task_loc = self.find_task_location("Chop Wood", world)
+        if not task_loc :
+            print(f"{self.name} can't find Forest for Chop Wood.")
+            self.current_goal = DEFAULT_IDLE_GOAL(self.name)
+            return
+        if (self.x, self.y) != task_loc:
+            self.move_towards(task_loc[0], task_loc[1], world)
+            return
+        if not self._execute_generic_task(world, "Chop Wood"): # Handles tool fetching if needed
+            return # _execute_generic_task would have changed goal to Fetch Tool
+
+        inv_wood = self.inventory.get("Wood",0)
+        # Default job quota, could be overridden by goal parameters if a specific amount is requested
+        job_quota = self.current_goal.parameters.get("quota", self.needs.get("Wood",5) if self.job == "Woodcutter" else float('inf'))
+
+        if self.get_inventory_load()>=self.max_inventory_items or inv_wood >= job_quota :
+            # self.current_goal = "Perform Woodcutter Duties" # old
+            self.current_goal = create_goal_from_job("Perform Woodcutter Duties", self.name) or self.get_default_goal()
+
+
+    def _execute_gather_stone(self, world: 'World'): # Assumes current_goal is GATHER_RESOURCE for Stone
+        task_loc = self.find_task_location("Mine Stone", world)
+        if not task_loc :
+            print(f"{self.name} can't find Rocks for Mine Stone.")
+            self.current_goal = DEFAULT_IDLE_GOAL(self.name)
+            return
+        if (self.x, self.y) != task_loc:
+            self.move_towards(task_loc[0], task_loc[1], world)
+            return
+        if not self._execute_generic_task(world, "Mine Stone"): # Handles tool fetching
+            return
+
+        inv_stone = self.inventory.get("Stone",0)
+        job_quota = self.current_goal.parameters.get("quota", self.needs.get("Stone",5) if self.job == "Stonemason" else float('inf'))
+
+        if self.get_inventory_load()>=self.max_inventory_items or inv_stone >= job_quota:
+            # self.current_goal = "Perform Stonemason Duties" # old
+            self.current_goal = create_goal_from_job("Perform Stonemason Duties", self.name) or self.get_default_goal()
+
+
+    def _execute_gather_herbs(self, world: 'World'): # Assumes current_goal is GATHER_RESOURCE for Herbs
         # For now, assume herbs can be found in "Forest" tiles, similar to wood.
         # This would need adjustment if a specific "Meadow" tile or herb resource node is implemented.
         # The find_task_location would also need to be updated to support "Herbs" if it's tied to a specific tile.
@@ -963,7 +1172,7 @@ class Character:
 
         if not task_loc:
             self.add_memory(f"Cannot find a location to gather herbs (e.g., Forest).")
-            self.current_goal = "Idle" # Or back to a job default goal
+            self.current_goal = DEFAULT_IDLE_GOAL(self.name) # Or back to a job default goal
             return
 
         if (self.x, self.y) != task_loc:
@@ -982,13 +1191,14 @@ class Character:
             self.add_memory("Inventory full of herbs.")
             # Decide what to do next, e.g., haul herbs or return to duties.
             # For a Medic/CMO, this might be returning to the clinic or seeking patients.
-            # For now, set to Idle, which will trigger job_default_goal.
-            self.current_goal = self.job_default_goal() or "Idle"
+            # For now, set to Idle, which will trigger get_default_goal.
+            self.current_goal = self.get_default_goal()
             # If a specific "Haul Herbs" goal exists, it could be set here.
+            # e.g. self.current_goal = Goal(GoalType.INITIATE_HAULING, ..., {"resource": "Herbs"})
 
     def _execute_oversee_medical_operations(self, world: 'World'):
         if self.job != "Chief Medical Officer":
-            self.current_goal = self.job_default_goal() or "Idle"
+            self.current_goal = self.get_default_goal()
             return
 
         self.add_memory(f"CMO {self.name} is overseeing medical operations.")
@@ -1023,7 +1233,7 @@ class Character:
 
     def _execute_provide_medical_care(self, world: 'World'):
         if self.job != "Medic":
-            self.current_goal = self.job_default_goal() or "Idle"
+            self.current_goal = self.get_default_goal()
             return
 
         # Find a patient - simplistic: first sick/injured person found
@@ -1038,7 +1248,7 @@ class Character:
         if not target_patient:
             self.add_memory("No patients currently require medical care. Standing by.")
             # Medic might return to a clinic, or just idle here.
-            self.current_goal = "Idle" # Reverts to job default next tick, which might be "Provide Medical Care" again.
+            self.current_goal = DEFAULT_IDLE_GOAL(self.name) # Reverts to job default next tick
             return
 
         self.add_memory(f"Medic {self.name} assigned to patient {target_patient.name} at ({target_patient.x},{target_patient.y}).")
@@ -1111,18 +1321,20 @@ class Character:
 
         # After treatment, Medic might look for another patient or return to standby.
         # For now, will re-evaluate from top next tick.
-        self.current_goal = self.job_default_goal() or "Idle" # Re-evaluate next patient or task
+        self.current_goal = self.get_default_goal() # Re-evaluate next patient or task
         return
 
 
     def _execute_oversee_expedition(self, world: 'World'):
-         if self.job != "Expedition Leader": self.current_goal = self.job_default_goal(); return
+         if self.job != "Expedition Leader":
+            self.current_goal = self.get_default_goal()
+            return
          if random.random() < 0.1: self.add_memory("Surveyed expedition progress.")
-         self.current_goal = "Idle"
+         self.current_goal = DEFAULT_IDLE_GOAL(self.name) # Expedition leaders might idle if nothing specific to do
 
     def _execute_oversee_settlement(self, world: 'World'):
         if self.job != "Mayor":
-            self.current_goal = self.job_default_goal() or "Idle"
+            self.current_goal = self.get_default_goal()
             return
 
         self.add_memory(f"{self.name} the Mayor is assessing the overall resource status of the settlement.")
@@ -1163,7 +1375,7 @@ class Character:
         # Chance to give a speech
         if random.random() < 0.02: # 2% chance each time Mayor oversees settlement
             self.add_memory(f"Mayor {self.name} feels it's time to address the populace.")
-            self.current_goal = "Give Speech"
+            self.current_goal = Goal(GoalType.GIVE_SPEECH, assignee_id=self.name, originator_id=self.name)
             return # Goal changed, decide_action will pick it up next tick
 
         # Mayoral Project Initiation
@@ -1285,9 +1497,10 @@ class Character:
                     if random.random() < actual_firing_chance:
                         self.add_memory(f"Decided to relieve {current_holder.name} of their duties as {position_job_title} due to perceived unsatisfactory performance.")
                         current_holder.add_memory(f"I have been fired from my position as {position_job_title} by Mayor {self.name}.")
-                        current_holder.job = "Unemployed"
+                        current_holder.job = "Unemployed" # This will make their default goal Idle or similar
+                        current_holder.current_goal = DEFAULT_IDLE_GOAL(current_holder.name) # Explicitly set to Idle
                         current_holder.appointed_by = None
-                        if self.name in current_holder.supervisor_name : current_holder.supervisor_name = None # check if mayor is supervisor
+                        if current_holder.supervisor_name == self.name : current_holder.supervisor_name = None
                         if current_holder.name in self.subordinates_names: self.remove_subordinate(current_holder.name)
                         # Note: This doesn't automatically reassign their previous subordinates if they were a manager.
                     else:
@@ -1296,7 +1509,7 @@ class Character:
 
     def _execute_maintain_peace(self, world: 'World'): # For Sheriff
         if self.job != "Sheriff":
-            self.current_goal = self.job_default_goal() or "Idle"
+            self.current_goal = self.get_default_goal()
             return
 
         self.add_memory(f"Sheriff {self.name} is maintaining peace in the settlement.")
@@ -1324,7 +1537,7 @@ class Character:
 
     def _execute_patrol_area(self, world: 'World'): # For Deputy
         if self.job != "Deputy":
-            self.current_goal = self.job_default_goal() or "Idle"
+            self.current_goal = self.get_default_goal()
             return
 
         self.add_memory(f"Deputy {self.name} is patrolling their assigned area.")
@@ -1363,7 +1576,7 @@ class Character:
             self.add_memory("Cannot find any medical personnel. Resting and hoping for the best.")
             # Potentially change goal to "Rest" if such a goal exists, or just Idle.
             # For now, if no medic, they might just stop seeking.
-            self.current_goal = "Idle"
+            self.current_goal = DEFAULT_IDLE_GOAL(self.name)
             return
 
         # Find the closest one (simple distance)
@@ -1382,18 +1595,18 @@ class Character:
                 # or a new "BeingTreated" state/goal could be introduced.
                 # For now, setting to Idle. The Medic's `_execute_provide_medical_care`
                 # should find this character as a patient.
-                self.current_goal = "Idle"
+                self.current_goal = DEFAULT_IDLE_GOAL(self.name)
             else:
                 self.add_memory(f"Moving towards {closest_medic.name} at ({closest_medic.x},{closest_medic.y}) for help.")
                 self.move_towards(closest_medic.x, closest_medic.y, world)
         else: # Should not happen if medical_personnel list was populated
             self.add_memory("Could not determine closest medic. Resting.")
-            self.current_goal = "Idle"
+            self.current_goal = DEFAULT_IDLE_GOAL(self.name)
         return
 
     def _execute_give_speech(self, world: 'World'):
-        if self.job != "Mayor":
-            self.current_goal = self.job_default_goal() or "Idle"
+        if self.job != "Mayor": # Should be GoalType.GIVE_SPEECH
+            self.current_goal = self.get_default_goal()
             return
 
         speech_topic = "the general state of the settlement and future prospects"
@@ -1417,10 +1630,10 @@ class Character:
         # Future: This action could affect world morale, NPC opinions of the Mayor, etc.
         # For now, it's just a logged action.
 
-        self.current_goal = self.job_default_goal() # Return to overseeing or default state
+        self.current_goal = self.get_default_goal() # Return to overseeing or default state
         return
 
-    def _execute_wander(self, world: 'World'):
+    def _execute_wander(self, world: 'World'): # Assumes current_goal is WANDER
         moves=[];
         for dx,dy in[(0,1),(0,-1),(1,0),(-1,0)]:
             tx,ty=self.x+dx,self.y+dy
@@ -1429,33 +1642,34 @@ class Character:
                 not world.get_characters_at_location(tx,ty):moves.append((dx,dy))
         if moves:choice=random.choice(moves);self.move(choice[0],choice[1],world)
 
-    def job_default_goal(self) -> str: # Ensure this exists for the minimal decide_action
-        if self.job == "Builder":
-            return "Perform Builder Duties"
-        # Add other job defaults here if necessary for other tests, but builder is key now
-        return "Idle"
+    # This is the redundant job_default_goal. The primary one is around line 480.
+    # def job_default_goal(self) -> str: # Ensure this exists for the minimal decide_action
+    #     if self.job == "Builder":
+    #         return "Perform Builder Duties"
+    #     # Add other job defaults here if necessary for other tests, but builder is key now
+    #     return "Idle"
 
     def decide_action(self, world: 'World'):
         if not world.game_time:
-            self.current_goal = "Idle"
+            # self.current_goal = "Idle" # Will be refactored to Goal object
+            self.current_goal = DEFAULT_IDLE_GOAL(self.name)
             return
 
         # Health check: If severely sick or injured, character may change goal
         # Thresholds for "severe" can be defined in config later
         # For now, let's use severity > 5 as a trigger to seek help.
-        if self.current_goal != "Seek Medical Attention": # Avoid interrupting if already seeking help
+        if self.current_goal.type != GoalType.SEEK_MEDICAL_ATTENTION: # Avoid interrupting if already seeking help
             if self.is_sick and self.sickness_severity > 5:
                 self.add_memory(f"Feeling very sick (Severity: {self.sickness_severity}). Need medical attention.")
-                self.current_goal = "Seek Medical Attention"
+                self.current_goal = Goal(GoalType.SEEK_MEDICAL_ATTENTION, assignee_id=self.name, originator_id=self.name)
                 # No return here, let the goal execution happen below if this is the first time it's set.
             elif self.is_injured and self.injury_severity > 5:
                 self.add_memory(f"Badly injured (Severity: {self.injury_severity}). Need medical attention.")
-                self.current_goal = "Seek Medical Attention"
+                self.current_goal = Goal(GoalType.SEEK_MEDICAL_ATTENTION, assignee_id=self.name, originator_id=self.name)
 
         # If goal changed to Seek Medical Attention, execute that immediately this tick.
-        if self.current_goal == "Seek Medical Attention":
-            # _execute_seek_medical_attention will be added later. For now, just log and idle.
-            # self._execute_seek_medical_attention(world)
+        if self.current_goal.type == GoalType.SEEK_MEDICAL_ATTENTION:
+            # _execute_seek_medical_attention will be called by the main dispatcher
             # For now, if they need medical attention but can't execute the goal yet, they might just idle.
             # This ensures they don't attempt other work while severely ill/injured if the seek goal isn't fully implemented.
             # To prevent them from doing normal work, we can return here if the goal was just set.
@@ -1466,8 +1680,9 @@ class Character:
 
         # --- Reactive "Ask for Help" for Critical Needs ---
         # Check before proactive social interactions or job defaults if not already handling a critical state.
-        social_goals_for_ask_check = ["Ask for Help", "Seek Medical Attention"] # Goals that address critical states
-        if self.current_goal not in social_goals_for_ask_check:
+        # social_goals_for_ask_check = ["Ask for Help", "Seek Medical Attention"] # Goals that address critical states
+        critical_goal_types_for_ask_check = [GoalType.ASK_FOR_HELP, GoalType.SEEK_MEDICAL_ATTENTION]
+        if self.current_goal.type not in critical_goal_types_for_ask_check:
             # Example: Ask for food if critically hungry and has no food
             if self.needs.get("Hunger", 100) < config.CRITICAL_NEED_THRESHOLD_FOR_HELP and self.inventory.get("Food", 0) == 0: # Assuming "Food" is an item type
                 if random.random() < config.ASK_FOR_HELP_CHANCE:
@@ -1483,13 +1698,15 @@ class Character:
                         # Prefer helpers with higher relationship or "Generous" trait
                         potential_helpers.sort(key=lambda h: (("Generous" in h.traits), self.get_relationship_score(h.name)), reverse=True)
                         target_helper = potential_helpers[0]
-                        self.current_goal = "Ask for Help"
-                        self.current_goal_details = {
+                        # self.current_goal = "Ask for Help"
+                        # self.current_goal_details = {
+                        goal_params = {
                             "target_char_name": target_helper.name,
                             "help_type": "resource",
                             "item_name": "Food", # Assuming "Food" is the item name for generic food
                             "quantity": 1
                         }
+                        self.current_goal = Goal(GoalType.ASK_FOR_HELP, assignee_id=self.name, originator_id=self.name, parameters=goal_params)
                         self.add_memory(f"Critically hungry, decided to ask {target_helper.name} for food.")
                         return # Goal set, will be executed by main dispatcher
 
@@ -1502,122 +1719,215 @@ class Character:
 
         # Builder Logic: Focus on Build Orders
         if self.job == "Builder":
-            if self.active_build_order_id:
-                if self.current_goal != "Execute Build Order":
-                    self.current_goal = "Execute Build Order"
-                self._execute_build_order(world)
+            if self.active_build_order_id: # Already has an active build order
+                if self.current_goal.type != GoalType.EXECUTE_BUILD_ORDER:
+                    # self.current_goal = "Execute Build Order"
+                    self.current_goal = Goal(GoalType.EXECUTE_BUILD_ORDER, assignee_id=self.name, originator_id=self.name,
+                                             parameters={"order_id": self.active_build_order_id,
+                                                         "structure_type": self.current_building_project,
+                                                         "location": self.building_site_target})
+                self._execute_build_order(world) # This function will manage its own state and completion
                 return
-            else: # No active build order, try to claim one
-                # This part is also covered if current_goal is "Perform Builder Duties"
-                approved_build_orders = world.get_approved_build_orders()
-                if approved_build_orders:
-                    order_to_take = approved_build_orders[0] # Simplistic: take the first one
+            else: # No active build order, try to claim one if duty is to perform builder tasks
+                if self.current_goal.type == GoalType.PERFORM_BUILDER_DUTIES:
+                    approved_build_orders = world.get_approved_build_orders()
+                    if approved_build_orders:
+                        order_to_take = approved_build_orders[0] # Simplistic: take the first one
 
-                    order_to_take.status = "InProgress"
-                    order_to_take.assigned_to = self.name
+                        order_to_take.status = "InProgress"
+                        order_to_take.assigned_to = self.name
 
-                    self._reset_building_state() # Clear any old state
-                    self.active_build_order_id = order_to_take.order_id
-                    self.current_building_project = order_to_take.details.get("structure_type")
-                    self.building_site_target = order_to_take.details.get("location")
-                    self.materials_gathered_for_build = False # Reset for new order
+                        self._reset_building_state() # Clear any old state
+                        self.active_build_order_id = order_to_take.order_id
+                        self.current_building_project = order_to_take.details.get("structure_type")
+                        self.building_site_target = order_to_take.details.get("location")
+                        self.materials_gathered_for_build = False # Reset for new order
 
-                    self.current_goal = "Execute Build Order"
-                    self.add_memory(f"Claimed Build WO {order_to_take.order_id} for {self.current_building_project}.")
-                    self._execute_build_order(world) # Start processing immediately
-                    return
-                else: # No approved build orders
-                    if self.current_goal == "Perform Builder Duties":
-                        self.add_memory("No build orders available.")
-                        self.current_goal = "Idle" # No WOs to perform duties on
-                    # If current_goal was already Idle or Wander, it remains so.
+                        # self.current_goal = "Execute Build Order"
+                        self.current_goal = Goal(GoalType.EXECUTE_BUILD_ORDER, assignee_id=self.name, originator_id=self.name,
+                                                 parameters={"order_id": self.active_build_order_id,
+                                                             "structure_type": self.current_building_project,
+                                                             "location": self.building_site_target})
+                        self.add_memory(f"Claimed Build WO {order_to_take.order_id} for {self.current_building_project}.")
+                        self._execute_build_order(world) # Start processing immediately
+                        return
+                    else: # No approved build orders
+                        self.add_memory("No build orders available for Builder Duties.")
+                        self.current_goal = DEFAULT_IDLE_GOAL(self.name) # No WOs to perform duties on
+                        # _execute_wander will be called if idle
 
-        # If current goal was set to Execute Build Order by claiming
-        if self.current_goal == "Execute Build Order":
+        # If current goal was set to Execute Build Order by claiming or was already that
+        if self.current_goal.type == GoalType.EXECUTE_BUILD_ORDER:
              if self.active_build_order_id: # Ensure there's still an active order
                 self._execute_build_order(world)
                 return
-             else: # No active order, but goal is to execute one. Reset.
+             else: # No active order, but goal is to execute one. This is an inconsistent state. Reset.
                 self._reset_building_state()
-                self.current_goal = self.job_default_goal()
+                self.current_goal = self.get_default_goal() # Revert to job default
 
+        # Fallback to job default goal if current goal is None or explicitly Idle/Wander (string check for now, will be GoalType)
+        if self.current_goal is None or self.current_goal.type in [GoalType.IDLE, GoalType.WANDER]:
+             new_default_goal = self.get_default_goal()
+             if self.current_goal is None or self.current_goal.type != new_default_goal.type:
+                self.current_goal = new_default_goal
 
-        # Fallback to job default goal if idle or current goal completed/invalidated
-        if self.current_goal in [None, "Idle", "Wander"]:
-            self.current_goal = self.job_default_goal()
+        # --- Goal Execution Dispatcher ---
+        # Note: Order matters. More specific/interrupting goals should be checked before generic ones.
+        # Example: SEEK_MEDICAL_ATTENTION already handled above.
 
-        # Execute current goal if it's a "Perform..." duty
-        if self.current_goal == "Perform Builder Duties":
-            # This will loop back to the Builder Logic section above if not already handled
-            # or set to Idle if no WOs found.
-            # To prevent immediate re-loop if no WOs, ensure builder logic sets to Idle.
-             pass # Let the top builder logic handle it or set to Idle.
+        goal_executed_this_tick = True # Assume a goal will be handled unless specified otherwise
+        # Perform <Job> Duties goals often break down into other goals.
+        if self.current_goal.type == GoalType.PERFORM_BUILDER_DUTIES: # Already handled by builder logic above or will become IDLE
+            pass # Builder logic sets to EXECUTE_BUILD_ORDER or IDLE
+        elif self.current_goal.type == GoalType.PERFORM_WOODCUTTER_DUTIES: self._execute_perform_woodcutter_duties(world)
+        elif self.current_goal.type == GoalType.PERFORM_STONEMASON_DUTIES: self._execute_perform_stonemason_duties(world)
+        # Add other "Perform <Job> Duties" here, they typically set a more specific goal and call decide_action or return
 
-        # Other "Perform..." duties would go here if this was a full decide_action
-        # elif self.current_goal == "Perform Woodcutter Duties": self._execute_perform_woodcutter_duties(world); return
-        elif self.current_goal == "Oversee Settlement":
-            self._execute_oversee_settlement(world)
-            return
-        elif self.current_goal == "Oversee Medical Operations": # Added for CMO
-            self._execute_oversee_medical_operations(world)
-            return
-        elif self.current_goal == "Provide Medical Care": # Added for Medic
-            self._execute_provide_medical_care(world)
-            return
-        elif self.current_goal == "Gather Herbs":
-            self._execute_gather_herbs(world)
-            return
-        elif self.current_goal == "Maintain Peace in Settlement": # Added for Sheriff
-            self._execute_maintain_peace(world)
-            return
-        elif self.current_goal == "Patrol Area": # Added for Deputy
-            self._execute_patrol_area(world)
-            return
-        elif self.current_goal == "Give Speech": # Added for Mayor
-            self._execute_give_speech(world)
-            return
-        elif self.current_goal == "Seek Medical Attention": # Added for sick/injured
-            self._execute_seek_medical_attention(world)
-            return
-        elif self.current_goal == "Greet Character":
-            self._execute_greet_character(world)
-            return
-        elif self.current_goal == "Introduce Self to Stranger":
-            self._execute_introduce_self(world)
-            return
-        elif self.current_goal == "Small Talk":
-            self._execute_small_talk(world)
-            return
-        elif self.current_goal == "Share Positive News":
-            self._execute_share_positive_news(world)
-            return
-        elif self.current_goal == "Offer Comfort":
-            self._execute_offer_comfort(world)
-            return
+        # Specific Action Goals
+        elif self.current_goal.type == GoalType.EXECUTE_BUILD_ORDER: self._execute_build_order(world) # Already handled above too
+        elif self.current_goal.type == GoalType.EXECUTE_CRAFT_ORDER: self._execute_craft_order(world)
+        elif self.current_goal.type == GoalType.FETCH_RESOURCE: # Generic fetch, might need specific target from params
+            # This needs a new generic _execute_fetch_resource or specific ones for WO/Build
+            # For now, assume it's part of another goal's logic like _execute_craft_order
+            goal_executed_this_tick = False # Placeholder, as there's no direct _execute_fetch_resource
+        elif self.current_goal.type == GoalType.FETCH_TOOL: self._execute_fetch_tool(world)
+        elif self.current_goal.type == GoalType.GATHER_RESOURCE:
+            resource_name = self.current_goal.parameters.get("resource_name")
+            if resource_name == "Wood": self._execute_gather_wood(world)
+            elif resource_name == "Stone": self._execute_gather_stone(world)
+            elif resource_name == "Herbs": self._execute_gather_herbs(world)
+            else: self.current_goal = DEFAULT_IDLE_GOAL(self.name) # Unknown resource
+        elif self.current_goal.type == GoalType.INITIATE_HAULING: self._execute_initiate_hauling(world)
+        elif self.current_goal.type == GoalType.HAUL_RESOURCE_TO_STOCKPILE: self._execute_haul_resource(world)
+        elif self.current_goal.type == GoalType.COUNT_STOCKPILE: self._execute_count_stockpile(world)
 
+        # Management/Oversight Goals
+        elif self.current_goal.type == GoalType.ASSESS_PRODUCTION_NEEDS: self._execute_assess_production_needs(world)
+        elif self.current_goal.type == GoalType.MANAGE_SUBORDINATES: self._execute_manage_subordinates(world)
+        elif self.current_goal.type == GoalType.MAINTAIN_LEDGER: self._execute_maintain_ledger(world)
+        elif self.current_goal.type == GoalType.OVERSEE_SETTLEMENT: self._execute_oversee_settlement(world)
+        elif self.current_goal.type == GoalType.OVERSEE_MEDICAL_OPERATIONS: self._execute_oversee_medical_operations(world)
+        elif self.current_goal.type == GoalType.PROVIDE_MEDICAL_CARE: self._execute_provide_medical_care(world)
+        elif self.current_goal.type == GoalType.MAINTAIN_PEACE: self._execute_maintain_peace(world)
+        elif self.current_goal.type == GoalType.PATROL_AREA: self._execute_patrol_area(world)
+        elif self.current_goal.type == GoalType.GIVE_SPEECH: self._execute_give_speech(world)
+        elif self.current_goal.type == GoalType.SEEK_MEDICAL_ATTENTION: self._execute_seek_medical_attention(world)
 
-        # If truly nothing else to do
-        if self.current_goal == "Idle" or self.current_goal is None:
-            # print(f"{self.name} is Idle, will wander a bit.")
-            self._execute_wander(world) # Make idle characters wander
-            # The return is removed so the social interaction block below can still be reached
-            # if they are idle/wandering.
+        # Social Goals
+        elif self.current_goal.type == GoalType.GREET_CHARACTER: self._execute_greet_character(world)
+        elif self.current_goal.type == GoalType.INTRODUCE_SELF_TO_STRANGER: self._execute_introduce_self(world)
+        elif self.current_goal.type == GoalType.SMALL_TALK: self._execute_small_talk(world)
+        elif self.current_goal.type == GoalType.SHARE_POSITIVE_NEWS: self._execute_share_positive_news(world)
+        elif self.current_goal.type == GoalType.OFFER_COMFORT: self._execute_offer_comfort(world)
+        elif self.current_goal.type == GoalType.ARGUE: self._execute_argue(world)
+        elif self.current_goal.type == GoalType.ASK_FOR_HELP: self._execute_ask_for_help(world)
 
-        elif self.current_goal == "Wander": # Explicit Wander goal
+        # Default/Fallback Behaviors
+        elif self.current_goal.type == GoalType.IDLE:
+            self._execute_wander(world) # Idle characters wander
+            goal_executed_this_tick = True # Wander is an action
+        elif self.current_goal.type == GoalType.WANDER: # Explicit Wander goal
             self._execute_wander(world)
-            # The return is removed so the social interaction block below can still be reached
+            goal_executed_this_tick = True
+        else:
+            # This case means a GoalType exists but has no corresponding _execute method in the dispatcher
+            print(f"Warning: {self.name} has unhandled GoalType '{self.current_goal.type}'. Setting to Idle.")
+            self.current_goal = DEFAULT_IDLE_GOAL(self.name)
+            self._execute_wander(world) # Wander if unhandled goal
+            goal_executed_this_tick = True
 
-        # --- Social Interaction Initiation (Basic) ---
-        # If idle or wandering, consider social interaction.
 
-        # If a goal is set but not handled above (e.g. a generic task name directly set as goal)
-        # This minimal version doesn't use generic tasks directly for builder.
-        # print(f"Warning: {self.name} has unhandled goal '{self.current_goal}'. Idling.")
-        # self.current_goal = "Idle" # Fallback
-        return
+        # --- Social Interaction Initiation (if previous goal didn't consume the tick or led to Idle/Wander) ---
+        # This block is for proactive social interactions (greeting, small talk, news).
+        # Reactive interactions like "Offer Comfort" will be handled by a separate check.
+        # Only attempt new social interaction if current goal is now IDLE or WANDER as a result of previous logic.
+        if self.current_goal.type in [GoalType.IDLE, GoalType.WANDER]:
+            current_social_interaction_chance = config.SOCIAL_INTERACTION_CHANCE
+            if self.needs.get('Social', 70) < config.LOW_SOCIAL_NEED_THRESHOLD:
+                current_social_interaction_chance += config.SOCIAL_INTERACTION_CHANCE_LOW_NEED_BONUS
 
-        # --- Social Interaction Initiation (Basic) ---
-        # If idle or wandering, consider social interaction.
+            if random.random() < current_social_interaction_chance:
+                potential_strangers: List[Character] = []
+                potential_known_to_greet: List[Character] = []
+                potential_known_for_smalltalk: List[Character] = []
+                potential_known_for_news: List[Character] = []
+
+                target_weights: Dict[str, float] = {}
+                min_opinion_to_avoid = -3
+                min_opinion_to_prefer = 3
+
+                for other_char in world.characters:
+                    if other_char.name == self.name: continue
+                    distance = abs(self.x - other_char.x) + abs(self.y - other_char.y)
+                    max_initiation_distance = 5
+                    if distance <= max_initiation_distance:
+                        recently_interacted_today = False
+                        if self.dialogue_history:
+                            for entry in reversed(self.dialogue_history[-3:]):
+                                if (entry.get("target") == other_char.name or entry.get("initiator") == other_char.name) and \
+                                   world.game_time and (world.game_time.current_day - entry.get("day", -100)) < 1:
+                                    recently_interacted_today = True; break
+                        if not recently_interacted_today:
+                            if other_char.name not in self.known_characters:
+                                potential_strangers.append(other_char)
+                            else:
+                                current_impression = sum(self.opinions.get(other_char.name, {}).values())
+                                weight = 1.0
+                                if current_impression <= min_opinion_to_avoid: weight = 0.2
+                                elif current_impression >= min_opinion_to_prefer: weight = 2.0
+                                target_weights[other_char.name] = weight
+                                potential_known_for_smalltalk.append(other_char)
+                                potential_known_for_news.append(other_char)
+                                potential_known_to_greet.append(other_char)
+
+                target_char_for_interaction: Optional[Character] = None
+                interaction_goal_type: Optional[GoalType] = None
+                # interaction_type_str was used before, now map to GoalType
+
+                def weighted_random_choice(choices: List[Character], weights: Dict[str, float]) -> Optional[Character]:
+                    if not choices: return None
+                    weighted_choices = []
+                    for choice_char in choices:
+                        weight = weights.get(choice_char.name, 1.0)
+                        weighted_choices.extend([choice_char] * int(weight * 10))
+                    return random.choice(weighted_choices) if weighted_choices else None
+
+                chatty_bonus_for_news = 0.2 if "Chatty" in self.traits else 0.0
+
+                if potential_strangers:
+                    target_char_for_interaction = random.choice(potential_strangers)
+                    interaction_goal_type = GoalType.INTRODUCE_SELF_TO_STRANGER
+                elif potential_known_for_news and random.random() < (0.3 + chatty_bonus_for_news):
+                    target_char_for_interaction = weighted_random_choice(potential_known_for_news, target_weights)
+                    if target_char_for_interaction: interaction_goal_type = GoalType.SHARE_POSITIVE_NEWS
+                elif potential_known_for_smalltalk and random.random() < 0.6:
+                    target_char_for_interaction = weighted_random_choice(potential_known_for_smalltalk, target_weights)
+                    if target_char_for_interaction: interaction_goal_type = GoalType.SMALL_TALK
+                elif potential_known_to_greet:
+                    target_char_for_interaction = weighted_random_choice(potential_known_to_greet, target_weights)
+                    if target_char_for_interaction: interaction_goal_type = GoalType.GREET_CHARACTER
+
+                if target_char_for_interaction and interaction_goal_type:
+                    goal_params = {"target_char_name": target_char_for_interaction.name}
+                    self.current_goal = Goal(interaction_goal_type, assignee_id=self.name, originator_id=self.name, parameters=goal_params)
+                    self.add_memory(f"Decided to '{interaction_goal_type.value}' with {target_char_for_interaction.name}.")
+                    # Don't 'return' here, let the main dispatcher handle the newly set goal in the same tick if possible,
+                    # or it will be picked up next tick. The dispatcher will call the appropriate _execute_* method.
+                    # This means decide_action might run parts of the dispatcher twice if a social goal is set here.
+                    # This is generally fine as the _execute methods are idempotent for movement etc.
+
+        # Reactive Social Interaction Checks (Offer Comfort, Argue)
+        # These checks happen even if not strictly Idle/Wandering, but not if already in a social goal.
+        # social_goal_types = [GoalType.GREET_CHARACTER, GoalType.INTRODUCE_SELF_TO_STRANGER, ...] # etc.
+        # if self.current_goal.type not in social_goal_types :
+            # ... (rest of reactive social logic, converting goal assignments)
+            # Example for one case:
+            # if target_for_comfort:
+            #     self.current_goal = Goal(GoalType.OFFER_COMFORT, assignee_id=self.name, ...)
+            #     return
+            pass # Placeholder for reactive social block
+
+        return # End of decide_action
         # This block is for proactive social interactions (greeting, small talk, news).
         # Reactive interactions like "Offer Comfort" will be handled by a separate check.
 
@@ -1957,7 +2267,7 @@ class Character:
         subordinate.supervisor_name = None
         subordinate.job = "Unemployed"
         subordinate.rank = "Commoner" # Or some other default non-noble/non-worker rank
-        subordinate.current_goal = "Idle" # Or "Find New Job" in the future
+        subordinate.current_goal = DEFAULT_IDLE_GOAL(subordinate.name) # Or "Find New Job" in the future
         subordinate.assigned_tasks = []
         subordinate.performance_rating = "Fired"
         subordinate.warning_count = 0
@@ -2014,19 +2324,17 @@ class Character:
         # but subordinate's relationship to supervisor likely worsens. This would be handled by the calling function.
 
     def _execute_greet_character(self, world: 'World'):
-        if not self.current_goal_details or "target_char_name" not in self.current_goal_details:
-            self.add_memory("Wanted to greet someone, but no target specified.")
-            self.current_goal = self.job_default_goal() or "Idle"
-            self.current_goal_details = None
+        if not self.current_goal or not self.current_goal.parameters or "target_char_name" not in self.current_goal.parameters:
+            self.add_memory("Wanted to greet someone, but no target specified in goal parameters.")
+            self.current_goal = self.get_default_goal()
             return
 
-        target_name = self.current_goal_details["target_char_name"]
+        target_name = self.current_goal.parameters["target_char_name"]
         target_char = world.get_character_by_name(target_name)
 
         if not target_char:
             self.add_memory(f"Wanted to greet {target_name}, but they could not be found.")
-            self.current_goal = self.job_default_goal() or "Idle"
-            self.current_goal_details = None
+            self.current_goal = self.get_default_goal()
             return
 
         # Check distance - characters should be close to greet
@@ -2178,21 +2486,19 @@ class Character:
         self._process_nearby_listeners(world, target_char, "greeting", self.traits, target_char.traits)
 
         # 7. Greeting complete. Reset goal.
-        self.current_goal = self.job_default_goal() or "Idle"
-        self.current_goal_details = None
+        self.current_goal = self.get_default_goal()
         return
 
     def _execute_argue(self, world: 'World'):
-        if not self.current_goal_details or "target_char_name" not in self.current_goal_details:
-            self.add_memory("Wanted to argue, but no target specified.")
-            self.current_goal = self.job_default_goal() or "Idle"
-            self.current_goal_details = None
+        if not self.current_goal or not self.current_goal.parameters or "target_char_name" not in self.current_goal.parameters:
+            self.add_memory("Wanted to argue, but no target specified in goal parameters.")
+            self.current_goal = self.get_default_goal()
             return
 
-        target_name = self.current_goal_details["target_char_name"]
+        target_name = self.current_goal.parameters["target_char_name"]
         target_char = world.get_character_by_name(target_name)
 
-        # Reason for argument can be passed in current_goal_details if needed, e.g. {"reason": "conflicting_traits"}
+        # Reason for argument can be passed in goal parameters if needed, e.g. {"reason": "conflicting_traits"}
         # For now, the trigger logic is in decide_action.
 
         if not target_char:
@@ -2283,34 +2589,30 @@ class Character:
         # Listeners might form strong negative opinions or gain negative social fulfillment
         self._process_nearby_listeners(world, target_char, "argue", self.traits, target_char.traits)
 
-
-        self.current_goal = self.job_default_goal() or "Idle"
-        self.current_goal_details = None
+        self.current_goal = self.get_default_goal()
         return
 
     def _execute_ask_for_help(self, world: 'World'):
-        if not self.current_goal_details or "target_char_name" not in self.current_goal_details:
-            self.add_memory("Wanted to ask for help, but no target specified.")
-            self.current_goal = self.job_default_goal() or "Idle"
-            self.current_goal_details = None
+        if not self.current_goal or not self.current_goal.parameters or "target_char_name" not in self.current_goal.parameters:
+            self.add_memory("Wanted to ask for help, but no target specified in goal parameters.")
+            self.current_goal = self.get_default_goal()
             return
 
-        target_name = self.current_goal_details["target_char_name"]
+        params = self.current_goal.parameters
+        target_name = params["target_char_name"]
         target_char = world.get_character_by_name(target_name)
-        help_type = self.current_goal_details.get("help_type", "general") # e.g., "resource", "tool", "task_assistance"
-        item_name_needed = self.current_goal_details.get("item_name") # e.g., "Wood", "Stone Axe"
-        quantity_needed = self.current_goal_details.get("quantity", 1)
+        help_type = params.get("help_type", "general")
+        item_name_needed = params.get("item_name")
+        quantity_needed = params.get("quantity", 1)
 
         if not target_char:
             self.add_memory(f"Wanted to ask {target_name} for help, but they could not be found.")
-            self.current_goal = self.job_default_goal() or "Idle"
-            self.current_goal_details = None
+            self.current_goal = self.get_default_goal()
             return
 
         if target_name not in self.known_characters:
             self.add_memory(f"Wanted to ask {target_name} for help, but I don't know them.")
-            self.current_goal = self.job_default_goal() or "Idle"
-            self.current_goal_details = None
+            self.current_goal = self.get_default_goal()
             return
 
         distance = abs(self.x - target_char.x) + abs(self.y - target_char.y)
@@ -2423,31 +2725,27 @@ class Character:
         target_char._update_relationship_from_opinions(self.name, world)
         self._process_nearby_listeners(world, target_char, "ask_for_help", self.traits, target_char.traits)
 
-        self.current_goal = self.job_default_goal() or "Idle"
-        self.current_goal_details = None
+        self.current_goal = self.get_default_goal()
         return
 
     def _execute_offer_comfort(self, world: 'World'):
-        if not self.current_goal_details or "target_char_name" not in self.current_goal_details:
-            self.add_memory("Wanted to offer comfort, but no target specified.")
-            self.current_goal = self.job_default_goal() or "Idle"
-            self.current_goal_details = None
+        if not self.current_goal or not self.current_goal.parameters or "target_char_name" not in self.current_goal.parameters:
+            self.add_memory("Wanted to offer comfort, but no target specified in goal parameters.")
+            self.current_goal = self.get_default_goal()
             return
 
-        target_name = self.current_goal_details["target_char_name"]
+        target_name = self.current_goal.parameters["target_char_name"]
         target_char = world.get_character_by_name(target_name)
 
         if not target_char:
             self.add_memory(f"Wanted to offer comfort to {target_name}, but they could not be found.")
-            self.current_goal = self.job_default_goal() or "Idle"
-            self.current_goal_details = None
+            self.current_goal = self.get_default_goal()
             return
 
         # Comfort is typically for known characters in a negative state
         if target_name not in self.known_characters:
             self.add_memory(f"Wanted to offer comfort to {target_name}, but I don't know them.")
-            self.current_goal = self.job_default_goal()
-            self.current_goal_details = None
+            self.current_goal = self.get_default_goal() # Changed from self.job_default_goal()
             return
 
         # Check if target is actually in a state deserving comfort (e.g. sick/injured)
@@ -2455,8 +2753,7 @@ class Character:
         if not (target_char.is_sick and target_char.sickness_severity > 3) and \
            not (target_char.is_injured and target_char.injury_severity > 3):
             self.add_memory(f"Considered offering comfort to {target_name}, but they seem fine now.")
-            self.current_goal = self.job_default_goal() or "Idle"
-            self.current_goal_details = None
+            self.current_goal = self.get_default_goal()
             return
 
         distance = abs(self.x - target_char.x) + abs(self.y - target_char.y)
@@ -2559,30 +2856,26 @@ class Character:
         # Process listeners
         self._process_nearby_listeners(world, target_char, "offer_comfort", self.traits, target_char.traits)
 
-        self.current_goal = self.job_default_goal() or "Idle"
-        self.current_goal_details = None
+        self.current_goal = self.get_default_goal()
         return
 
     def _execute_share_positive_news(self, world: 'World'):
-        if not self.current_goal_details or "target_char_name" not in self.current_goal_details:
-            self.add_memory("Wanted to share news, but no target specified.")
-            self.current_goal = self.job_default_goal() or "Idle"
-            self.current_goal_details = None
+        if not self.current_goal or not self.current_goal.parameters or "target_char_name" not in self.current_goal.parameters:
+            self.add_memory("Wanted to share news, but no target specified in goal parameters.")
+            self.current_goal = self.get_default_goal()
             return
 
-        target_name = self.current_goal_details["target_char_name"]
+        target_name = self.current_goal.parameters["target_char_name"]
         target_char = world.get_character_by_name(target_name)
 
         if not target_char:
             self.add_memory(f"Wanted to share news with {target_name}, but they could not be found.")
-            self.current_goal = self.job_default_goal() or "Idle"
-            self.current_goal_details = None
+            self.current_goal = self.get_default_goal()
             return
 
         if target_name not in self.known_characters:
             self.add_memory(f"Wanted to share news with {target_name}, but I don't know them well enough.")
-            self.current_goal = self.job_default_goal() or "Idle" # Or try to introduce first
-            self.current_goal_details = None
+            self.current_goal = self.get_default_goal() # Or try to introduce first
             return
 
         distance = abs(self.x - target_char.x) + abs(self.y - target_char.y)
@@ -2722,8 +3015,7 @@ class Character:
         # Process listeners
         self._process_nearby_listeners(world, target_char, "share_positive_news", self.traits, target_char.traits)
 
-        self.current_goal = self.job_default_goal() or "Idle"
-        self.current_goal_details = None
+        self.current_goal = self.get_default_goal()
         return
 
     def _process_nearby_listeners(self, world: 'World', target_char: 'Character', interaction_type: str, initiator_traits: List[str], target_traits: List[str]):
@@ -2775,27 +3067,25 @@ class Character:
                 # For now, just a memory.
 
     def _execute_small_talk(self, world: 'World'):
-        if not self.current_goal_details or "target_char_name" not in self.current_goal_details:
-            self.add_memory("Wanted to make small talk, but no target specified.")
-            self.current_goal = self.job_default_goal() or "Idle"
-            self.current_goal_details = None
+        if not self.current_goal or not self.current_goal.parameters or "target_char_name" not in self.current_goal.parameters:
+            self.add_memory("Wanted to make small talk, but no target specified in goal parameters.")
+            self.current_goal = self.get_default_goal()
             return
 
-        target_name = self.current_goal_details["target_char_name"]
+        target_name = self.current_goal.parameters["target_char_name"]
         target_char = world.get_character_by_name(target_name)
 
         if not target_char:
             self.add_memory(f"Wanted to make small talk with {target_name}, but they could not be found.")
-            self.current_goal = self.job_default_goal() or "Idle"
-            self.current_goal_details = None
+            self.current_goal = self.get_default_goal()
             return
 
         # Small talk should only be with known characters
         if target_name not in self.known_characters:
             self.add_memory(f"Wanted to make small talk with {target_name}, but I don't know them. Maybe I should introduce myself first.")
-            self.current_goal = "Introduce Self to Stranger" # Or just Idle
-            # current_goal_details remains the same
-            self._execute_introduce_self(world) # Attempt introduction
+            # self.current_goal = "Introduce Self to Stranger"
+            self.current_goal = Goal(GoalType.INTRODUCE_SELF_TO_STRANGER, assignee_id=self.name, originator_id=self.name, parameters={"target_char_name": target_name})
+            # self._execute_introduce_self(world) # Dispatcher will handle this new goal.
             return
 
         distance = abs(self.x - target_char.x) + abs(self.y - target_char.y)
@@ -2917,10 +3207,10 @@ class Character:
         target_char._update_relationship_from_opinions(self.name, world)
 
         # Process listeners
-        self._process_nearby_listeners(world, target_char, "share_positive_news", self.traits, target_char.traits)
+        # Corrected interaction type for listeners of small talk
+        self._process_nearby_listeners(world, target_char, "small_talk", self.traits, target_char.traits)
 
-        self.current_goal = self.job_default_goal() or "Idle"
-        self.current_goal_details = None
+        self.current_goal = self.get_default_goal()
         return
 
     def _update_relationship_from_opinions(self, target_name: str, world: 'World'):
@@ -2958,27 +3248,25 @@ class Character:
         # For now, opinions are cumulative until directly changed by new interactions.
 
     def _execute_introduce_self(self, world: 'World'):
-        if not self.current_goal_details or "target_char_name" not in self.current_goal_details:
-            self.add_memory("Wanted to introduce myself, but no target specified.")
-            self.current_goal = self.job_default_goal() or "Idle"
-            self.current_goal_details = None
+        if not self.current_goal or not self.current_goal.parameters or "target_char_name" not in self.current_goal.parameters:
+            self.add_memory("Wanted to introduce myself, but no target specified in goal parameters.")
+            self.current_goal = self.get_default_goal()
             return
 
-        target_name = self.current_goal_details["target_char_name"]
+        target_name = self.current_goal.parameters["target_char_name"]
         target_char = world.get_character_by_name(target_name)
 
         if not target_char:
             self.add_memory(f"Wanted to introduce myself to {target_name}, but they could not be found.")
-            self.current_goal = self.job_default_goal() or "Idle"
-            self.current_goal_details = None
+            self.current_goal = self.get_default_goal()
             return
 
         # Ensure it's actually a stranger. If already known, switch to a generic greet or idle.
         if target_name in self.known_characters:
             self.add_memory(f"Wanted to introduce to {target_name}, but I already know them. Switching to greet.")
-            self.current_goal = "Greet Character"
-            # current_goal_details remains the same for the greet
-            self._execute_greet_character(world) # Execute greet immediately
+            # self.current_goal = "Greet Character"
+            self.current_goal = Goal(GoalType.GREET_CHARACTER, assignee_id=self.name, originator_id=self.name, parameters={"target_char_name": target_name})
+            # self._execute_greet_character(world) # Dispatcher will handle this
             return
 
         distance = abs(self.x - target_char.x) + abs(self.y - target_char.y)
@@ -3109,6 +3397,5 @@ class Character:
         # Process listeners
         self._process_nearby_listeners(world, target_char, "introduction", self.traits, target_char.traits)
 
-        self.current_goal = self.job_default_goal() or "Idle"
-        self.current_goal_details = None
+        self.current_goal = self.get_default_goal()
         return
