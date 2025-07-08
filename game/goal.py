@@ -59,6 +59,8 @@ class GoalType(Enum):
     OFFER_COMFORT = auto()
     ASK_FOR_HELP = auto()
     ARGUE = auto()
+    SHARE_SECRET = auto() # Added
+    FORMAL_APOLOGY = auto() # Added
 
     # Noble Specific
     OVERSEE_DOMAIN = auto() # Landed Nobles

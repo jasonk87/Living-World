@@ -105,3 +105,53 @@ MOOD_EFFECT_SOCIAL_SUCCESS_MOD = {
 
 # Chance to initiate specific mood-driven goals (if mood is very low/high)
 MOOD_DRIVEN_GOAL_CHANCE = 0.1 # e.g. 10% chance per tick if mood is extreme
+
+# Relationship System Configs
+RELATIONSHIP_SCORE_MIN = -100
+RELATIONSHIP_SCORE_MAX = 100
+RELATIONSHIP_SCORE_NEUTRAL_START = 0
+RELATIONSHIP_SCORE_FAMILY_BASE = 50 # Family members start with a significant positive bias
+
+# Reputation System Configs (Basic)
+REPUTATION_SCORE_MIN = -100
+REPUTATION_SCORE_MAX = 100
+REPUTATION_CHANGE_HELPED_OTHER = 2
+REPUTATION_CHANGE_APOLOGY_ACCEPTED = 1
+REPUTATION_CHANGE_FIRED = -5
+REPUTATION_EFFECT_ON_INITIAL_RELATIONSHIP = 0.1 # e.g. 10 reputation = +1 initial relationship score
+REPUTATION_EFFECT_ON_WILLINGNESS_TO_HELP = 0.005 # e.g. 10 reputation = +0.05 to willingness chance
+
+# Relationship Tiers (Score Thresholds - lower bound for each tier)
+# Order matters for get_relationship_tier lookup (highest score first)
+RELATIONSHIP_TIERS = [
+    ("Soulmate", 90), # Example, could be special romantic partner tier
+    ("Close Friend", 70),
+    ("Friend", 40),
+    ("Friendly Acquaintance", 15),
+    ("Neutral", -15),
+    ("Disliked", -40),
+    ("Rival", -70),
+    ("Archenemy", -90) # Lowest numerical bound, anything below is Archenemy
+]
+# Special Tiers (not score-based, but set directly)
+RELATIONSHIP_TIER_FAMILY = "Family"
+RELATIONSHIP_TIER_STRANGER = "Stranger" # For characters not in relationships dict yet
+
+# Social Interaction Modifiers based on Relationship Tier (example for 'Ask for Help' success chance)
+# Values are additive modifiers to a base success chance.
+RELATIONSHIP_ASK_FOR_HELP_MODIFIERS = {
+    "Soulmate": 0.40,
+    "Close Friend": 0.30,
+    "Friend": 0.20,
+    "Friendly Acquaintance": 0.10,
+    "Neutral": 0.0,
+    "Disliked": -0.15,
+    "Rival": -0.30,
+    "Archenemy": -0.50,
+    "Family": 0.35, # Family usually very willing
+    "Stranger": -0.10 # Less likely to help a stranger
+}
+
+# Relationship point changes from interactions might be scaled by existing tier
+# Example: A successful "Offer Comfort" to a "Friend" might be +5, but to a "Rival" might be +2 (harder to improve bad relations)
+# This can be implemented in the _execute methods directly.
