@@ -1167,36 +1167,9 @@ class Character:
 
         if next_goal_type:
             self.current_goal = Goal(next_goal_type, assignee_id=self.name, originator_id=self.name, parameters=params_for_next_goal)
-                 self.current_goal = self.get_default_goal()
+            # self.current_goal = self.get_default_goal() # This line was an error and removed
             self.decide_action(world) # Process new goal
-        # If no next_goal_type, means current logic is fine, or it's already Idle/Wander
-
-    def _execute_perform_stonemason_duties(self, world: 'World'):
-        if self.job != "Stonemason":
-            self.current_goal = self.get_default_goal()
-            return
-        quota = self.needs.get("Stone", 5); inv_val = self.inventory.get("Stone", 0)
-        if self.current_goal and self.current_goal.parameters.get("quota"):
-            quota = self.current_goal.parameters["quota"]
-
-        next_goal_type = None
-        if self.get_inventory_load() >= self.max_inventory_items and inv_val > 0:
-            next_goal_type = GoalType.INITIATE_HAULING
-            self.hauling_info = {"resource": "Stone"}
-        elif inv_val < quota:
-            next_goal_type = GoalType.GATHER_RESOURCE # e.g. GATHER_STONE
-        else:
-            next_goal_type = GoalType.INITIATE_HAULING
-            self.hauling_info = {"resource": "Stone"}
-
-        if next_goal_type:
-            if next_goal_type == GoalType.INITIATE_HAULING:
-                self.current_goal = Goal(next_goal_type, assignee_id=self.name, originator_id=self.name, parameters=self.hauling_info.copy())
-            elif next_goal_type == GoalType.GATHER_RESOURCE:
-                self.current_goal = Goal(next_goal_type, assignee_id=self.name, originator_id=self.name, parameters={"resource_name": "Stone", "task_name": "Mine Stone"})
-            else:
-                self.current_goal = self.get_default_goal()
-            self.decide_action(world)
+        # If no next_goal_type, means current logic is fine, or it's already Idle/Wander - or if the above didn't set a new goal, it implies current one continues or becomes default via decide_action
 
     def _execute_initiate_hauling(self, world: 'World'):
         # Parameters should be in self.current_goal.parameters
@@ -2920,8 +2893,7 @@ class Character:
 
         if not target_char:
             self.add_memory(f"Wanted to argue with {target_name}, but they could not be found.")
-            self.current_goal = self.job_default_goal() or "Idle"
-            self.current_goal_details = None
+            self.current_goal = self.get_default_goal()
             return
 
         distance = abs(self.x - target_char.x) + abs(self.y - target_char.y)
