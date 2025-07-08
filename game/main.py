@@ -112,6 +112,10 @@ def tick_simulation():
                     if hasattr(config, 'ELECTION_CYCLE_DAYS'):
                          game_time_obj.days_until_election = config.ELECTION_CYCLE_DAYS
 
+            # Daily rumor update
+            if hasattr(game_world, 'update_rumors_daily'):
+                game_world.update_rumors_daily()
+
 
             # Daily needs update and goal reset for idle characters
             for char_daily_reset in game_world.characters:

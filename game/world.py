@@ -7,11 +7,13 @@ from .work_order import WorkOrder
 from .building import Building
 from .data import STRUCTURE_BLUEPRINTS # For get_tile fallback if needed, and add_building
 # from .furniture import Furniture # Keep commented if main.py doesn't use it for this test
+from .rumor import Rumor # Added for rumor system
 
 if TYPE_CHECKING:
     from .character import Character
     # If Furniture class is used, it should be imported here for type checking too
     # from .furniture import Furniture
+    # from .rumor import Rumor # Already imported above
 
 
 class World:
@@ -34,6 +36,21 @@ class World:
         self.event_log: List[str] = []
         self.active_world_effects: Dict[str, Any] = {}
         self.recent_notable_events: List[Dict[str, Any]] = [] # For rumor spreading
+        self.rumors: List[Rumor] = [] # Added for rumor system
+
+    def update_rumors_daily(self):
+        """Decays strength of all rumors and removes very weak ones."""
+        if not self.rumors:
+            return
+
+        # Iterate backwards for safe removal
+        for i in range(len(self.rumors) - 1, -1, -1):
+            rumor = self.rumors[i]
+            rumor.decay(config.RUMOR_STRENGTH_DECAY_DAILY)
+            if rumor.current_strength <= 0:
+                self.add_event_log_message(f"Rumor faded: {rumor.subject_char_id} - {rumor.content_key} (ID: {rumor.rumor_id[:4]})")
+                self.rumors.pop(i)
+        # print(f"DEBUG: Daily rumor update complete. {len(self.rumors)} rumors remaining.")
 
 
     def __str__(self):
@@ -353,3 +370,12 @@ class World:
 
         # Reset election timer
         self.game_time.days_until_election = config.ELECTION_CYCLE_DAYS
+
+    def add_rumor(self, rumor: Rumor):
+        """Adds a new rumor to the world, ensuring it's not a duplicate subject/key too recently."""
+        # Optional: Check for existing very similar rumors to avoid spam, or just let them stack/replace.
+        # For now, just add. More complex logic could check if a rumor about subject_char_id with content_key
+        # was added very recently.
+        self.rumors.append(rumor)
+        self.add_event_log_message(f"New Rumor Circulating: {rumor.subject_char_id} - {rumor.content_key} (Strength: {rumor.initial_strength})")
+        # print(f"DEBUG: World added rumor: {rumor}")

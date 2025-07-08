@@ -7,6 +7,7 @@ from .llm_integration import generate_dialogue # Kept as it's used
 from .data import BLUEPRINTS, JOB_TASK_DEFINITIONS, STRUCTURE_BLUEPRINTS
 from . import config
 from .goal import Goal, GoalType, GoalStatus, DEFAULT_IDLE_GOAL, create_goal_from_job
+from .rumor import Rumor # Added for rumor generation
 
 if TYPE_CHECKING:
     from .world import World
@@ -112,6 +113,7 @@ class Character:
 
         # Reputation attribute
         self.reputation_score: int = 0 # Initialize reputation
+        self.known_rumor_ids: Set[str] = set() # For tracking rumors known by this character
 
     def update_reputation(self, change: int, reason: Optional[str] = None):
         """Updates reputation score, clamps it, and logs the change."""
@@ -122,9 +124,39 @@ class Character:
         if reason and old_score != self.reputation_score:
             log_message = f"Reputation score changed by {change} to {self.reputation_score}. Reason: {reason}"
             self.add_memory(log_message)
-            # Consider adding to a global event log if reputation changes are major world events
-            # world.add_event_log_message(f"{self.name}'s reputation changed: {log_message}")
             print(f"LOG: {self.name}'s {log_message}")
+
+            # Attempt to generate a rumor if the change is significant
+            # This requires access to the world object, which update_reputation doesn't have directly.
+            # This logic might be better placed in the methods that CALL update_reputation,
+            # or update_reputation needs a world parameter.
+            # For now, let's assume a world parameter is passed or this is refactored.
+            # This is a placeholder and will be addressed in the actual integration step.
+            # if world and abs(change) >= config.REPUTATION_FOR_RUMOR_THRESHOLD:
+            #     self._try_generate_rumor_from_reputation(change, reason, world)
+
+
+    # def _try_generate_rumor_from_reputation(self, rep_change: int, reason: str, world: 'World'):
+    #     # This method would be called by update_reputation or the methods calling it.
+    #     # Simplified content key generation from reason
+    #     content_key_base = reason.lower().replace(" ", "_").split_by("(",1)[0].strip() # basic parse
+    #     is_positive = rep_change > 0
+    #     content_key = f"{content_key_base}_{'positive' if is_positive else 'negative'}"
+
+    #     initial_strength = config.RUMOR_INITIAL_STRENGTH_SMALL_EVENT
+    #     if abs(rep_change) > (config.REPUTATION_FOR_RUMOR_THRESHOLD * 2): # More significant change
+    #         initial_strength = config.RUMOR_INITIAL_STRENGTH_SIGNIFICANT_EVENT
+
+    #     rumor = Rumor(
+    #         subject_char_id=self.name,
+    #         content_key=content_key,
+    #         initial_strength=initial_strength,
+    #         creation_day=world.game_time.current_day,
+    #         is_positive=is_positive,
+    #         original_source_char_id=self.name # Or could be another involved party if available
+    #     )
+    #     world.add_rumor(rumor)
+    #     self.add_memory(f"A rumor might be starting about me: {content_key}")
 
 
     def _determine_mood_level(self) -> str:
@@ -2349,7 +2381,28 @@ class Character:
         subordinate.assigned_tasks = []
         subordinate.performance_rating = "Fired"
         subordinate.update_mood_score(config.MOOD_CHANGE_FIRED, f"Fired from job as {original_job}")
-        subordinate.update_reputation(config.REPUTATION_CHANGE_FIRED, f"Was fired from job as {original_job} by {self.name}")
+
+        rep_change_reason = f"Was fired from job as {original_job} by {self.name}"
+        subordinate.update_reputation(config.REPUTATION_CHANGE_FIRED, rep_change_reason)
+        if abs(config.REPUTATION_CHANGE_FIRED) >= config.REPUTATION_FOR_RUMOR_THRESHOLD and world.game_time:
+            rumor_content_key = "was_fired_negative"
+            # Firing is often a more significant event
+            rumor_strength = config.RUMOR_INITIAL_STRENGTH_SIGNIFICANT_EVENT
+            new_rumor = Rumor(
+                subject_char_id=subordinate.name, # Fired person is the subject
+                content_key=rumor_content_key,
+                initial_strength=rumor_strength,
+                creation_day=world.game_time.current_day,
+                is_positive=False,
+                original_source_char_id=self.name # Manager firing is the source
+            )
+            world.add_rumor(new_rumor)
+            # Subject (subordinate) and source (self, the manager) know the rumor
+            subordinate.known_rumor_ids.add(new_rumor.rumor_id)
+            self.known_rumor_ids.add(new_rumor.rumor_id)
+            subordinate.add_memory(f"Being fired by {self.name} will likely start negative rumors ({new_rumor.rumor_id[:4]}) about me.")
+            self.add_memory(f"Firing {subordinate.name} might cause rumors ({new_rumor.rumor_id[:4]}).")
+
         subordinate.warning_count = 0
         # Consider if active work order should be dropped/cancelled
         if subordinate.active_work_order_id:
@@ -2652,7 +2705,27 @@ class Character:
             # Mood boost for both
             self.update_mood_score(8, f"Apology accepted by {target_name}")
             target_char.update_mood_score(5, f"Accepted apology from {self.name}")
-            self.update_reputation(config.REPUTATION_CHANGE_APOLOGY_ACCEPTED, f"Successfully apologized to {target_name}")
+
+            rep_change_reason = f"Successfully apologized to {target_name}"
+            self.update_reputation(config.REPUTATION_CHANGE_APOLOGY_ACCEPTED, rep_change_reason)
+            if abs(config.REPUTATION_CHANGE_APOLOGY_ACCEPTED) >= config.REPUTATION_FOR_RUMOR_THRESHOLD and world.game_time:
+                rumor_content_key = "apology_accepted_positive"
+                rumor_strength = config.RUMOR_INITIAL_STRENGTH_SMALL_EVENT
+                new_rumor = Rumor(
+                    subject_char_id=self.name, # Apologizer is the subject
+                    content_key=rumor_content_key,
+                    initial_strength=rumor_strength,
+                    creation_day=world.game_time.current_day,
+                    is_positive=True,
+                    original_source_char_id=target_name # Target of apology is a key witness/source
+                )
+                world.add_rumor(new_rumor)
+                # Subject (self) and source (target_char) know the rumor
+                self.known_rumor_ids.add(new_rumor.rumor_id)
+                target_char.known_rumor_ids.add(new_rumor.rumor_id)
+                self.add_memory(f"My accepted apology to {target_name} might start a positive rumor ({new_rumor.rumor_id[:4]}) about me.")
+                target_char.add_memory(f"{self.name}'s apology to me was sincere; people might hear about it (rumor {new_rumor.rumor_id[:4]}).")
+
             # Clear negative opinion tags related to arguments
             if target_name in self.opinions:
                 self.opinions[target_name].pop("argumentative", None); self.opinions[target_name].pop("disagreeable", None)
@@ -2951,7 +3024,26 @@ class Character:
             target_char.modify_relationship(self.name, 3, world, reason="I helped them out.") # Feels good to help
             self.update_mood_score(config.MOOD_CHANGE_NEED_FULFILLED_FROM_CRITICAL, f"Received help from {target_name}")
             target_char.update_mood_score(config.MOOD_CHANGE_POSITIVE_SOCIAL, f"Helped {self.name}")
-            target_char.update_reputation(config.REPUTATION_CHANGE_HELPED_OTHER, f"Helped {self.name} with {item_name_needed or help_type}")
+
+            rep_change_reason = f"Helped {self.name} with {item_name_needed or help_type}"
+            target_char.update_reputation(config.REPUTATION_CHANGE_HELPED_OTHER, rep_change_reason)
+            if abs(config.REPUTATION_CHANGE_HELPED_OTHER) >= config.REPUTATION_FOR_RUMOR_THRESHOLD and world.game_time:
+                rumor_content_key = "helped_someone_positive" # Generic key
+                rumor_strength = config.RUMOR_INITIAL_STRENGTH_SMALL_EVENT
+                new_rumor = Rumor(
+                    subject_char_id=target_char.name,
+                    content_key=rumor_content_key,
+                    initial_strength=rumor_strength,
+                    creation_day=world.game_time.current_day,
+                    is_positive=True,
+                    original_source_char_id=self.name # The one asking for help is a source/witness
+                )
+                world.add_rumor(new_rumor)
+                # Subject (target_char) and source (self) know the rumor
+                target_char.known_rumor_ids.add(new_rumor.rumor_id)
+                self.known_rumor_ids.add(new_rumor.rumor_id)
+                target_char.add_memory(f"A rumor ({new_rumor.rumor_id[:4]}) might be starting about me helping {self.name}.")
+                self.add_memory(f"My asking for help from {target_char.name} might start a rumor ({new_rumor.rumor_id[:4]}) about their generosity.")
 
 
             if target_name not in self.opinions: self.opinions[target_name] = {}
@@ -3527,6 +3619,43 @@ class Character:
 
         self.current_goal = self.get_default_goal()
         return
+
+    def _process_learned_rumor(self, rumor: Rumor, world: 'World'):
+        """Processes a newly learned rumor, potentially affecting opinions of the rumor's subject."""
+        if rumor.subject_char_id == self.name:
+            self.add_memory(f"Heard a rumor ({rumor.rumor_id[:4]}) about myself: '{rumor.content_key}'. No change in self-opinion from this.")
+            return
+
+        if rumor.current_strength < config.MIN_RUMOR_STRENGTH_FOR_OPINION_EFFECT:
+            self.add_memory(f"Heard a faint rumor ({rumor.rumor_id[:4]}) about {rumor.subject_char_id} ('{rumor.content_key}'), but it's too weak to form a strong opinion.")
+            return
+
+        opinion_tag_key = "rumor_impression_positive" if rumor.is_positive else "rumor_impression_negative"
+
+        # Ensure opinion dictionary exists for the subject
+        if rumor.subject_char_id not in self.opinions:
+            self.opinions[rumor.subject_char_id] = {}
+
+        # Calculate opinion change based on rumor strength
+        opinion_change_magnitude = rumor.current_strength * config.RUMOR_OPINION_EFFECT_STRENGTH_FACTOR
+        opinion_change_magnitude = min(opinion_change_magnitude, config.MAX_OPINION_CHANGE_FROM_RUMOR) # Cap max change per rumor
+
+        opinion_delta = int(round(opinion_change_magnitude))
+        if not rumor.is_positive:
+            opinion_delta *= -1
+
+        current_opinion_score = self.opinions[rumor.subject_char_id].get(opinion_tag_key, 0)
+        new_opinion_score = max(-10, min(10, current_opinion_score + opinion_delta)) # Clamp individual rumor tag
+
+        if new_opinion_score != current_opinion_score:
+            self.opinions[rumor.subject_char_id][opinion_tag_key] = new_opinion_score
+            self.add_memory(f"Heard a rumor ({rumor.rumor_id[:4]}) about {rumor.subject_char_id}: '{rumor.content_key}' (Strength: {rumor.current_strength}). My '{opinion_tag_key}' opinion of them is now {new_opinion_score}.")
+
+            # Allow this new opinion to influence overall relationship
+            self._update_relationship_from_opinions(rumor.subject_char_id, world)
+        else:
+            self.add_memory(f"Heard a rumor ({rumor.rumor_id[:4]}) about {rumor.subject_char_id}: '{rumor.content_key}', but my opinion on that aspect didn't change significantly.")
+
 
     def _update_relationship_from_opinions(self, target_name: str, world: 'World'):
         if target_name not in self.opinions:
