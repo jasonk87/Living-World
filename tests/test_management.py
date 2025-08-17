@@ -4,14 +4,17 @@ from game.world import World
 from game.time import Time
 from game.ledger import Ledger
 from game.stockpile import Stockpile
-from game.work_order import WorkOrder # Import WorkOrder
-from game.data import BLUEPRINTS # Import BLUEPRINTS for item definition
+from game.work_order import WorkOrder
+from game.data import BLUEPRINTS
 from game import config
+from game.goal import GoalType
+from game.events import EventBus
 
 class TestManagement(unittest.TestCase):
     def setUp(self):
         self.time = Time(ticks_per_day=10)
-        self.world = World(grid_size=(10, 10), game_time_ref=self.time)
+        self.event_bus = EventBus()
+        self.world = World(grid_size=(10, 10), game_time_ref=self.time, event_bus_ref=self.event_bus)
 
         # Provide default personality and traits for test characters
         default_personality = "neutral"
@@ -103,8 +106,8 @@ class TestManagement(unittest.TestCase):
         self.supervisor.issue_warning(self.subordinate.name, self.world, reason)
 
         self.assertEqual(self.subordinate.warning_count, initial_warnings + 1)
-        self.assertIn(f"Issued warning to {self.subordinate.name} for: {reason}", self.supervisor.memory[-1])
-        self.assertIn(f"Received warning from {self.supervisor.name} regarding: {reason}", self.subordinate.memory[-1])
+        self.assertTrue(any(f"Issued warning to {self.subordinate.name} for: {reason}" in msg for msg in self.supervisor.memory))
+        self.assertTrue(any(f"Received warning from {self.supervisor.name} regarding: {reason}" in msg for msg in self.subordinate.memory))
 
     def test_issue_warning_reaches_threshold_sets_poor_performance(self):
         self.subordinate.warning_count = config.FIRING_WARNING_THRESHOLD - 1
@@ -116,8 +119,8 @@ class TestManagement(unittest.TestCase):
         self.assertEqual(self.subordinate.warning_count, config.FIRING_WARNING_THRESHOLD)
         self.assertEqual(self.subordinate.performance_rating, "Poor")
         expected_supervisor_memory = f"{self.subordinate.name}'s performance set to Poor due to {self.subordinate.warning_count} warnings (Threshold: {config.FIRING_WARNING_THRESHOLD})."
-        self.assertIn(expected_supervisor_memory, self.supervisor.memory[-1])
-        self.assertIn(f"Performance automatically set to Poor due to reaching {config.FIRING_WARNING_THRESHOLD} warnings.", self.subordinate.memory[-1])
+        self.assertTrue(any(expected_supervisor_memory in msg for msg in self.supervisor.memory))
+        self.assertTrue(any(f"Performance automatically set to Poor due to reaching {config.FIRING_WARNING_THRESHOLD} warnings." in msg for msg in self.subordinate.memory))
 
     def test_issue_warning_already_poor_performance(self):
         self.subordinate.warning_count = config.FIRING_WARNING_THRESHOLD # Already at threshold
@@ -137,12 +140,12 @@ class TestManagement(unittest.TestCase):
         self.assertNotIn(self.subordinate.name, self.supervisor.subordinates_names)
         self.assertEqual(self.subordinate.job, "Unemployed")
         self.assertEqual(self.subordinate.rank, "Commoner")
-        self.assertEqual(self.subordinate.current_goal, "Idle")
+        self.assertEqual(self.subordinate.current_goal.goal_type, GoalType.IDLE)
         self.assertEqual(self.subordinate.performance_rating, "Fired")
         self.assertEqual(self.subordinate.warning_count, 0)
 
-        self.assertIn(f"Fired {self.subordinate.name} from their job as {original_job}.", self.supervisor.memory[-1])
-        self.assertIn(f"Was fired by {self.supervisor.name} from job {original_job}. Now Unemployed.", self.subordinate.memory[-1])
+        self.assertTrue(any(f"Fired {self.subordinate.name} from their job as {original_job}." in msg for msg in self.supervisor.memory))
+        self.assertTrue(any(f"Was fired by {self.supervisor.name} from job {original_job}. Now Unemployed." in msg for msg in self.subordinate.memory))
 
     def test_fire_subordinate_with_active_work_order(self):
         # Ensure the blueprint for "Wooden Chair" exists for this test

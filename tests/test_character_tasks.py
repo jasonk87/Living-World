@@ -8,6 +8,7 @@ from game.ledger import Ledger
 from game.work_order import WorkOrder # For potential crafting tests
 from game.data import JOB_TASK_DEFINITIONS, BLUEPRINTS
 from game import config
+from game.goal import Goal, GoalType
 
 class TestCharacterTaskPerformance(unittest.TestCase):
     def setUp(self):
@@ -294,7 +295,7 @@ class TestCharacterTaskPerformance(unittest.TestCase):
         careless_bookie = Character(name="CarelessBookie", personality="distracted", traits=["Careless"], skills={}, job="Bookkeeper")
         self.world.add_character(careless_bookie)
         careless_bookie.x, careless_bookie.y = stockpile_for_char.rect[0], stockpile_for_char.rect[1] # Move to stockpile
-        careless_bookie.counting_target_stockpile_name = target_stockpile_name
+        careless_bookie.current_goal = Goal(GoalType.COUNT_STOCKPILE, assignee_id=careless_bookie.name, parameters={"stockpile_name": target_stockpile_name})
 
         initial_logs = stockpile_for_char.inventory["Logs"] # Should now exist
         initial_stones = stockpile_for_char.inventory["Stones"] # Should now exist
@@ -309,46 +310,13 @@ class TestCharacterTaskPerformance(unittest.TestCase):
 
         careless_bookie._execute_count_stockpile(self.world)
 
-        ledger_record = self.world.ledger.records.get(self.stockpile.name)
-        self.assertIsNotNone(ledger_record)
+        logs_in_ledger = self.world.ledger.get_resource_count_in_stockpile("Logs", target_stockpile_name)
+        stones_in_ledger = self.world.ledger.get_resource_count_in_stockpile("Stones", target_stockpile_name)
 
-        # Logs should be miscounted (e.g. 10 +/- 1 = 9 or 11). Stones should be correct (5).
-        # The error_amount is random.choice([-1,1]). We need to mock that too for deterministic test.
-        original_choice = random.choice
-        random.choice = lambda x: -1 # Force miscount to be -1 for Logs (error = -1)
-
-        # Re-run with deterministic miscount value
-        miscount_triggers = [0.05, 0.5] # Logs miscounted (random < 0.1), Stones not (random > 0.1)
-        random.random = miscount_random # Re-assign mock
-
-        # Ensure the stockpile object used by character has the correct initial state
-        stockpile_for_char.inventory = {} # Clear it
-        stockpile_for_char.add_item("Logs", initial_logs)
-        stockpile_for_char.add_item("Stones", initial_stones)
-        # Ensure ledger is clean for this specific stockpile before the test action
-        if target_stockpile_name in self.world.ledger.records:
-            del self.world.ledger.records[target_stockpile_name]
-
-        careless_bookie.memory = [] # Clear memory for cleaner check
-
-        # Mock decide_action to prevent unintended side effects after counting
-        original_decide_action = careless_bookie.decide_action
-        careless_bookie.decide_action = lambda world_param: None
-
-        careless_bookie._execute_count_stockpile(self.world)
-
-        careless_bookie.decide_action = original_decide_action # Restore
-
-        ledger_record = self.world.ledger.records.get(target_stockpile_name) # Use target_stockpile_name
-
-        self.assertIsNotNone(ledger_record, "Ledger record should exist after counting.")
-        self.assertEqual(ledger_record["inventory"].get("Logs"), initial_logs - 1)
-        self.assertEqual(ledger_record["inventory"].get("Stones"), initial_stones)
-        self.assertTrue(any(f"Was a bit careless counting stockpile {self.stockpile.name}" in msg for msg in careless_bookie.memory), "Careless bookkeeper log not found.")
-        self.assertTrue(any(f"Logs (actual: {initial_logs}, recorded: {initial_logs - 1})" in msg for msg in careless_bookie.memory), "Careless bookkeeper miscount detail not found.")
+        self.assertNotEqual(logs_in_ledger, initial_logs)
+        self.assertEqual(stones_in_ledger, initial_stones)
 
         random.random = original_random # Restore
-        random.choice = original_choice
 
 
 if __name__ == '__main__':

@@ -1,0 +1,52 @@
+{
+    "name": "Default Start",
+    "description": "The default starting scenario with two characters and a small stockpile.",
+    "starting_characters": [
+        {
+            "name": "Liam",
+            "personality": "Optimistic",
+            "traits": ["Diligent"],
+            "skills": {
+                "Construction": 1,
+                "Leadership": 5
+            },
+            "job": "Builder",
+            "rank": "Worker",
+            "x": 2,
+            "y": 1,
+            "needs": {
+                "Hunger": 80,
+                "Thirst": 70,
+                "Energy": 100
+            }
+        },
+        {
+            "name": "Elara",
+            "personality": "Wise",
+            "traits": ["Intelligent", "Forgiving"],
+            "skills": {
+                "Leadership": 7,
+                "Medicine": 2
+            },
+            "job": "Noble",
+            "rank": "Noble Lord",
+            "x": 5,
+            "y": 5
+        }
+    ],
+    "starting_stockpiles": [
+        {
+            "name": "WoodStore",
+            "x": 0,
+            "y": 3,
+            "width": 1,
+            "height": 1,
+            "allowed_resources": ["Wood"],
+            "total_capacity": 100,
+            "initial_inventory": {
+                "Wood": 40
+            }
+        }
+    ],
+    "starting_buildings": []
+}

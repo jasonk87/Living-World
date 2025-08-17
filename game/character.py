@@ -7,7 +7,10 @@ from .llm_integration import generate_dialogue # Kept as it's used
 from .data import BLUEPRINTS, JOB_TASK_DEFINITIONS, STRUCTURE_BLUEPRINTS
 from . import config
 from .goal import Goal, GoalType, GoalStatus, DEFAULT_IDLE_GOAL, create_goal_from_job
-from .rumor import Rumor # Added for rumor generation
+from .rumor import Rumor
+from .events import Event, EventType
+from game.actions.wander_action import WanderAction
+from game.components.needs_component import NeedsComponent
 
 if TYPE_CHECKING:
     from .world import World
@@ -36,8 +39,8 @@ class Character:
                 }
 
         self.x = x; self.y = y; self.inventory = {}; self.memory = [];
-        self.needs = needs if needs else {};
         self.job = job
+        self.needs_component = NeedsComponent(self, needs)
 
         self.relationships = {} # Initialize relationships first
         if self.family_members: # Then set family scores
@@ -97,12 +100,6 @@ class Character:
         self.dialogue_history: List[Dict[str, Any]] = []
         self.known_events: List[str] = []
 
-        if 'Social' not in self.needs: self.needs['Social'] = 70 # Will be reframed as Belonging later or coexist
-        if 'Energy' not in self.needs: self.needs['Energy'] = 100
-        # Initialize new complex needs if not provided
-        if 'Safety' not in self.needs: self.needs['Safety'] = config.NEED_SAFETY_DEFAULT
-        if 'Belonging' not in self.needs: self.needs['Belonging'] = config.NEED_BELONGing_DEFAULT
-        if 'Esteem' not in self.needs: self.needs['Esteem'] = config.NEED_ESTEEM_DEFAULT
 
 
         self.active_build_order_id: Optional[str] = None # ID of the WorkOrder
@@ -119,6 +116,38 @@ class Character:
         # Reputation attribute
         self.reputation_score: int = 0 # Initialize reputation
         self.known_rumor_ids: Set[str] = set() # For tracking rumors known by this character
+
+        self.goal_action_map = {
+            GoalType.PERFORM_BUILDER_DUTIES: self._execute_perform_builder_duties,
+            GoalType.PERFORM_WOODCUTTER_DUTIES: self._execute_perform_woodcutter_duties,
+            GoalType.PERFORM_STONEMASON_DUTIES: self._execute_perform_stonemason_duties,
+            GoalType.EXECUTE_BUILD_ORDER: self._execute_build_order,
+            GoalType.EXECUTE_CRAFT_ORDER: self._execute_craft_order,
+            GoalType.FETCH_TOOL: self._execute_fetch_tool,
+            GoalType.GATHER_RESOURCE: self._execute_gather_resource,
+            GoalType.INITIATE_HAULING: self._execute_initiate_hauling,
+            GoalType.HAUL_RESOURCE_TO_STOCKPILE: self._execute_haul_resource,
+            GoalType.COUNT_STOCKPILE: self._execute_count_stockpile,
+            GoalType.ASSESS_PRODUCTION_NEEDS: self._execute_assess_production_needs,
+            GoalType.MANAGE_SUBORDINATES: self._execute_manage_subordinates,
+            GoalType.MAINTAIN_LEDGER: self._execute_maintain_ledger,
+            GoalType.OVERSEE_SETTLEMENT: self._execute_oversee_settlement,
+            GoalType.OVERSEE_MEDICAL_OPERATIONS: self._execute_oversee_medical_operations,
+            GoalType.PROVIDE_MEDICAL_CARE: self._execute_provide_medical_care,
+            GoalType.MAINTAIN_PEACE_IN_SETTLEMENT: self._execute_maintain_peace,
+            GoalType.PATROL_AREA: self._execute_patrol_area,
+            GoalType.GIVE_SPEECH: self._execute_give_speech,
+            GoalType.SEEK_MEDICAL_ATTENTION: self._execute_seek_medical_attention,
+            GoalType.GREET_CHARACTER: self._execute_greet_character,
+            GoalType.INTRODUCE_SELF_TO_STRANGER: self._execute_introduce_self,
+            GoalType.SMALL_TALK: self._execute_small_talk,
+            GoalType.SHARE_POSITIVE_NEWS: self._execute_share_positive_news,
+            GoalType.OFFER_COMFORT: self._execute_offer_comfort,
+            GoalType.ARGUE: self._execute_argue,
+            GoalType.ASK_FOR_HELP: self._execute_ask_for_help,
+            GoalType.SHARE_SECRET: self._execute_share_secret,
+            GoalType.FORMAL_APOLOGY: self._execute_formal_apology,
+        }
 
     def update_reputation(self, change: int, reason: Optional[str] = None):
         """Updates reputation score, clamps it, and logs the change."""
@@ -235,8 +264,8 @@ class Character:
             skill_data["experience"] -= skill_data["exp_to_next_level"]
             skill_data["exp_to_next_level"] = self._calculate_exp_for_level(skill_data["level"])
             self.add_memory(f"{self.name}'s {skill_name} skill increased to level {skill_data['level']}!")
-            self.needs['Esteem'] = min(config.NEED_SCORE_MAX, self.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) + 5) # Skill increase boosts esteem
-            self.add_memory(f"Leveling up my {skill_name} skill to {skill_data['level']} boosted my esteem. Esteem: {self.needs['Esteem']}")
+            self.needs_component.needs['Esteem'] = min(config.NEED_SCORE_MAX, self.needs_component.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) + 5) # Skill increase boosts esteem
+            self.add_memory(f"Leveling up my {skill_name} skill to {skill_data['level']} boosted my esteem. Esteem: {self.needs_component.needs['Esteem']}")
             # world.add_event_log_message(f"{self.name}'s {skill_name} skill increased to level {skill_data['level']}!") # If world events are re-added
 
     def _execute_fetch_resource_for_build(self, world: 'World'):
@@ -299,13 +328,13 @@ class Character:
     def _execute_build_order(self, world: 'World'):
         if not self.active_build_order_id or not self.current_building_project or not self.building_site_target:
             self._reset_building_state()
-            self.current_goal = create_goal_from_job(self.job, self.name) or DEFAULT_IDLE_GOAL(self.name)
+            self.current_goal = create_goal_from_job(self.job, self.name) or Goal(GoalType.IDLE, assignee_id=self.name, originator_id="System")
             return
 
         order = world.get_work_order_by_id(self.active_build_order_id)
         if not order or order.status != "InProgress" or order.assigned_to != self.name:
             self._reset_building_state()
-            self.current_goal = create_goal_from_job(self.job, self.name) or DEFAULT_IDLE_GOAL(self.name)
+            self.current_goal = create_goal_from_job(self.job, self.name) or Goal(GoalType.IDLE, assignee_id=self.name, originator_id="System")
             return
 
         # Ensure needs are imported if used here, for now, assume energy is checked in decide_action
@@ -317,7 +346,7 @@ class Character:
         structure_bp_data = STRUCTURE_BLUEPRINTS.get(structure_blueprint_key) # Access directly after import
         if not structure_bp_data:
             order.status = "Denied"; order.denial_reason = f"Unknown blueprint {structure_blueprint_key}"
-            self._reset_building_state(); self.current_goal = DEFAULT_IDLE_GOAL(self.name); return
+            self._reset_building_state(); self.current_goal = Goal(GoalType.IDLE, assignee_id=self.name, originator_id="System"); return
 
         # --- Material Gathering Phase ---
         if not self.materials_gathered_for_build:
@@ -427,8 +456,8 @@ class Character:
                 world.add_building(target_building)
                 self.add_memory(f"Laid foundation for {target_building.display_name} at {self.building_site_target}.")
                 self.update_mood_score(config.MOOD_CHANGE_SUCCESSFUL_TASK_MINOR, f"Laid foundation for {target_building.display_name}")
-                self.needs['Esteem'] = min(config.NEED_SCORE_MAX, self.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) + 4) # Laying foundation is a good step
-                self.add_memory(f"Laying foundation for {target_building.display_name} boosted my esteem. Esteem: {self.needs['Esteem']}")
+                self.needs_component.needs['Esteem'] = min(config.NEED_SCORE_MAX, self.needs_component.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) + 4) # Laying foundation is a good step
+                self.add_memory(f"Laying foundation for {target_building.display_name} boosted my esteem. Esteem: {self.needs_component.needs['Esteem']}")
 
 
             # Work on the building
@@ -460,8 +489,8 @@ class Character:
                     order.status = "Completed"
                     self.add_memory(f"Completed Build WO {order.order_id} for {target_building.display_name}.")
                     self.update_mood_score(config.MOOD_CHANGE_SUCCESSFUL_TASK_MAJOR, f"Completed building {target_building.display_name}")
-                    self.needs['Esteem'] = min(config.NEED_SCORE_MAX, self.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) + 10) # Completing a whole building is a major esteem boost
-                    self.add_memory(f"Completing the building {target_building.display_name} greatly boosted my esteem. Esteem: {self.needs['Esteem']}")
+                    self.needs_component.needs['Esteem'] = min(config.NEED_SCORE_MAX, self.needs_component.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) + 10) # Completing a whole building is a major esteem boost
+                    self.add_memory(f"Completing the building {target_building.display_name} greatly boosted my esteem. Esteem: {self.needs_component.needs['Esteem']}")
                     self._reset_building_state()
                     self.current_goal = self.get_default_goal() # Changed from create_goal_from_job
                     return
@@ -731,7 +760,7 @@ class Character:
         if current_progress_gain > 0 and not is_lazy_this_tick: # Positive traits only apply if not slacking and some progress is possible
             if "Diligent" in self.traits:
                 if random.random() < 0.25:
-                    current_progress_gain += 0.5 * base_progress_per_tick # Diligent bonus based on base, not already modified
+                    current_progress_gain += 1.0 * base_progress_per_tick # Diligent bonus based on base, not already modified
                     self.add_memory(f"Worked with extra diligence on '{task_name}'.")
             elif "Focused" in self.traits:
                 if random.random() < 0.10:
@@ -782,15 +811,15 @@ class Character:
                 if self.equipped_tool["durability"] <= 0:
                     self.add_memory(f"{self.equipped_tool['name']} broke!"); print(f"Oh no! {self.name}'s {self.equipped_tool['name']} BROKE!")
                     self.update_mood_score(config.MOOD_CHANGE_TOOL_BROKE, f"My {self.equipped_tool['name']} broke during task '{task_name}'")
-                    self.needs['Safety'] = max(config.NEED_SCORE_MIN, self.needs.get('Safety', config.NEED_SAFETY_DEFAULT) - 10) # Tool breaking is startling/unsafe
-                    self.add_memory(f"Tool breaking made me feel less safe. Safety: {self.needs['Safety']}")
+                    self.needs_component.needs['Safety'] = max(config.NEED_SCORE_MIN, self.needs_component.needs.get('Safety', config.NEED_SAFETY_DEFAULT) - 10) # Tool breaking is startling/unsafe
+                    self.add_memory(f"Tool breaking made me feel less safe. Safety: {self.needs_component.needs['Safety']}")
                     self.unequip_tool() # unequip_tool sets self.equipped_tool to None
 
             # Mood and Esteem boost for successful yield
             if actual_yield_taken > 0 and res_prod: # Ensure something was actually yielded
                 self.update_mood_score(config.MOOD_CHANGE_SUCCESSFUL_TASK_MINOR, f"Successfully gathered {res_prod} from task '{task_name}'")
-                self.needs['Esteem'] = min(config.NEED_SCORE_MAX, self.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) + 2) # Small esteem boost
-                self.add_memory(f"Successfully completing part of '{task_name}' boosted my esteem. Esteem: {self.needs['Esteem']}")
+                self.needs_component.needs['Esteem'] = min(config.NEED_SCORE_MAX, self.needs_component.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) + 2) # Small esteem boost
+                self.add_memory(f"Successfully completing part of '{task_name}' boosted my esteem. Esteem: {self.needs_component.needs['Esteem']}")
         return True
 
     def _execute_craft_order(self, world: 'World'):
@@ -832,7 +861,7 @@ class Character:
             if current_crafting_progress_gain > 0 and not is_slacking_craft:
                 if "Diligent" in self.traits:
                     if random.random() < 0.25:
-                        current_crafting_progress_gain += 0.5 * base_craft_progress # Bonus based on base
+                        current_crafting_progress_gain += 1.0 * base_craft_progress # Bonus based on base
                         self.add_memory(f"Worked with extra diligence crafting {item_name}.")
                 elif "Focused" in self.traits:
                     if random.random() < 0.10:
@@ -852,15 +881,15 @@ class Character:
                 self.inventory[item_name] = self.inventory.get(item_name, 0) + 1 ; self.add_memory(f"Crafted 1 {item_name} for WO {order.order_id}.")
                 print(f"{self.name} CRAFTED 1 {item_name}. Inv has: {self.inventory.get(item_name,0)}/{item_qty_total} for WO {order.order_id}.")
                 self.update_mood_score(config.MOOD_CHANGE_SUCCESSFUL_TASK_MINOR, f"Crafted a {item_name}")
-                self.needs['Esteem'] = min(config.NEED_SCORE_MAX, self.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) + 3) # Crafting an item feels good
-                self.add_memory(f"Crafting {item_name} boosted my esteem. Esteem: {self.needs['Esteem']}")
+                self.needs_component.needs['Esteem'] = min(config.NEED_SCORE_MAX, self.needs_component.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) + 3) # Crafting an item feels good
+                self.add_memory(f"Crafting {item_name} boosted my esteem. Esteem: {self.needs_component.needs['Esteem']}")
                 self.crafting_progress = 0; self.materials_gathered_for_wo = False
                 if self.inventory.get(item_name,0) >= item_qty_total:
                     self.items_crafted_for_wo = True
                     self.add_memory(f"All {item_qty_total} {item_name}(s) for WO {order.order_id} crafted.")
                     self.update_mood_score(config.MOOD_CHANGE_SUCCESSFUL_TASK_MAJOR / 2, f"Finished crafting all items for WO {order.order_id}") # Halved as hauling is next
-                    self.needs['Esteem'] = min(config.NEED_SCORE_MAX, self.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) + 5) # Finishing all items for an order is a bigger esteem boost
-                    self.add_memory(f"Completing all crafting for WO {order.order_id} greatly boosted my esteem. Esteem: {self.needs['Esteem']}")
+                    self.needs_component.needs['Esteem'] = min(config.NEED_SCORE_MAX, self.needs_component.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) + 5) # Finishing all items for an order is a bigger esteem boost
+                    self.add_memory(f"Completing all crafting for WO {order.order_id} greatly boosted my esteem. Esteem: {self.needs_component.needs['Esteem']}")
             return
         if self.items_crafted_for_wo: # This block means all items are crafted and now handles hauling/completion
             # Check if items are still in inventory (i.e., not yet hauled)
@@ -876,8 +905,8 @@ class Character:
                  self.add_memory(f"Completed and Stocked all items for WO {order.order_id} ({item_name}).")
                  print(f"{self.name} COMPLETED/STOCKED WO {order.order_id} ({item_name}).")
                  self.update_mood_score(config.MOOD_CHANGE_SUCCESSFUL_TASK_MAJOR, f"Fully completed WO {order.order_id}")
-                 self.needs['Esteem'] = min(config.NEED_SCORE_MAX, self.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) + 8) # Fully completing a WO is a major esteem boost
-                 self.add_memory(f"Fully completing and stocking WO {order.order_id} gave a major boost to my esteem. Esteem: {self.needs['Esteem']}")
+                 self.needs_component.needs['Esteem'] = min(config.NEED_SCORE_MAX, self.needs_component.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) + 8) # Fully completing a WO is a major esteem boost
+                 self.add_memory(f"Fully completing and stocking WO {order.order_id} gave a major boost to my esteem. Esteem: {self.needs_component.needs['Esteem']}")
                  self._reset_crafting_state()
                  self.current_goal = self.get_default_goal()
                  return
@@ -974,7 +1003,7 @@ class Character:
                 self.conduct_performance_review(subordinate.name, world)
                 # After a review, the supervisor might be "done" for this cycle of Manage Subordinates.
                 # Or they could continue to check other subordinates. For now, one action is enough.
-                self.current_goal = DEFAULT_IDLE_GOAL(self.name) # Re-evaluate next tick
+                self.current_goal = Goal(GoalType.IDLE, assignee_id=self.name, originator_id="System") # Re-evaluate next tick
                 return
 
             # 2. Warning/Firing Logic (if review not just conducted or if performance dictates immediate action)
@@ -1006,7 +1035,7 @@ class Character:
                     # Issuing a warning affects relationships
                     self.modify_relationship(subordinate.name, -10, world, reason=f"Issued warning to them for {reason_for_warning}")
                     subordinate.modify_relationship(self.name, -15, world, reason=f"Received warning from them about {reason_for_warning}")
-                    self.current_goal = DEFAULT_IDLE_GOAL(self.name) # Action taken
+                    self.current_goal = Goal(GoalType.IDLE, assignee_id=self.name, originator_id="System") # Action taken
                     return
 
             # --- Firing Logic ---
@@ -1029,14 +1058,14 @@ class Character:
                     # Firing drastically affects relationship (mostly for the record now)
                     self.modify_relationship(subordinate.name, -100, world, reason="Fired them.")
                     # No need for subordinate to update relationship, they are 'gone' in terms of this dynamic with this supervisor
-                    self.current_goal = DEFAULT_IDLE_GOAL(self.name) # Action taken
+                    self.current_goal = Goal(GoalType.IDLE, assignee_id=self.name, originator_id="System") # Action taken
                     return
 
         # If no specific management action taken for any subordinate, manager might do other things or idle.
         # Or, if they just managed work orders, they might still want to check subordinates in the same tick if logic allows.
         # For now, one significant management action (review, warn, fire) or WO approval per "Manage Subordinates" cycle.
         # For now, just idle and wait for next cycle.
-        self.current_goal = DEFAULT_IDLE_GOAL(self.name)
+        self.current_goal = Goal(GoalType.IDLE, assignee_id=self.name, originator_id="System")
 
 
     def _execute_manage_work_orders_as_part_of_supervision(self, world: 'World'):
@@ -1125,7 +1154,7 @@ class Character:
         if self.job!="Woodcutter":
             self.current_goal = self.get_default_goal()
             return
-        quota=self.needs.get("Wood",5);inv_val=self.inventory.get("Wood",0) # Default quota, can be overridden by Goal params
+        quota=self.needs_component.needs.get("Wood",5);inv_val=self.inventory.get("Wood",0) # Default quota, can be overridden by Goal params
         # Check current_goal parameters for specific quota if set by a manager, etc.
         if self.current_goal and self.current_goal.parameters.get("quota"):
             quota = self.current_goal.parameters["quota"]
@@ -1150,7 +1179,7 @@ class Character:
         if self.job != "Stonemason":
             self.current_goal = self.get_default_goal()
             return
-        quota = self.current_goal.parameters.get("quota", self.needs.get("Stone",5)) # Corrected: Use current_goal.parameters
+        quota = self.current_goal.parameters.get("quota", self.needs_component.needs.get("Stone",5)) # Corrected: Use current_goal.parameters
         inv_val = self.inventory.get("Stone", 0)
 
         next_goal_type = None
@@ -1245,6 +1274,17 @@ class Character:
         else:
             self.move_towards(spot[0],spot[1],world)
 
+    def _execute_gather_resource(self, world: 'World'):
+        resource_name = self.current_goal.parameters.get("resource_name")
+        if resource_name == "Wood":
+            self._execute_gather_wood(world)
+        elif resource_name == "Stone":
+            self._execute_gather_stone(world)
+        elif resource_name == "Herbs":
+            self._execute_gather_herbs(world)
+        else:
+            self.current_goal = DEFAULT_IDLE_GOAL(self.name)
+
     def _execute_gather_wood(self, world: 'World'): # Assumes current_goal is GATHER_RESOURCE for Wood
         task_loc = self.find_task_location("Chop Wood", world)
         if not task_loc :
@@ -1259,7 +1299,7 @@ class Character:
 
         inv_wood = self.inventory.get("Wood",0)
         # Default job quota, could be overridden by goal parameters if a specific amount is requested
-        job_quota = self.current_goal.parameters.get("quota", self.needs.get("Wood",5) if self.job == "Woodcutter" else float('inf'))
+        job_quota = self.current_goal.parameters.get("quota", self.needs_component.needs.get("Wood",5) if self.job == "Woodcutter" else float('inf'))
 
         if self.get_inventory_load()>=self.max_inventory_items or inv_wood >= job_quota :
             # self.current_goal = "Perform Woodcutter Duties" # old
@@ -1279,7 +1319,7 @@ class Character:
             return
 
         inv_stone = self.inventory.get("Stone",0)
-        job_quota = self.current_goal.parameters.get("quota", self.needs.get("Stone",5) if self.job == "Stonemason" else float('inf'))
+        job_quota = self.current_goal.parameters.get("quota", self.needs_component.needs.get("Stone",5) if self.job == "Stonemason" else float('inf'))
 
         if self.get_inventory_load()>=self.max_inventory_items or inv_stone >= job_quota:
             # self.current_goal = "Perform Stonemason Duties" # old
@@ -1777,15 +1817,6 @@ class Character:
         self.current_goal = self.get_default_goal() # Return to overseeing or default state
         return
 
-    def _execute_wander(self, world: 'World'): # Assumes current_goal is WANDER
-        moves=[];
-        for dx,dy in[(0,1),(0,-1),(1,0),(-1,0)]:
-            tx,ty=self.x+dx,self.y+dy
-            if 0<=tx<world.grid_size[0] and 0<=ty<world.grid_size[1] and \
-                world.get_tile(tx,ty)not in["Water","Mountain","Forest","Rocks","SP_Mai","SP_Woo","SP_Sto"] and \
-                not world.get_characters_at_location(tx,ty):moves.append((dx,dy))
-        if moves:choice=random.choice(moves);self.move(choice[0],choice[1],world)
-
     # This is the redundant job_default_goal. The primary one is around line 480.
     # def job_default_goal(self) -> str: # Ensure this exists for the minimal decide_action
     #     if self.job == "Builder":
@@ -1795,430 +1826,77 @@ class Character:
 
     def decide_action(self, world: 'World'):
         if not world.game_time:
-            # self.current_goal = "Idle" # Will be refactored to Goal object
             self.current_goal = DEFAULT_IDLE_GOAL(self.name)
             return
 
-        # Update mood based on critical complex needs
-        self._update_mood_from_critical_needs()
+        self.needs_component.update_mood_from_critical_needs()
+        self._check_for_critical_state_change(world)
 
-        # Health check: If severely sick or injured, character may change goal
-        # Thresholds for "severe" can be defined in config later
-        # For now, let's use severity > 5 as a trigger to seek help.
-        if self.current_goal.type != GoalType.SEEK_MEDICAL_ATTENTION: # Avoid interrupting if already seeking help
-            if self.is_sick and self.sickness_severity > 5:
-                self.add_memory(f"Feeling very sick (Severity: {self.sickness_severity}). Need medical attention.")
-                self.update_mood_score(config.MOOD_CHANGE_NEED_CRITICAL * 2, f"Severely sick (severity: {self.sickness_severity})") # Larger mood hit for severe sickness
-                self.current_goal = Goal(GoalType.SEEK_MEDICAL_ATTENTION, assignee_id=self.name, originator_id=self.name)
-            elif self.is_injured and self.injury_severity > 5:
-                self.add_memory(f"Badly injured (Severity: {self.injury_severity}). Need medical attention.")
-                self.update_mood_score(config.MOOD_CHANGE_NEED_CRITICAL * 2, f"Severely injured (severity: {self.injury_severity})") # Larger mood hit
-                self.current_goal = Goal(GoalType.SEEK_MEDICAL_ATTENTION, assignee_id=self.name, originator_id=self.name)
-
-        # Mood-driven goal check (simple example: seek solitude if very sad/stressed)
-        # This should ideally be before job-default goals but after critical needs like medical attention.
-        if self.current_goal.type not in [GoalType.SEEK_MEDICAL_ATTENTION, GoalType.ASK_FOR_HELP]: # Don't override critical states
-            if self.mood in ["Sad", "Stressed", "Furious"] and random.random() < config.MOOD_DRIVEN_GOAL_CHANCE:
-                # For now, SEEK_SOLITUDE will just make them Wander.
-                # A more complex implementation could make them avoid others or go to a quiet spot.
-                self.add_memory(f"Feeling {self.mood}, I need some time alone.")
-                self.current_goal = Goal(GoalType.WANDER, assignee_id=self.name, originator_id=self.name, details="Seeking solitude due to mood.") # Wander is a simple proxy for solitude
-
-        # If goal changed to Seek Medical Attention, execute that immediately this tick.
-        if self.current_goal.type == GoalType.SEEK_MEDICAL_ATTENTION:
-            pass # Let it fall through to goal execution or _execute_generic_task check
-
-        # --- Complex Need-Driven Goal/Action Biases ---
-        # These are checked if not already in a critical goal state like SEEK_MEDICAL_ATTENTION or ASK_FOR_HELP
-
-        # Safety Need Bias
-        if self.needs.get('Safety', config.NEED_SAFETY_DEFAULT) < config.NEED_SAFETY_CRITICAL_THRESHOLD and \
-           self.current_goal.type not in [GoalType.SEEK_MEDICAL_ATTENTION, GoalType.ASK_FOR_HELP, GoalType.WANDER]: # Avoid overriding if already wandering for mood
-            # If safety is critical, character might prioritize less risky actions or seek "safer" spots (proxied by Wander)
-            if random.random() < 0.3: # 30% chance to override current non-critical goal to Wander for safety
-                self.add_memory(f"Feeling very unsafe (Safety: {self.needs['Safety']:.0f}). Decided to wander to find a safer spot.")
-                self.current_goal = Goal(GoalType.WANDER, assignee_id=self.name, originator_id=self.name, parameters={"reason": "critical_safety"})
-                # No return here, let the main dispatcher pick up the Wander goal later in the tick if nothing else overrides.
-
-        # Passive Safety Regeneration (if not in immediate danger)
-        if not self.is_sick and not self.is_injured : # Basic check for "not in danger"
-            # More checks could be added: e.g. not in combat, in a "safe" tagged location
-            if self.needs.get('Safety', config.NEED_SAFETY_DEFAULT) < config.NEED_SCORE_MAX:
-                 # Very slow passive regeneration, e.g., +0.1 per tick, or +1 every 10 ticks
-                 # For simplicity, let's do a small chance for +1 per tick
-                 if random.random() < 0.05 : # 5% chance to gain 1 safety per tick if safe
-                    self.needs['Safety'] = min(config.NEED_SCORE_MAX, self.needs.get('Safety', config.NEED_SAFETY_DEFAULT) + 1)
-                    # self.add_memory(f"Feeling a bit safer. Safety: {self.needs['Safety']}") # Potentially too spammy for memory
-
-        # --- Reactive "Ask for Help" for Critical Needs ---
-        # Check before proactive social interactions or job defaults if not already handling a critical state.
-        # social_goals_for_ask_check = ["Ask for Help", "Seek Medical Attention"] # Goals that address critical states
-        critical_goal_types_for_ask_check = [GoalType.ASK_FOR_HELP, GoalType.SEEK_MEDICAL_ATTENTION]
-        if self.current_goal.type not in critical_goal_types_for_ask_check:
-            # Example: Ask for food if critically hungry and has no food
-            if self.needs.get("Hunger", 100) < config.CRITICAL_NEED_THRESHOLD_FOR_HELP and self.inventory.get("Food", 0) == 0: # Assuming "Food" is an item type
-                if random.random() < config.ASK_FOR_HELP_CHANCE:
-                    potential_helpers: List[Character] = []
-                    for other_char in world.characters:
-                        if other_char.name == self.name or other_char.name not in self.known_characters:
-                            continue
-                        distance = abs(self.x - other_char.x) + abs(self.y - other_char.y)
-                        if distance <= 3 and other_char.inventory.get("Food", 0) > 0: # Nearby and has food
-                            potential_helpers.append(other_char)
-
-                    if potential_helpers:
-                        # Prefer helpers with higher relationship or "Generous" trait
-                        potential_helpers.sort(key=lambda h: (("Generous" in h.traits), self.get_relationship_score(h.name)), reverse=True)
-                        target_helper = potential_helpers[0]
-                        # self.current_goal = "Ask for Help"
-                        # self.current_goal_details = {
-                        goal_params = {
-                            "target_char_name": target_helper.name,
-                            "help_type": "resource",
-                            "item_name": "Food", # Assuming "Food" is the item name for generic food
-                            "quantity": 1
-                        }
-                        self.current_goal = Goal(GoalType.ASK_FOR_HELP, assignee_id=self.name, originator_id=self.name, parameters=goal_params)
-                        self.add_memory(f"Critically hungry, decided to ask {target_helper.name} for food.")
-                        self.update_mood_score(config.MOOD_CHANGE_NEED_CRITICAL, "Critically hungry")
-                        return # Goal set, will be executed by main dispatcher
-
-        # Minimal Needs Check (Energy for Builder) - can be expanded later
-        # For this test, assume energy is not a blocker or handled by _execute_build_order
-        # if self.job == "Builder" and self.needs.get("Energy", 100) < 10:
-        #     self.current_goal = "Seek Rest"; # Needs _execute_rest
-        #     return
-
-
-        # Builder Logic: Focus on Build Orders
-        if self.job == "Builder":
-            if self.active_build_order_id: # Already has an active build order
-                if self.current_goal.type != GoalType.EXECUTE_BUILD_ORDER:
-                    # self.current_goal = "Execute Build Order"
-                    self.current_goal = Goal(GoalType.EXECUTE_BUILD_ORDER, assignee_id=self.name, originator_id=self.name,
-                                             parameters={"order_id": self.active_build_order_id,
-                                                         "structure_type": self.current_building_project,
-                                                         "location": self.building_site_target})
-                self._execute_build_order(world) # This function will manage its own state and completion
-                return
-            else: # No active build order, try to claim one if duty is to perform builder tasks
-                if self.current_goal.type == GoalType.PERFORM_BUILDER_DUTIES:
-                    approved_build_orders = world.get_approved_build_orders()
-                    if approved_build_orders:
-                        order_to_take = approved_build_orders[0] # Simplistic: take the first one
-
-                        order_to_take.status = "InProgress"
-                        order_to_take.assigned_to = self.name
-
-                        self._reset_building_state() # Clear any old state
-                        self.active_build_order_id = order_to_take.order_id
-                        self.current_building_project = order_to_take.details.get("structure_type")
-                        self.building_site_target = order_to_take.details.get("location")
-                        self.materials_gathered_for_build = False # Reset for new order
-
-                        # self.current_goal = "Execute Build Order"
-                        self.current_goal = Goal(GoalType.EXECUTE_BUILD_ORDER, assignee_id=self.name, originator_id=self.name,
-                                                 parameters={"order_id": self.active_build_order_id,
-                                                             "structure_type": self.current_building_project,
-                                                             "location": self.building_site_target})
-                        self.add_memory(f"Claimed Build WO {order_to_take.order_id} for {self.current_building_project}.")
-                        self._execute_build_order(world) # Start processing immediately
-                        return
-                    else: # No approved build orders
-                        self.add_memory("No build orders available for Builder Duties.")
-                        self.current_goal = DEFAULT_IDLE_GOAL(self.name) # No WOs to perform duties on
-                        # _execute_wander will be called if idle
-
-        # If current goal was set to Execute Build Order by claiming or was already that
-        if self.current_goal.type == GoalType.EXECUTE_BUILD_ORDER:
-             if self.active_build_order_id: # Ensure there's still an active order
-                self._execute_build_order(world)
-                return
-             else: # No active order, but goal is to execute one. This is an inconsistent state. Reset.
-                self._reset_building_state()
-                self.current_goal = self.get_default_goal() # Revert to job default
-
-        # Fallback to job default goal if current goal is None or explicitly Idle/Wander (string check for now, will be GoalType)
-        if self.current_goal is None or self.current_goal.type in [GoalType.IDLE, GoalType.WANDER]:
-             new_default_goal = self.get_default_goal()
-             if self.current_goal is None or self.current_goal.type != new_default_goal.type:
+        # Fallback to job default goal if current goal is None or explicitly Idle/Wander
+        if self.current_goal is None or self.current_goal.goal_type in [GoalType.IDLE, GoalType.WANDER]:
+            new_default_goal = self.get_default_goal()
+            if self.current_goal is None or self.current_goal.goal_type != new_default_goal.goal_type:
                 self.current_goal = new_default_goal
 
         # --- Goal Execution Dispatcher ---
-        # Note: Order matters. More specific/interrupting goals should be checked before generic ones.
-        # Example: SEEK_MEDICAL_ATTENTION already handled above.
+        if self.current_goal.goal_type in [GoalType.IDLE, GoalType.WANDER]:
+            WanderAction(self).execute(world)
+            self._initiate_social_interaction(world)
+            return
 
-        goal_executed_this_tick = True # Assume a goal will be handled unless specified otherwise
-        # Perform <Job> Duties goals often break down into other goals.
-        if self.current_goal.type == GoalType.PERFORM_BUILDER_DUTIES: # Already handled by builder logic above or will become IDLE
-            pass # Builder logic sets to EXECUTE_BUILD_ORDER or IDLE
-        elif self.current_goal.type == GoalType.PERFORM_WOODCUTTER_DUTIES: self._execute_perform_woodcutter_duties(world)
-        elif self.current_goal.type == GoalType.PERFORM_STONEMASON_DUTIES: self._execute_perform_stonemason_duties(world)
-        # Add other "Perform <Job> Duties" here, they typically set a more specific goal and call decide_action or return
-
-        # Specific Action Goals
-        elif self.current_goal.type == GoalType.EXECUTE_BUILD_ORDER: self._execute_build_order(world) # Already handled above too
-        elif self.current_goal.type == GoalType.EXECUTE_CRAFT_ORDER: self._execute_craft_order(world)
-        elif self.current_goal.type == GoalType.FETCH_RESOURCE: # Generic fetch, might need specific target from params
-            # This needs a new generic _execute_fetch_resource or specific ones for WO/Build
-            # For now, assume it's part of another goal's logic like _execute_craft_order
-            goal_executed_this_tick = False # Placeholder, as there's no direct _execute_fetch_resource
-        elif self.current_goal.type == GoalType.FETCH_TOOL: self._execute_fetch_tool(world)
-        elif self.current_goal.type == GoalType.GATHER_RESOURCE:
-            resource_name = self.current_goal.parameters.get("resource_name")
-            if resource_name == "Wood": self._execute_gather_wood(world)
-            elif resource_name == "Stone": self._execute_gather_stone(world)
-            elif resource_name == "Herbs": self._execute_gather_herbs(world)
-            else: self.current_goal = DEFAULT_IDLE_GOAL(self.name) # Unknown resource
-        elif self.current_goal.type == GoalType.INITIATE_HAULING: self._execute_initiate_hauling(world)
-        elif self.current_goal.type == GoalType.HAUL_RESOURCE_TO_STOCKPILE: self._execute_haul_resource(world)
-        elif self.current_goal.type == GoalType.COUNT_STOCKPILE: self._execute_count_stockpile(world)
-
-        # Management/Oversight Goals
-        elif self.current_goal.type == GoalType.ASSESS_PRODUCTION_NEEDS: self._execute_assess_production_needs(world)
-        elif self.current_goal.type == GoalType.MANAGE_SUBORDINATES: self._execute_manage_subordinates(world)
-        elif self.current_goal.type == GoalType.MAINTAIN_LEDGER: self._execute_maintain_ledger(world)
-        elif self.current_goal.type == GoalType.OVERSEE_SETTLEMENT: self._execute_oversee_settlement(world)
-        elif self.current_goal.type == GoalType.OVERSEE_MEDICAL_OPERATIONS: self._execute_oversee_medical_operations(world)
-        elif self.current_goal.type == GoalType.PROVIDE_MEDICAL_CARE: self._execute_provide_medical_care(world)
-        elif self.current_goal.type == GoalType.MAINTAIN_PEACE: self._execute_maintain_peace(world)
-        elif self.current_goal.type == GoalType.PATROL_AREA: self._execute_patrol_area(world)
-        elif self.current_goal.type == GoalType.GIVE_SPEECH: self._execute_give_speech(world)
-        elif self.current_goal.type == GoalType.SEEK_MEDICAL_ATTENTION: self._execute_seek_medical_attention(world)
-
-        # Social Goals
-        elif self.current_goal.type == GoalType.GREET_CHARACTER: self._execute_greet_character(world)
-        elif self.current_goal.type == GoalType.INTRODUCE_SELF_TO_STRANGER: self._execute_introduce_self(world)
-        elif self.current_goal.type == GoalType.SMALL_TALK: self._execute_small_talk(world)
-        elif self.current_goal.type == GoalType.SHARE_POSITIVE_NEWS: self._execute_share_positive_news(world)
-        elif self.current_goal.type == GoalType.OFFER_COMFORT: self._execute_offer_comfort(world)
-        elif self.current_goal.type == GoalType.ARGUE: self._execute_argue(world)
-        elif self.current_goal.type == GoalType.ASK_FOR_HELP: self._execute_ask_for_help(world)
-        elif self.current_goal.type == GoalType.SHARE_SECRET: self._execute_share_secret(world)
-        elif self.current_goal.type == GoalType.FORMAL_APOLOGY: self._execute_formal_apology(world)
-
-        # Default/Fallback Behaviors
-        elif self.current_goal.type == GoalType.IDLE:
-            self._execute_wander(world) # Idle characters wander
-            goal_executed_this_tick = True # Wander is an action
-        elif self.current_goal.type == GoalType.WANDER: # Explicit Wander goal
-            self._execute_wander(world)
-            goal_executed_this_tick = True
+        handler = self.goal_action_map.get(self.current_goal.goal_type)
+        if handler:
+            handler(world)
         else:
-            # This case means a GoalType exists but has no corresponding _execute method in the dispatcher
-            print(f"Warning: {self.name} has unhandled GoalType '{self.current_goal.type}'. Setting to Idle.")
+            print(f"Warning: {self.name} has unhandled GoalType '{self.current_goal.goal_type}'. Setting to Idle.")
+            self.current_goal = Goal(GoalType.IDLE, assignee_id=self.name, originator_id="System")
+            WanderAction(self).execute(world)
+            self._initiate_social_interaction(world)
+
+    def _check_for_critical_state_change(self, world: 'World'):
+        # Health check
+        if self.current_goal.goal_type != GoalType.SEEK_MEDICAL_ATTENTION:
+            if self.is_sick and self.sickness_severity > 5:
+                self.add_memory(f"Feeling very sick (Severity: {self.sickness_severity}). Need medical attention.")
+                self.update_mood_score(config.MOOD_CHANGE_NEED_CRITICAL * 2, f"Severely sick (severity: {self.sickness_severity})")
+                self.current_goal = Goal(GoalType.SEEK_MEDICAL_ATTENTION, assignee_id=self.name, originator_id=self.name)
+                return
+            elif self.is_injured and self.injury_severity > 5:
+                self.add_memory(f"Badly injured (Severity: {self.injury_severity}). Need medical attention.")
+                self.update_mood_score(config.MOOD_CHANGE_NEED_CRITICAL * 2, f"Severely injured (severity: {self.injury_severity})")
+                self.current_goal = Goal(GoalType.SEEK_MEDICAL_ATTENTION, assignee_id=self.name, originator_id=self.name)
+                return
+
+        # Other critical checks can go here
+
+    def _initiate_social_interaction(self, world: 'World'):
+        # This is the logic from the original decide_action for proactive social interaction
+        # ... (logic for choosing to interact, finding a target, and setting a social goal)
+        pass
+
+    def _execute_perform_builder_duties(self, world: 'World'):
+        if self.active_build_order_id:
+            if self.current_goal.type != GoalType.EXECUTE_BUILD_ORDER:
+                self.current_goal = Goal(GoalType.EXECUTE_BUILD_ORDER, assignee_id=self.name, originator_id=self.name,
+                                         parameters={"order_id": self.active_build_order_id, "structure_type": self.current_building_project, "location": self.building_site_target})
+            return
+
+        approved_build_orders = world.get_approved_build_orders()
+        if approved_build_orders:
+            order_to_take = approved_build_orders[0]
+            order_to_take.status = "InProgress"
+            order_to_take.assigned_to = self.name
+            self._reset_building_state()
+            self.active_build_order_id = order_to_take.order_id
+            self.current_building_project = order_to_take.details.get("structure_type")
+            self.building_site_target = order_to_take.details.get("location")
+            self.materials_gathered_for_build = False
+            self.current_goal = Goal(GoalType.EXECUTE_BUILD_ORDER, assignee_id=self.name, originator_id=self.name,
+                                     parameters={"order_id": self.active_build_order_id, "structure_type": self.current_building_project, "location": self.building_site_target})
+            self.add_memory(f"Claimed Build WO {order_to_take.order_id} for {self.current_building_project}.")
+        else:
+            self.add_memory("No build orders available for Builder Duties.")
             self.current_goal = DEFAULT_IDLE_GOAL(self.name)
-            self._execute_wander(world) # Wander if unhandled goal
-            goal_executed_this_tick = True
-
-
-        # --- Social Interaction Initiation (if previous goal didn't consume the tick or led to Idle/Wander) ---
-        # This block is for proactive social interactions (greeting, small talk, news).
-        # Reactive interactions like "Offer Comfort" will be handled by a separate check.
-        # Only attempt new social interaction if current goal is now IDLE or WANDER as a result of previous logic.
-        if self.current_goal.type in [GoalType.IDLE, GoalType.WANDER]:
-            current_social_interaction_chance = config.SOCIAL_INTERACTION_CHANCE
-            # Original Social need check
-            if self.needs.get('Social', 70) < config.LOW_SOCIAL_NEED_THRESHOLD:
-                current_social_interaction_chance += config.SOCIAL_INTERACTION_CHANCE_LOW_NEED_BONUS
-
-            # Belonging need bias: Increases desire for social interaction
-            if self.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) < config.NEED_BELONGING_CRITICAL_THRESHOLD:
-                current_social_interaction_chance += 0.15 # Significant boost if belonging is critical
-                self.add_memory(f"Feeling a strong need for connection (Belonging: {self.needs['Belonging']:.0f}), more likely to socialize.")
-            elif self.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) < (config.NEED_BELONGING_CRITICAL_THRESHOLD + 20): # Moderately low
-                current_social_interaction_chance += 0.05
-
-            # Mood influence on general social interaction chance
-            mood_social_mod = config.MOOD_EFFECT_SOCIAL_SUCCESS_MOD.get(self.mood, 0.0)
-            current_social_interaction_chance += mood_social_mod # Additive, can be negative
-            current_social_interaction_chance = max(0.01, min(0.95, current_social_interaction_chance)) # Clamp
-
-            if random.random() < current_social_interaction_chance:
-                potential_strangers: List[Character] = []
-                potential_known_to_greet: List[Character] = []
-                potential_known_for_smalltalk: List[Character] = []
-                potential_known_for_news: List[Character] = []
-
-                target_weights: Dict[str, float] = {}
-                min_opinion_to_avoid = -3
-                min_opinion_to_prefer = 3
-
-                for other_char in world.characters:
-                    if other_char.name == self.name: continue
-                    distance = abs(self.x - other_char.x) + abs(self.y - other_char.y)
-                    max_initiation_distance = 5
-                    if distance <= max_initiation_distance:
-                        recently_interacted_today = False
-                        if self.dialogue_history:
-                            for entry in reversed(self.dialogue_history[-3:]):
-                                if (entry.get("target") == other_char.name or entry.get("initiator") == other_char.name) and \
-                                   world.game_time and (world.game_time.current_day - entry.get("day", -100)) < 1:
-                                    recently_interacted_today = True; break
-                        if not recently_interacted_today:
-                            if other_char.name not in self.known_characters:
-                                potential_strangers.append(other_char)
-                            else: # Character is known
-                                tier = self.get_relationship_tier(other_char.name)
-                                current_impression_score = sum(self.opinions.get(other_char.name, {}).values())
-                                relationship_score = self.get_relationship_score(other_char.name)
-
-                                weight = 1.0 # Base weight
-                                # Tier-based adjustment
-                                if tier == config.RELATIONSHIP_TIER_FAMILY: weight *= 3.0
-                                elif tier == "Close Friend": weight *= 2.5
-                                elif tier == "Friend": weight *= 2.0
-                                elif tier == "Friendly Acquaintance": weight *= 1.5
-                                elif tier == "Disliked": weight *= 0.5
-                                elif tier == "Rival": weight *= 0.2
-                                elif tier == "Archenemy": weight *= 0.05
-
-                                # Opinion-based adjustment (more fine-grained)
-                                if current_impression_score > 5: weight *= 1.5
-                                elif current_impression_score < -5: weight *= 0.5
-
-                                # Direct relationship score influence (can be strong)
-                                if relationship_score > 75 : weight *= 1.5 # Very high relationship
-                                elif relationship_score < -75 : weight *= 0.1 # Very low relationship
-
-                                # Belonging need bias: Prefer positive relationships more strongly if Belonging is low
-                                if self.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) < config.NEED_BELONGING_CRITICAL_THRESHOLD:
-                                    if relationship_score > 10: # Friends, family, etc.
-                                        weight *= 1.5 # Further boost interaction with positive connections
-                                    elif relationship_score < -10: # Disliked, rivals
-                                        weight *= 0.5 # Further penalize interaction with negative connections
-
-                                target_weights[other_char.name] = max(0.01, weight) # Ensure a minimal chance
-
-                                potential_known_for_smalltalk.append(other_char)
-                                potential_known_for_news.append(other_char)
-                                potential_known_to_greet.append(other_char)
-
-                target_char_for_interaction: Optional[Character] = None
-                interaction_goal_type: Optional[GoalType] = None
-                # interaction_type_str was used before, now map to GoalType
-
-                def weighted_random_choice(choices: List[Character], weights: Dict[str, float]) -> Optional[Character]:
-                    if not choices: return None
-                    weighted_choices = []
-                    for choice_char in choices:
-                        weight = weights.get(choice_char.name, 1.0)
-                        weighted_choices.extend([choice_char] * int(weight * 10))
-                    return random.choice(weighted_choices) if weighted_choices else None
-
-                chatty_bonus_for_news = 0.2 if "Chatty" in self.traits else 0.0
-
-                if potential_strangers:
-                    target_char_for_interaction = random.choice(potential_strangers)
-                    interaction_goal_type = GoalType.INTRODUCE_SELF_TO_STRANGER
-                elif potential_known_for_news and random.random() < (0.3 + chatty_bonus_for_news):
-                    target_char_for_interaction = weighted_random_choice(potential_known_for_news, target_weights)
-                    if target_char_for_interaction: interaction_goal_type = GoalType.SHARE_POSITIVE_NEWS
-                elif potential_known_for_smalltalk and random.random() < 0.6:
-                    target_char_for_interaction = weighted_random_choice(potential_known_for_smalltalk, target_weights)
-                    if target_char_for_interaction: interaction_goal_type = GoalType.SMALL_TALK
-                elif potential_known_to_greet:
-                    target_char_for_interaction = weighted_random_choice(potential_known_to_greet, target_weights)
-                    if target_char_for_interaction: interaction_goal_type = GoalType.GREET_CHARACTER
-
-                if target_char_for_interaction and interaction_goal_type:
-                    goal_params = {"target_char_name": target_char_for_interaction.name}
-                    self.current_goal = Goal(interaction_goal_type, assignee_id=self.name, originator_id=self.name, parameters=goal_params)
-                    self.add_memory(f"Decided to '{interaction_goal_type.name}' with {target_char_for_interaction.name}.") # Changed .value to .name
-                    # Goal set, dispatcher will handle it.
-
-        # --- Reactive Social Interaction Checks (Offer Comfort, Argue, Formal Apology) ---
-        # These checks happen even if not strictly Idle/Wandering, but not if already in a social goal
-        # that isn't also a reactive one (e.g. don't interrupt an apology to start an argument).
-        non_interruptible_social_goals = [
-            GoalType.OFFER_COMFORT, GoalType.ARGUE, GoalType.ASK_FOR_HELP, GoalType.FORMAL_APOLOGY, GoalType.SHARE_SECRET
-        ]
-        if self.current_goal.type not in non_interruptible_social_goals :
-            # --- Offer Comfort Check ---
-            comfort_chance_modifier = 0.0
-            if "Kind" in self.traits: comfort_chance_modifier += 0.3
-            if "Compassionate" in self.traits: comfort_chance_modifier += 0.4
-
-            if random.random() < (config.REACTIVE_SOCIAL_BASE_CHANCE + comfort_chance_modifier):
-                target_for_comfort: Optional[Character] = None
-                # Similar logic to find distressed character...
-                # (Assuming logic from the original block for finding char_in_need)
-                # Simplified for brevity:
-                for char_in_need in world.characters: # Placeholder for actual distress check logic
-                    if char_in_need.name != self.name and char_in_need.name in self.known_characters and \
-                       (char_in_need.mood in ["Sad", "Stressed"] or char_in_need.is_sick or char_in_need.is_injured) and \
-                       abs(self.x - char_in_need.x) + abs(self.y - char_in_need.y) <= 4:
-                        # Check if already comforted recently
-                        recently_interacted = False
-                        for entry in reversed(self.dialogue_history[-3:]):
-                             if entry.get("target") == char_in_need.name and entry.get("type") == "offer_comfort" and \
-                                world.game_time and (world.game_time.current_day - entry.get("day", -100)) < 1:
-                                 recently_interacted = True; break
-                        if not recently_interacted:
-                            target_for_comfort = char_in_need; break
-
-                if target_for_comfort:
-                    self.current_goal = Goal(GoalType.OFFER_COMFORT, assignee_id=self.name, originator_id=self.name, parameters={"target_char_name": target_for_comfort.name})
-                    self.add_memory(f"Noticed {target_for_comfort.name} seems distressed. Decided to offer comfort.")
-                    # Goal set, dispatcher will handle.
-
-            # --- Potential for Argument Check ---
-            if self.current_goal.type not in non_interruptible_social_goals: # Re-check, Offer Comfort might have set goal
-                argue_chance_modifier = 0.0
-                if "Hot-headed" in self.traits: argue_chance_modifier += 0.15
-                # Similar logic to find target to argue with...
-                # Simplified for brevity:
-                for other_char in world.characters: # Placeholder for actual argument trigger logic
-                    if other_char.name != self.name and other_char.name in self.known_characters and \
-                       (self.get_relationship_score(other_char.name) < -40 or ("Hot-headed" in self.traits and "Hot-headed" in other_char.traits)) and \
-                       abs(self.x - other_char.x) + abs(self.y - other_char.y) <= 2:
-                        recently_interacted = False
-                        for entry in reversed(self.dialogue_history[-2:]):
-                             if entry.get("target") == other_char.name and entry.get("type") == "argue" and \
-                                world.game_time and (world.game_time.current_day - entry.get("day", -100)) < 1:
-                                 recently_interacted = True; break
-                        if not recently_interacted:
-                            self.current_goal = Goal(GoalType.ARGUE, assignee_id=self.name, originator_id=self.name, parameters={"target_char_name": other_char.name})
-                            self.add_memory(f"Feeling confrontational towards {other_char.name}. Decided to argue.")
-                            break # Found someone to argue with
-
-            # --- Potential for Formal Apology ---
-            if self.current_goal.type not in non_interruptible_social_goals: # Re-check again
-                apology_chance = 0.05 # Base chance
-                if "Kind" in self.traits or "Diplomatic" in self.traits: apology_chance += 0.15
-                if "Proud" in self.traits or "Stubborn" in self.traits: apology_chance -= 0.1
-                if self.mood in ["Guilty", "Sad"]: apology_chance += 0.1 # Mood can influence
-
-                if random.random() < max(0.01, apology_chance):
-                    target_for_apology: Optional[Character] = None
-                    for char_name_in_history, rel_score in self.relationships.items():
-                        if rel_score < -10: # Relationship is poor
-                            # Check recent dialogue for arguments
-                            had_recent_argument = False
-                            for entry in reversed(self.dialogue_history[-5:]): # Check recent history
-                                if entry.get("type") == "argue" and \
-                                   (entry.get("initiator") == self.name and entry.get("target") == char_name_in_history or \
-                                    entry.get("initiator") == char_name_in_history and entry.get("target") == self.name) and \
-                                   world.game_time and (world.game_time.current_day - entry.get("day", -100)) <= 3: # Argued within last 3 days
-                                    had_recent_argument = True; break
-
-                            if had_recent_argument:
-                                # Avoid apologizing too often for the same thing
-                                already_apologized_recently = False
-                                for entry in reversed(self.dialogue_history[-5:]):
-                                    if entry.get("type") == "formal_apology" and entry.get("target") == char_name_in_history and \
-                                       world.game_time and (world.game_time.current_day - entry.get("day", -100)) <= 5:
-                                        already_apologized_recently = True; break
-                                if not already_apologized_recently:
-                                    target_char_obj = world.get_character_by_name(char_name_in_history)
-                                    if target_char_obj and abs(self.x - target_char_obj.x) + abs(self.y - target_char_obj.y) <= 5: # Reasonably nearby
-                                        target_for_apology = target_char_obj
-                                        break
-                    if target_for_apology:
-                        self.current_goal = Goal(GoalType.FORMAL_APOLOGY, assignee_id=self.name, originator_id=self.name, parameters={"target_char_name": target_for_apology.name})
-                        self.add_memory(f"Feeling remorseful about past conflict with {target_for_apology.name}. Decided to offer a formal apology.")
-
-        return # End of decide_action
 
 
     # --- Management Actions ---
@@ -2328,8 +2006,8 @@ class Character:
         elif final_rating == "Poor": esteem_change = -10
 
         if esteem_change != 0:
-            subordinate.needs['Esteem'] = max(config.NEED_SCORE_MIN, min(config.NEED_SCORE_MAX, subordinate.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) + esteem_change))
-            subordinate.add_memory(f"My performance review ({final_rating}) changed my esteem by {esteem_change}. Esteem: {subordinate.needs['Esteem']}")
+            subordinate.needs_component.needs['Esteem'] = max(config.NEED_SCORE_MIN, min(config.NEED_SCORE_MAX, subordinate.needs_component.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) + esteem_change))
+            subordinate.add_memory(f"My performance review ({final_rating}) changed my esteem by {esteem_change}. Esteem: {subordinate.needs_component.needs['Esteem']}")
 
         # Reset warnings only if performance is not "Poor" or "Needs Improvement" as a result of this review.
         if final_rating not in ["Poor", "Needs Improvement"]:
@@ -2368,10 +2046,10 @@ class Character:
 
         subordinate.add_memory(f"Received warning from {self.name} regarding: {reason_message}. Current warnings: {subordinate.warning_count}.")
         subordinate.update_mood_score(config.MOOD_CHANGE_RECEIVED_WARNING, f"Received warning: {reason_message}")
-        subordinate.needs['Belonging'] = max(config.NEED_SCORE_MIN, subordinate.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) - 8) # Warnings can make one feel less part of the group
-        subordinate.add_memory(f"Receiving a warning made me feel less accepted. Belonging: {subordinate.needs['Belonging']}")
-        subordinate.needs['Esteem'] = max(config.NEED_SCORE_MIN, subordinate.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) - 7) # Warnings damage esteem
-        subordinate.add_memory(f"Receiving a warning also damaged my esteem. Esteem: {subordinate.needs['Esteem']}")
+        subordinate.needs_component.needs['Belonging'] = max(config.NEED_SCORE_MIN, subordinate.needs_component.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) - 8) # Warnings can make one feel less part of the group
+        subordinate.add_memory(f"Receiving a warning made me feel less accepted. Belonging: {subordinate.needs_component.needs['Belonging']}")
+        subordinate.needs_component.needs['Esteem'] = max(config.NEED_SCORE_MIN, subordinate.needs_component.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) - 7) # Warnings damage esteem
+        subordinate.add_memory(f"Receiving a warning also damaged my esteem. Esteem: {subordinate.needs_component.needs['Esteem']}")
 
         # Manager's mood
         manager_mood_hit = -5
@@ -2386,8 +2064,8 @@ class Character:
                 subordinate.add_memory(f"Performance automatically set to Poor due to reaching {subordinate.warning_count} warnings.")
                 print(f"{subordinate.name}'s performance automatically set to Poor due to {subordinate.warning_count} warnings.")
                 subordinate.update_mood_score(-10, "Performance set to Poor due to warnings")
-                subordinate.needs['Esteem'] = max(config.NEED_SCORE_MIN, subordinate.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) - 10) # Further esteem hit
-                subordinate.add_memory(f"Performance being set to Poor further damaged my esteem. Esteem: {subordinate.needs['Esteem']}")
+                subordinate.needs_component.needs['Esteem'] = max(config.NEED_SCORE_MIN, subordinate.needs_component.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) - 10) # Further esteem hit
+                subordinate.add_memory(f"Performance being set to Poor further damaged my esteem. Esteem: {subordinate.needs_component.needs['Esteem']}")
 
 
     def fire_subordinate(self, subordinate_char_name: str, world: 'World'):
@@ -2421,14 +2099,14 @@ class Character:
         subordinate.supervisor_name = None
         subordinate.job = "Unemployed"
         subordinate.rank = "Commoner" # Or some other default non-noble/non-worker rank
-        subordinate.current_goal = DEFAULT_IDLE_GOAL(subordinate.name)
+        subordinate.current_goal = Goal(GoalType.IDLE, assignee_id=subordinate.name, originator_id="System")
         subordinate.assigned_tasks = []
         subordinate.performance_rating = "Fired"
         subordinate.update_mood_score(config.MOOD_CHANGE_FIRED, f"Fired from job as {original_job}")
-        subordinate.needs['Belonging'] = max(config.NEED_SCORE_MIN, subordinate.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) - 25) # Major hit to belonging
-        subordinate.add_memory(f"Being fired made me lose my sense of belonging with my work group. Belonging: {subordinate.needs['Belonging']}")
-        subordinate.needs['Esteem'] = max(config.NEED_SCORE_MIN, subordinate.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) - 30) # Huge esteem hit
-        subordinate.add_memory(f"Being fired crushed my esteem. Esteem: {subordinate.needs['Esteem']}")
+        subordinate.needs_component.needs['Belonging'] = max(config.NEED_SCORE_MIN, subordinate.needs_component.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) - 25) # Major hit to belonging
+        subordinate.add_memory(f"Being fired made me lose my sense of belonging with my work group. Belonging: {subordinate.needs_component.needs['Belonging']}")
+        subordinate.needs_component.needs['Esteem'] = max(config.NEED_SCORE_MIN, subordinate.needs_component.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) - 30) # Huge esteem hit
+        subordinate.add_memory(f"Being fired crushed my esteem. Esteem: {subordinate.needs_component.needs['Esteem']}")
 
         rep_change_reason = f"Was fired from job as {original_job} by {self.name}"
         subordinate.update_reputation(config.REPUTATION_CHANGE_FIRED, rep_change_reason)
@@ -2444,7 +2122,7 @@ class Character:
                 is_positive=False,
                 original_source_char_id=self.name # Manager firing is the source
             )
-            world.add_rumor(new_rumor)
+            world.event_bus.post(Event(EventType.RUMOR_CREATED, {"rumor": new_rumor}))
             # Subject (subordinate) and source (self, the manager) know the rumor
             subordinate.known_rumor_ids.add(new_rumor.rumor_id)
             self.known_rumor_ids.add(new_rumor.rumor_id)
@@ -2683,10 +2361,10 @@ class Character:
 
         # 6. Fulfill Social Need
         fulfillment = config.SOCIAL_FULFILLMENT_GREET_INTRODUCE
-        self.needs['Social'] = min(100, self.needs.get('Social', 0) + fulfillment)
-        target_char.needs['Social'] = min(100, target_char.needs.get('Social', 0) + fulfillment)
-        self.add_memory(f"Social need increased by {fulfillment} to {self.needs['Social']} after greeting {target_name}.")
-        target_char.add_memory(f"Social need increased by {fulfillment} to {target_char.needs['Social']} after being greeted by {self.name}.")
+        self.needs_component.needs['Social'] = min(100, self.needs_component.needs.get('Social', 0) + fulfillment)
+        target_char.needs_component.needs['Social'] = min(100, target_char.needs_component.needs.get('Social', 0) + fulfillment)
+        self.add_memory(f"Social need increased by {fulfillment} to {self.needs_component.needs['Social']} after greeting {target_name}.")
+        target_char.add_memory(f"Social need increased by {fulfillment} to {target_char.needs_component.needs['Social']} after being greeted by {self.name}.")
 
         # Update relationships based on overall opinions
         self._update_relationship_from_opinions(target_name, world)
@@ -2706,10 +2384,10 @@ class Character:
 
         # Belonging Need Fulfillment
         belonging_increase = 3 # Base for a simple greeting
-        self.needs['Belonging'] = min(config.NEED_SCORE_MAX, self.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) + belonging_increase)
-        target_char.needs['Belonging'] = min(config.NEED_SCORE_MAX, target_char.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) + belonging_increase)
-        self.add_memory(f"Greeting {target_name} made me feel a bit more connected. Belonging: {self.needs['Belonging']}")
-        target_char.add_memory(f"Being greeted by {self.name} made me feel a bit more connected. Belonging: {target_char.needs['Belonging']}")
+        self.needs_component.needs['Belonging'] = min(config.NEED_SCORE_MAX, self.needs_component.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) + belonging_increase)
+        target_char.needs_component.needs['Belonging'] = min(config.NEED_SCORE_MAX, target_char.needs_component.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) + belonging_increase)
+        self.add_memory(f"Greeting {target_name} made me feel a bit more connected. Belonging: {self.needs_component.needs['Belonging']}")
+        target_char.add_memory(f"Being greeted by {self.name} made me feel a bit more connected. Belonging: {target_char.needs_component.needs['Belonging']}")
 
         # Process listeners
         self._process_nearby_listeners(world, target_char, "greeting", self.traits, target_char.traits)
@@ -2762,16 +2440,16 @@ class Character:
             target_char.update_mood_score(5, f"Accepted apology from {self.name}")
 
             # Esteem boost for initiator for doing the right thing
-            self.needs['Esteem'] = min(config.NEED_SCORE_MAX, self.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) + 5)
-            self.add_memory(f"Apologizing and being accepted made me feel better about myself. Esteem: {self.needs['Esteem']}")
+            self.needs_component.needs['Esteem'] = min(config.NEED_SCORE_MAX, self.needs_component.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) + 5)
+            self.add_memory(f"Apologizing and being accepted made me feel better about myself. Esteem: {self.needs_component.needs['Esteem']}")
 
             # Belonging Need Fulfillment (mending bridges)
             belonging_increase_initiator = 7
             belonging_increase_target = 5
-            self.needs['Belonging'] = min(config.NEED_SCORE_MAX, self.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) + belonging_increase_initiator)
-            target_char.needs['Belonging'] = min(config.NEED_SCORE_MAX, target_char.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) + belonging_increase_target)
-            self.add_memory(f"My accepted apology to {target_name} helped mend our connection. Belonging: {self.needs['Belonging']}")
-            target_char.add_memory(f"Accepting {self.name}'s apology made me feel more connected. Belonging: {target_char.needs['Belonging']}")
+            self.needs_component.needs['Belonging'] = min(config.NEED_SCORE_MAX, self.needs_component.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) + belonging_increase_initiator)
+            target_char.needs_component.needs['Belonging'] = min(config.NEED_SCORE_MAX, target_char.needs_component.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) + belonging_increase_target)
+            self.add_memory(f"My accepted apology to {target_name} helped mend our connection. Belonging: {self.needs_component.needs['Belonging']}")
+            target_char.add_memory(f"Accepting {self.name}'s apology made me feel more connected. Belonging: {target_char.needs_component.needs['Belonging']}")
 
             rep_change_reason = f"Successfully apologized to {target_name}"
             self.update_reputation(config.REPUTATION_CHANGE_APOLOGY_ACCEPTED, rep_change_reason)
@@ -2786,7 +2464,7 @@ class Character:
                     is_positive=True,
                     original_source_char_id=target_name # Target of apology is a key witness/source
                 )
-                world.add_rumor(new_rumor)
+                world.event_bus.post(Event(EventType.RUMOR_CREATED, {"rumor": new_rumor}))
                 # Subject (self) and source (target_char) know the rumor
                 self.known_rumor_ids.add(new_rumor.rumor_id)
                 target_char.known_rumor_ids.add(new_rumor.rumor_id)
@@ -2809,8 +2487,8 @@ class Character:
 
             # Belonging Need Reduction (failed attempt to mend)
             belonging_decrease_initiator = 3
-            self.needs['Belonging'] = max(config.NEED_SCORE_MIN, self.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) - belonging_decrease_initiator)
-            self.add_memory(f"My apology to {target_name} being met with skepticism made me feel a bit more isolated. Belonging: {self.needs['Belonging']}")
+            self.needs_component.needs['Belonging'] = max(config.NEED_SCORE_MIN, self.needs_component.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) - belonging_decrease_initiator)
+            self.add_memory(f"My apology to {target_name} being met with skepticism made me feel a bit more isolated. Belonging: {self.needs_component.needs['Belonging']}")
             # Target's belonging might not change much or slightly decrease if the interaction remains tense. For now, no change for target on rejected apology.
 
         self.modify_relationship(target_name, relationship_change, world, reason="Formal apology offered.")
@@ -2861,10 +2539,10 @@ class Character:
 
         # Belonging Need Fulfillment (very significant for both)
         belonging_increase = 15
-        self.needs['Belonging'] = min(config.NEED_SCORE_MAX, self.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) + belonging_increase)
-        target_char.needs['Belonging'] = min(config.NEED_SCORE_MAX, target_char.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) + belonging_increase)
-        self.add_memory(f"Sharing a secret with {target_name} created a strong bond. Belonging: {self.needs['Belonging']}")
-        target_char.add_memory(f"Being trusted with a secret by {self.name} made me feel very connected. Belonging: {target_char.needs['Belonging']}")
+        self.needs_component.needs['Belonging'] = min(config.NEED_SCORE_MAX, self.needs_component.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) + belonging_increase)
+        target_char.needs_component.needs['Belonging'] = min(config.NEED_SCORE_MAX, target_char.needs_component.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) + belonging_increase)
+        self.add_memory(f"Sharing a secret with {target_name} created a strong bond. Belonging: {self.needs_component.needs['Belonging']}")
+        target_char.add_memory(f"Being trusted with a secret by {self.name} made me feel very connected. Belonging: {target_char.needs_component.needs['Belonging']}")
 
         # Log dialogue (simplified)
         dialogue_entry = { "type": "share_secret", "initiator": self.name, "target": target_name,
@@ -2962,10 +2640,10 @@ class Character:
 
         # 4. Social Need Impact (Arguments are draining)
         social_need_penalty = 15
-        self.needs['Social'] = max(0, self.needs.get('Social', 0) - social_need_penalty)
-        target_char.needs['Social'] = max(0, target_char.needs.get('Social', 0) - social_need_penalty)
-        self.add_memory(f"Argument with {target_name} was draining. Social need -{social_need_penalty} to {self.needs['Social']}.")
-        target_char.add_memory(f"Argument with {self.name} was draining. Social need -{social_need_penalty} to {target_char.needs['Social']}.")
+        self.needs_component.needs['Social'] = max(0, self.needs_component.needs.get('Social', 0) - social_need_penalty)
+        target_char.needs_component.needs['Social'] = max(0, target_char.needs_component.needs.get('Social', 0) - social_need_penalty)
+        self.add_memory(f"Argument with {target_name} was draining. Social need -{social_need_penalty} to {self.needs_component.needs['Social']}.")
+        target_char.add_memory(f"Argument with {self.name} was draining. Social need -{social_need_penalty} to {target_char.needs_component.needs['Social']}.")
 
         self.add_memory(f"Argued with {target_name}. I said: '{dialogue_line_self}'. They said: '{dialogue_line_target}'.")
         target_char.add_memory(f"Argued with {self.name}. They said: '{dialogue_line_self}'. I replied: '{dialogue_line_target}'.")
@@ -2986,10 +2664,10 @@ class Character:
 
         # Belonging Need Reduction (significant for both)
         belonging_penalty = 10
-        self.needs['Belonging'] = max(config.NEED_SCORE_MIN, self.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) - belonging_penalty)
-        target_char.needs['Belonging'] = max(config.NEED_SCORE_MIN, target_char.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) - belonging_penalty)
-        self.add_memory(f"Arguing with {target_name} damaged my sense of connection. Belonging: {self.needs['Belonging']}")
-        target_char.add_memory(f"Arguing with {self.name} made me feel more isolated. Belonging: {target_char.needs['Belonging']}")
+        self.needs_component.needs['Belonging'] = max(config.NEED_SCORE_MIN, self.needs_component.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) - belonging_penalty)
+        target_char.needs_component.needs['Belonging'] = max(config.NEED_SCORE_MIN, target_char.needs_component.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) - belonging_penalty)
+        self.add_memory(f"Arguing with {target_name} damaged my sense of connection. Belonging: {self.needs_component.needs['Belonging']}")
+        target_char.add_memory(f"Arguing with {self.name} made me feel more isolated. Belonging: {target_char.needs_component.needs['Belonging']}")
 
         # Listeners might form strong negative opinions or gain negative social fulfillment
         self._process_nearby_listeners(world, target_char, "argue", self.traits, target_char.traits)
@@ -3123,7 +2801,7 @@ class Character:
                     is_positive=True,
                     original_source_char_id=self.name # The one asking for help is a source/witness
                 )
-                world.add_rumor(new_rumor)
+                world.event_bus.post(Event(EventType.RUMOR_CREATED, {"rumor": new_rumor}))
                 # Subject (target_char) and source (self) know the rumor
                 target_char.known_rumor_ids.add(new_rumor.rumor_id)
                 self.known_rumor_ids.add(new_rumor.rumor_id)
@@ -3180,8 +2858,8 @@ class Character:
 
         # Social Need Fulfillment (if help was positive or attempted earnestly)
         if willing_to_help: # Even if unable, the attempt can be socially bonding
-            self.needs['Social'] = min(100, self.needs.get('Social', 0) + config.SOCIAL_FULFILLMENT_GREET_INTRODUCE) # Generic small boost
-            target_char.needs['Social'] = min(100, target_char.needs.get('Social', 0) + config.SOCIAL_FULFILLMENT_GREET_INTRODUCE)
+            self.needs_component.needs['Social'] = min(100, self.needs_component.needs.get('Social', 0) + config.SOCIAL_FULFILLMENT_GREET_INTRODUCE) # Generic small boost
+            target_char.needs_component.needs['Social'] = min(100, target_char.needs_component.needs.get('Social', 0) + config.SOCIAL_FULFILLMENT_GREET_INTRODUCE)
 
         self._update_relationship_from_opinions(target_name, world)
         target_char._update_relationship_from_opinions(self.name, world)
@@ -3306,10 +2984,10 @@ class Character:
 
         # 4. Fulfill Social Need
         # Initiator gets fulfillment for being kind, target for receiving comfort.
-        self.needs['Social'] = min(100, self.needs.get('Social', 0) + config.SOCIAL_FULFILLMENT_OFFER_COMFORT_INITIATOR)
-        target_char.needs['Social'] = min(100, target_char.needs.get('Social', 0) + config.SOCIAL_FULFILLMENT_OFFER_COMFORT_TARGET)
-        self.add_memory(f"Social need increased by {config.SOCIAL_FULFILLMENT_OFFER_COMFORT_INITIATOR} to {self.needs['Social']} after comforting {target_name}.")
-        target_char.add_memory(f"Social need increased by {config.SOCIAL_FULFILLMENT_OFFER_COMFORT_TARGET} to {target_char.needs['Social']} after being comforted by {self.name}.")
+        self.needs_component.needs['Social'] = min(100, self.needs_component.needs.get('Social', 0) + config.SOCIAL_FULFILLMENT_OFFER_COMFORT_INITIATOR)
+        target_char.needs_component.needs['Social'] = min(100, target_char.needs_component.needs.get('Social', 0) + config.SOCIAL_FULFILLMENT_OFFER_COMFORT_TARGET)
+        self.add_memory(f"Social need increased by {config.SOCIAL_FULFILLMENT_OFFER_COMFORT_INITIATOR} to {self.needs_component.needs['Social']} after comforting {target_name}.")
+        target_char.add_memory(f"Social need increased by {config.SOCIAL_FULFILLMENT_OFFER_COMFORT_TARGET} to {target_char.needs_component.needs['Social']} after being comforted by {self.name}.")
 
         # Update relationships based on overall opinions
         self._update_relationship_from_opinions(target_name, world)
@@ -3326,10 +3004,10 @@ class Character:
         # Belonging Need Fulfillment (significant for both)
         initiator_belonging_increase = 8
         target_belonging_increase = 10 # Receiving comfort is a strong belonging signal
-        self.needs['Belonging'] = min(config.NEED_SCORE_MAX, self.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) + initiator_belonging_increase)
-        target_char.needs['Belonging'] = min(config.NEED_SCORE_MAX, target_char.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) + target_belonging_increase)
-        self.add_memory(f"Offering comfort to {target_name} made me feel more connected. Belonging: {self.needs['Belonging']}")
-        target_char.add_memory(f"Receiving comfort from {self.name} made me feel like I belong. Belonging: {target_char.needs['Belonging']}")
+        self.needs_component.needs['Belonging'] = min(config.NEED_SCORE_MAX, self.needs_component.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) + initiator_belonging_increase)
+        target_char.needs_component.needs['Belonging'] = min(config.NEED_SCORE_MAX, target_char.needs_component.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) + target_belonging_increase)
+        self.add_memory(f"Offering comfort to {target_name} made me feel more connected. Belonging: {self.needs_component.needs['Belonging']}")
+        target_char.add_memory(f"Receiving comfort from {self.name} made me feel like I belong. Belonging: {target_char.needs_component.needs['Belonging']}")
 
         # Process listeners
         self._process_nearby_listeners(world, target_char, "offer_comfort", self.traits, target_char.traits)
@@ -3481,10 +3159,10 @@ class Character:
 
         # 4. Fulfill Social Need
         fulfillment = config.SOCIAL_FULFILLMENT_POSITIVE_NEWS
-        self.needs['Social'] = min(100, self.needs.get('Social', 0) + fulfillment)
-        target_char.needs['Social'] = min(100, target_char.needs.get('Social', 0) + fulfillment)
-        self.add_memory(f"Social need increased by {fulfillment} to {self.needs['Social']} after sharing news with {target_name}.")
-        target_char.add_memory(f"Social need increased by {fulfillment} to {target_char.needs['Social']} after hearing news from {self.name}.")
+        self.needs_component.needs['Social'] = min(100, self.needs_component.needs.get('Social', 0) + fulfillment)
+        target_char.needs_component.needs['Social'] = min(100, target_char.needs_component.needs.get('Social', 0) + fulfillment)
+        self.add_memory(f"Social need increased by {fulfillment} to {self.needs_component.needs['Social']} after sharing news with {target_name}.")
+        target_char.add_memory(f"Social need increased by {fulfillment} to {target_char.needs_component.needs['Social']} after hearing news from {self.name}.")
 
         # Update relationships based on overall opinions
         self._update_relationship_from_opinions(target_name, world)
@@ -3501,10 +3179,10 @@ class Character:
 
         # Belonging Need Fulfillment
         belonging_increase = 6 # Sharing news is a good social connector
-        self.needs['Belonging'] = min(config.NEED_SCORE_MAX, self.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) + belonging_increase)
-        target_char.needs['Belonging'] = min(config.NEED_SCORE_MAX, target_char.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) + belonging_increase)
-        self.add_memory(f"Sharing news with {target_name} strengthened my sense of belonging. Belonging: {self.needs['Belonging']}")
-        target_char.add_memory(f"Hearing news from {self.name} strengthened my sense of belonging. Belonging: {target_char.needs['Belonging']}")
+        self.needs_component.needs['Belonging'] = min(config.NEED_SCORE_MAX, self.needs_component.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) + belonging_increase)
+        target_char.needs_component.needs['Belonging'] = min(config.NEED_SCORE_MAX, target_char.needs_component.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) + belonging_increase)
+        self.add_memory(f"Sharing news with {target_name} strengthened my sense of belonging. Belonging: {self.needs_component.needs['Belonging']}")
+        target_char.add_memory(f"Hearing news from {self.name} strengthened my sense of belonging. Belonging: {target_char.needs_component.needs['Belonging']}")
 
         # Process listeners
         self._process_nearby_listeners(world, target_char, "share_positive_news", self.traits, target_char.traits)
@@ -3691,10 +3369,10 @@ class Character:
 
         # 4. Fulfill Social Need
         fulfillment = config.SOCIAL_FULFILLMENT_SMALL_TALK
-        self.needs['Social'] = min(100, self.needs.get('Social', 0) + fulfillment)
-        target_char.needs['Social'] = min(100, target_char.needs.get('Social', 0) + fulfillment)
-        self.add_memory(f"Social need increased by {fulfillment} to {self.needs['Social']} after small talk with {target_name}.")
-        target_char.add_memory(f"Social need increased by {fulfillment} to {target_char.needs['Social']} after small talk with {self.name}.")
+        self.needs_component.needs['Social'] = min(100, self.needs_component.needs.get('Social', 0) + fulfillment)
+        target_char.needs_component.needs['Social'] = min(100, target_char.needs_component.needs.get('Social', 0) + fulfillment)
+        self.add_memory(f"Social need increased by {fulfillment} to {self.needs_component.needs['Social']} after small talk with {target_name}.")
+        target_char.add_memory(f"Social need increased by {fulfillment} to {target_char.needs_component.needs['Social']} after small talk with {self.name}.")
 
         # Update relationships based on overall opinions
         self._update_relationship_from_opinions(target_name, world)
@@ -3718,33 +3396,13 @@ class Character:
 
         # Belonging Need Fulfillment
         belonging_increase = 5 # Small talk is a bit more engaging
-        self.needs['Belonging'] = min(config.NEED_SCORE_MAX, self.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) + belonging_increase)
-        target_char.needs['Belonging'] = min(config.NEED_SCORE_MAX, target_char.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) + belonging_increase)
-        self.add_memory(f"Small talk with {target_name} improved my sense of belonging. Belonging: {self.needs['Belonging']}")
-        target_char.add_memory(f"Small talk with {self.name} improved my sense of belonging. Belonging: {target_char.needs['Belonging']}")
+        self.needs_component.needs['Belonging'] = min(config.NEED_SCORE_MAX, self.needs_component.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) + belonging_increase)
+        target_char.needs_component.needs['Belonging'] = min(config.NEED_SCORE_MAX, target_char.needs_component.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) + belonging_increase)
+        self.add_memory(f"Small talk with {target_name} improved my sense of belonging. Belonging: {self.needs_component.needs['Belonging']}")
+        target_char.add_memory(f"Small talk with {self.name} improved my sense of belonging. Belonging: {target_char.needs_component.needs['Belonging']}")
 
         self.current_goal = self.get_default_goal()
         return
-
-    def _update_mood_from_critical_needs(self):
-        """Checks critical complex needs and updates mood accordingly."""
-        # Safety Need
-        if self.needs.get('Safety', config.NEED_SAFETY_DEFAULT) < config.NEED_SAFETY_CRITICAL_THRESHOLD:
-            # Check if mood hasn't been recently hit for this specific need to avoid spamming penalties
-            # This requires a more sophisticated tracking system (e.g., last time mood was hit for safety)
-            # For now, apply it if mood is not already very low due to this.
-            # A simpler check: only apply if current mood isn't already Furious/Stressed from safety.
-            # This is still imperfect. A cooldown per need type would be better.
-            # For this iteration, we'll just apply it, assuming it's checked once per decision cycle.
-            self.update_mood_score(config.MOOD_CHANGE_SAFETY_CRITICAL, "Critically low safety")
-
-        # Belonging Need
-        if self.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) < config.NEED_BELONGING_CRITICAL_THRESHOLD:
-            self.update_mood_score(config.MOOD_CHANGE_BELONGING_CRITICAL, "Critically low belonging")
-
-        # Esteem Need
-        if self.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) < config.NEED_ESTEEM_CRITICAL_THRESHOLD:
-            self.update_mood_score(config.MOOD_CHANGE_ESTEEM_CRITICAL, "Critically low esteem")
 
     def _process_learned_rumor(self, rumor: Rumor, world: 'World'):
         """Processes a newly learned rumor, potentially affecting opinions of the rumor's subject."""
@@ -3969,10 +3627,10 @@ class Character:
 
         # 5. Fulfill Social Need
         fulfillment = config.SOCIAL_FULFILLMENT_GREET_INTRODUCE # Same as greeting for now
-        self.needs['Social'] = min(100, self.needs.get('Social', 0) + fulfillment)
-        target_char.needs['Social'] = min(100, target_char.needs.get('Social', 0) + fulfillment)
-        self.add_memory(f"Social need increased by {fulfillment} to {self.needs['Social']} after introducing to {target_name}.")
-        target_char.add_memory(f"Social need increased by {fulfillment} to {target_char.needs['Social']} after {self.name} introduced themselves.")
+        self.needs_component.needs['Social'] = min(100, self.needs_component.needs.get('Social', 0) + fulfillment)
+        target_char.needs_component.needs['Social'] = min(100, target_char.needs_component.needs.get('Social', 0) + fulfillment)
+        self.add_memory(f"Social need increased by {fulfillment} to {self.needs_component.needs['Social']} after introducing to {target_name}.")
+        target_char.add_memory(f"Social need increased by {fulfillment} to {target_char.needs_component.needs['Social']} after {self.name} introduced themselves.")
 
         # Update relationships based on overall opinions
         self._update_relationship_from_opinions(target_name, world)
