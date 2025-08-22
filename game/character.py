@@ -1,6 +1,7 @@
 # game/character.py
 from typing import TYPE_CHECKING, Optional, Dict, List, Tuple, Any
 import random
+import copy
 from .llm_integration import generate_dialogue # Kept as it's used
 # from .stockpile import Stockpile # Not directly used by Character methods
 # from .work_order import WorkOrder # Not directly used by Character methods
@@ -661,7 +662,13 @@ class Character:
     def get_default_goal(self) -> Goal:
         job_goal_str = self.job_default_goal_type_str()
         goal = create_goal_from_job(job_goal_str, self.name)
-        return goal if goal else DEFAULT_IDLE_GOAL(self.name)
+        if goal:
+            return goal
+
+        # If no specific job goal, create a new idle goal instance
+        idle_goal = copy.deepcopy(DEFAULT_IDLE_GOAL)
+        idle_goal.assignee_id = self.name
+        return idle_goal
 
     def _execute_fetch_tool(self, world: 'World') -> bool: # True if still fetching, False if done/failed
         if not self.tool_to_fetch_type:
@@ -709,7 +716,7 @@ class Character:
 
     def _execute_generic_task(self, world: 'World', task_name: str) -> bool: # True if task action taken, False if tool fetch needed
         if task_name not in JOB_TASK_DEFINITIONS:
-            self.current_goal = DEFAULT_IDLE_GOAL(self.name)
+            self.current_goal = self.get_default_goal()
             return False
         task_def = JOB_TASK_DEFINITIONS[task_name]; tool_type = task_def.get("required_tool_type")
         # self.current_task_def_name = task_name # This is already set by the calling gather function
@@ -940,11 +947,11 @@ class Character:
             return
         item_processed_this_tick = False;
         if not self.managed_item_targets:
-            self.current_goal = DEFAULT_IDLE_GOAL(self.name)
+            self.current_goal = self.get_default_goal()
             return
         target_item_names = list(self.managed_item_targets.keys())
         if not target_item_names:
-            self.current_goal = DEFAULT_IDLE_GOAL(self.name)
+            self.current_goal = self.get_default_goal()
             return
         for i in range(len(target_item_names)):
             current_idx = (self._mc_item_check_idx + i) % len(target_item_names)
@@ -967,7 +974,7 @@ class Character:
                 self.add_memory(f"Generated WO for {qty_to_order} {item_name}."); print(f"{self.name} (MC) generated WO for {qty_to_order} {item_name}(s).")
                 item_processed_this_tick = True; self._mc_item_check_idx = (current_idx + 1) % len(target_item_names); break
         if not item_processed_this_tick:
-            self.current_goal = DEFAULT_IDLE_GOAL(self.name)
+            self.current_goal = self.get_default_goal()
             self._mc_item_check_idx = 0
 
     # Renamed from _execute_manage_work_orders to _execute_manage_subordinates
@@ -1896,7 +1903,7 @@ class Character:
             self.add_memory(f"Claimed Build WO {order_to_take.order_id} for {self.current_building_project}.")
         else:
             self.add_memory("No build orders available for Builder Duties.")
-            self.current_goal = DEFAULT_IDLE_GOAL(self.name)
+            self.current_goal = self.get_default_goal()
 
 
     # --- Management Actions ---

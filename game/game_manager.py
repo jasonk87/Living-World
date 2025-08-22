@@ -6,6 +6,7 @@ from .time import Time
 from .character import Character
 from .stockpile import Stockpile
 from .events import EventBus
+from .goal import GoalType
 from .managers.election_manager import ElectionManager
 from .managers.rumor_manager import RumorManager
 from . import config
@@ -150,8 +151,8 @@ class Game:
             character.sickness_severity = random.randint(1, 3)
             self.world.add_event_log_message(f"{character.name} has fallen ill (Severity: {character.sickness_severity}).")
             character.add_memory("Fell ill.")
-            character.needs['Safety'] = max(config.NEED_SCORE_MIN, character.needs.get('Safety', config.NEED_SAFETY_DEFAULT) - 15)
-            character.add_memory(f"Sickness reduced my safety. Safety: {character.needs['Safety']}")
+            character.needs_component.needs['Safety'] = max(config.NEED_SCORE_MIN, character.needs_component.needs.get('Safety', config.NEED_SAFETY_DEFAULT) - 15)
+            character.add_memory(f"Sickness reduced my safety. Safety: {character.needs_component.needs['Safety']}")
 
         injury_chance = 0.002
         if character.job in ["Builder", "Woodcutter", "Stonemason", "Miner"]:
@@ -161,29 +162,27 @@ class Game:
             character.injury_severity = random.randint(1, 3)
             self.world.add_event_log_message(f"{character.name} has been injured (Severity: {character.injury_severity}).")
             character.add_memory("Got injured.")
-            character.needs['Safety'] = max(config.NEED_SCORE_MIN, character.needs.get('Safety', config.NEED_SAFETY_DEFAULT) - 20)
-            character.add_memory(f"Injury reduced my safety. Safety: {character.needs['Safety']}")
+            character.needs_component.needs['Safety'] = max(config.NEED_SCORE_MIN, character.needs_component.needs.get('Safety', config.NEED_SAFETY_DEFAULT) - 20)
+            character.add_memory(f"Injury reduced my safety. Safety: {character.needs_component.needs['Safety']}")
 
         # Needs Decay
-        character.needs['Hunger'] = max(0, character.needs.get('Hunger', 100) - random.randint(10, 20))
-        character.needs['Thirst'] = max(0, character.needs.get('Thirst', 100) - random.randint(15, 25))
-        character.needs['Energy'] = max(0, character.needs.get('Energy', 100) - random.randint(10, 15))
+        character.needs_component.needs['Hunger'] = max(0, character.needs_component.needs.get('Hunger', 100) - random.randint(10, 20))
+        character.needs_component.needs['Thirst'] = max(0, character.needs_component.needs.get('Thirst', 100) - random.randint(15, 25))
+        character.needs_component.needs['Energy'] = max(0, character.needs_component.needs.get('Energy', 100) - random.randint(10, 15))
 
-        current_social_need = character.needs.get('Social', 70)
+        current_social_need = character.needs_component.needs.get('Social', 70)
         decay_amount = config.SOCIAL_NEED_DECAY_RATE_PER_DAY
         if "Loner" in character.traits: decay_amount *= 0.5
         if "Outgoing" in character.traits: decay_amount *= 1.5
-        character.needs['Social'] = max(0, current_social_need - int(decay_amount))
+        character.needs_component.needs['Social'] = max(0, current_social_need - int(decay_amount))
 
-        character.needs['Safety'] = max(config.NEED_SCORE_MIN, character.needs.get('Safety', config.NEED_SAFETY_DEFAULT) - config.NEED_SAFETY_DECAY_DAILY)
-        character.needs['Belonging'] = max(config.NEED_SCORE_MIN, character.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) - config.NEED_BELONGING_DECAY_DAILY)
-        character.needs['Esteem'] = max(config.NEED_SCORE_MIN, character.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) - config.NEED_ESTEEM_DECAY_DAILY)
+        character.needs_component.needs['Safety'] = max(config.NEED_SCORE_MIN, character.needs_component.needs.get('Safety', config.NEED_SAFETY_DEFAULT) - config.NEED_SAFETY_DECAY_DAILY)
+        character.needs_component.needs['Belonging'] = max(config.NEED_SCORE_MIN, character.needs_component.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) - config.NEED_BELONGING_DECAY_DAILY)
+        character.needs_component.needs['Esteem'] = max(config.NEED_SCORE_MIN, character.needs_component.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) - config.NEED_ESTEEM_DECAY_DAILY)
 
-        if character.current_goal in ["Wander", None, "Idle"] and \
-           not character.active_work_order_id and \
-           not character.active_build_order_id and \
-           character.job != "Unemployed":
-            character.current_goal = character.job_default_goal()
+        if not character.current_goal or character.current_goal.goal_type in [GoalType.IDLE, GoalType.WANDER]:
+            if not character.active_work_order_id and not character.active_build_order_id and character.job != "Unemployed":
+                character.current_goal = character.get_default_goal()
 
     def toggle_pause(self):
         self.game_paused = not self.game_paused
@@ -204,7 +203,7 @@ class Game:
         for char_final in self.test_characters_list:
             if char_final in self.world.characters:
                 report.append(f"\n{char_final}")
-                report.append(f"  Final Needs: {char_final.needs}")
+                report.append(f"  Final Needs: {char_final.needs_component.needs}")
                 report.append(f"  Inventory: {char_final.inventory}")
                 report.append(f"  Recent Memories (last 10):")
                 for mem in char_final.memory[-10:]:
