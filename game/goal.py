@@ -11,6 +11,8 @@ class GoalType(Enum):
     ASSESS_PRODUCTION_NEEDS = auto() # Master Craftsman
 
     # Resource Gathering & Hauling
+    SEEK_FOOD = auto()
+    CONSUME_ITEM = auto()
     GATHER_RESOURCE = auto() # Generic, params will specify what (e.g. {"resource_name": "Wood"})
     GATHER_WOOD = auto() # Specific version of GATHER_RESOURCE
     GATHER_STONE = auto() # Specific version of GATHER_RESOURCE
@@ -52,6 +54,7 @@ class GoalType(Enum):
     SEEK_MEDICAL_ATTENTION = auto() # Any character
 
     # Social
+    SEEK_SOCIAL_INTERACTION = auto()
     GREET_CHARACTER = auto()
     INTRODUCE_SELF_TO_STRANGER = auto()
     SMALL_TALK = auto()

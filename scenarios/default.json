@@ -44,7 +44,8 @@
             "allowed_resources": ["Wood"],
             "total_capacity": 100,
             "initial_inventory": {
-                "Wood": 40
+                "Wood": 40,
+                "Food": 20
             }
         }
     ],

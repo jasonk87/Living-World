@@ -35,41 +35,41 @@ Simulation reached max days (20). Stopping simulation.
 Simulation thread finished.
 Final Time: Day 21, Tick 0/10
 
-Character(Name: Liam, Rank: Worker, Job: Builder, Pos: (1,1), Goal: Goal(Type: IDLE, Prio: 10, Assignee: Liam, Status: PENDING, Params: {}, Orig: SystemAssignment), WO: None, Load: 0/10)
+Character(Name: Liam, Rank: Worker, Job: Builder, Pos: (6,8), Goal: Goal(Type: SEEK_FOOD, Prio: 1, Assignee: Liam, Status: PENDING, Params: {}, Orig: SelfNeed), WO: None, Load: 0/10)
   Supervisor: None;   Subordinates: 0
   Performance: Not Evaluated (Warnings: 0, Last Review: Day N/A)
   Equipped Tool: None
-  Final Needs: {'Hunger': 0, 'Thirst': 0, 'Energy': 0, 'Social': 0, 'Safety': 0, 'Belonging': 0, 'Esteem': 10}
+  Final Needs: {'Hunger': 0, 'Thirst': 0, 'Energy': 0, 'Social': 0, 'Safety': 10, 'Belonging': 0, 'Esteem': 10}
   Inventory: {}
   Recent Memories (last 10):
-    - Mood score changed by -10 to -50. Reason: Critically low belonging
-    - Mood score changed by -10 to -60. Reason: Critically low belonging
-    - My mood changed to Stressed (Score: -60).
-    - Mood score changed by -10 to -70. Reason: Critically low belonging
-    - My mood changed to Sad (Score: -70).
-    - Mood score changed by -10 to -80. Reason: Critically low belonging
-    - My mood changed to Furious (Score: -80).
-    - Mood score changed by -10 to -90. Reason: Critically low belonging
-    - Mood score changed by -10 to -100. Reason: Critically low belonging
-    - My mood changed to Neutral (Score: -100).
+    - My hunger is critical (0). I need to find food.
+    - I'm looking for food.
+    - My hunger is critical (0). I need to find food.
+    - I'm looking for food.
+    - My hunger is critical (0). I need to find food.
+    - I'm looking for food.
+    - My hunger is critical (0). I need to find food.
+    - I'm looking for food.
+    - My hunger is critical (0). I need to find food.
+    - I'm looking for food.
 
-Character(Name: Elara, Rank: Noble Lord, Job: Noble, Pos: (8,6), Goal: Goal(Type: IDLE, Prio: 10, Assignee: Elara, Status: PENDING, Params: {}, Orig: SystemAssignment), WO: None, Load: 0/10)
+Character(Name: Elara, Rank: Noble Lord, Job: Noble, Pos: (3,2), Goal: Goal(Type: SEEK_FOOD, Prio: 1, Assignee: Elara, Status: PENDING, Params: {}, Orig: SelfNeed), WO: None, Load: 0/10)
   Supervisor: None;   Subordinates: 0
   Performance: Not Evaluated (Warnings: 0, Last Review: Day N/A)
   Equipped Tool: None
-  Final Needs: {'Social': 0, 'Energy': 0, 'Safety': 0, 'Belonging': 0, 'Esteem': 10, 'Hunger': 0, 'Thirst': 0}
+  Final Needs: {'Social': 0, 'Energy': 0, 'Safety': 10, 'Belonging': 0, 'Esteem': 10, 'Hunger': 0, 'Thirst': 0}
   Inventory: {}
   Recent Memories (last 10):
-    - Mood score changed by -10 to -50. Reason: Critically low belonging
-    - Mood score changed by -10 to -60. Reason: Critically low belonging
-    - My mood changed to Stressed (Score: -60).
-    - Mood score changed by -10 to -70. Reason: Critically low belonging
-    - My mood changed to Sad (Score: -70).
-    - Mood score changed by -10 to -80. Reason: Critically low belonging
-    - My mood changed to Furious (Score: -80).
-    - Mood score changed by -10 to -90. Reason: Critically low belonging
-    - Mood score changed by -10 to -100. Reason: Critically low belonging
-    - My mood changed to Neutral (Score: -100).
+    - My hunger is critical (0). I need to find food.
+    - I'm looking for food.
+    - My hunger is critical (0). I need to find food.
+    - I'm looking for food.
+    - My hunger is critical (0). I need to find food.
+    - I'm looking for food.
+    - My hunger is critical (0). I need to find food.
+    - I'm looking for food.
+    - My hunger is critical (0). I need to find food.
+    - I'm looking for food.
 
 --- World Event Log (Last 50) ---
 [D1 T0] --- Initializing Game World ---
@@ -81,14 +81,12 @@ Character(Name: Elara, Rank: Noble Lord, Job: Noble, Pos: (8,6), Goal: Goal(Type
 [D1 T0] --- Simulation Initialized ---
 [D2 T0] *** NEW DAY: Day 2. Weather: Sunny, Season: Spring ***
 [D3 T0] *** NEW DAY: Day 3. Weather: Sunny, Season: Spring ***
-[D3 T0] Elara has been injured (Severity: 3).
 [D4 T0] *** NEW DAY: Day 4. Weather: Sunny, Season: Spring ***
 [D5 T0] *** NEW DAY: Day 5. Weather: Sunny, Season: Spring ***
 [D6 T0] *** NEW DAY: Day 6. Weather: Sunny, Season: Spring ***
 [D7 T0] *** NEW DAY: Day 7. Weather: Sunny, Season: Spring ***
 [D8 T0] *** NEW DAY: Day 8. Weather: Sunny, Season: Spring ***
 [D9 T0] *** NEW DAY: Day 9. Weather: Sunny, Season: Spring ***
-[D9 T0] Liam has been injured (Severity: 3).
 [D10 T0] *** NEW DAY: Day 10. Weather: Sunny, Season: Spring ***
 [D11 T0] *** NEW DAY: Day 11. Weather: Sunny, Season: Spring ***
 [D12 T0] *** NEW DAY: Day 12. Weather: Sunny, Season: Summer ***
