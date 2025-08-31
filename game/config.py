@@ -30,7 +30,7 @@ MEDICAL_SUPPLY_LOW_THRESHOLD = 5 # Example: CMO concerned if Herbs/Bandages drop
 ELECTION_CYCLE_DAYS = 30 # How often mayoral elections are held
 
 # Social Interaction
-REACTIVE_SOCIAL_BASE_CHANCE = 0.05 # Base chance to react to someone's state (e.g., offer comfort)
+REACTIVE_SOCIAL_BASE_CHANCE = 0.05 # Base chance for reactive social interactions like offering comfort
 SOCIAL_INTERACTION_CHANCE = 0.10 # Chance per tick (if idle/wandering) to initiate a social interaction like greeting (Increased for testing)
 SOCIAL_NEED_DECAY_RATE_PER_DAY = 10 # How much social need decays each day (0-100 scale)
 SOCIAL_FULFILLMENT_GREET_INTRODUCE = 5 # Social points gained from a greeting or introduction
@@ -156,13 +156,6 @@ RELATIONSHIP_ASK_FOR_HELP_MODIFIERS = {
 # Relationship point changes from interactions might be scaled by existing tier
 # Example: A successful "Offer Comfort" to a "Friend" might be +5, but to a "Rival" might be +2 (harder to improve bad relations)
 # This can be implemented in the _execute methods directly.
-
-# Trait System Configs
-# These are chances (0.0 to 1.0) for certain traits to trigger their effects each tick.
-LAZY_TRAIT_SKIP_CHANCE = 0.25       # Chance for a Lazy character to do no work on a tick
-DILIGENT_TRAIT_BONUS_CHANCE = 0.25  # Chance for a Diligent character to get extra work progress
-CARELESS_TRAIT_MISHAP_CHANCE = 0.1  # Chance for a Careless character to wear down tools faster or make mistakes
-STRONG_TRAIT_BONUS_YIELD_CHANCE = 0.2 # Chance for a Strong character to get extra resources
 
 # Rumor System Configs
 RUMOR_STRENGTH_DECAY_DAILY = 5 # How much strength a rumor loses each day

@@ -1,10 +1,5 @@
 # game/data.py
 BLUEPRINTS = {
-    "Food": {
-        "type": "Consumable",
-        "hunger_satisfaction": 40,
-        "description": "A basic meal to satisfy hunger."
-    },
     "Wooden Chair": {
         "required_resources": {"Wood": 5},
         "job_skill_needed": "Carpentry",

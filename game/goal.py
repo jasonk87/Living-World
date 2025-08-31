@@ -11,8 +11,6 @@ class GoalType(Enum):
     ASSESS_PRODUCTION_NEEDS = auto() # Master Craftsman
 
     # Resource Gathering & Hauling
-    SEEK_FOOD = auto()
-    CONSUME_ITEM = auto()
     GATHER_RESOURCE = auto() # Generic, params will specify what (e.g. {"resource_name": "Wood"})
     GATHER_WOOD = auto() # Specific version of GATHER_RESOURCE
     GATHER_STONE = auto() # Specific version of GATHER_RESOURCE
@@ -54,7 +52,6 @@ class GoalType(Enum):
     SEEK_MEDICAL_ATTENTION = auto() # Any character
 
     # Social
-    SEEK_SOCIAL_INTERACTION = auto()
     GREET_CHARACTER = auto()
     INTRODUCE_SELF_TO_STRANGER = auto()
     SMALL_TALK = auto()
@@ -98,7 +95,7 @@ class Goal:
                  priority: int = 5, # Lower is higher priority (e.g. 1-10)
                  parameters: Optional[Dict[str, Any]] = None,
                  status: GoalStatus = GoalStatus.PENDING):
-        self.goal_type = goal_type
+        self.type = goal_type
         self.originator_id = originator_id
         self.assignee_id = assignee_id
         self.priority = priority
@@ -107,7 +104,7 @@ class Goal:
         self.sub_goals: List['Goal'] = [] # For breaking down complex goals
 
     def __str__(self):
-        goal_type_name = self.goal_type.name if self.goal_type else "NoGoalType"
+        goal_type_name = self.type.name if self.type else "NoGoalType"
         status_name = self.status.name if self.status else "NoStatus"
         return (f"Goal(Type: {goal_type_name}, Prio: {self.priority}, "
                 f"Assignee: {self.assignee_id or 'Any'}, Status: {status_name}, "
@@ -125,19 +122,19 @@ class Goal:
 
     def set_completed(self):
         self.status = GoalStatus.COMPLETED
-        # print(f"DEBUG: Goal {self.goal_type.name} for {self.assignee_id} set to COMPLETED.")
+        # print(f"DEBUG: Goal {self.type.name} for {self.assignee_id} set to COMPLETED.")
 
 
     def set_failed(self, reason: Optional[str] = None): # reason can be stored in params if needed
         self.status = GoalStatus.FAILED
         if reason: self.parameters["failure_reason"] = reason
-        # print(f"DEBUG: Goal {self.goal_type.name} for {self.assignee_id} set to FAILED. Reason: {reason}")
+        # print(f"DEBUG: Goal {self.type.name} for {self.assignee_id} set to FAILED. Reason: {reason}")
 
 
     def set_cancelled(self, reason: Optional[str] = None):
         self.status = GoalStatus.CANCELLED
         if reason: self.parameters["cancellation_reason"] = reason
-        # print(f"DEBUG: Goal {self.goal_type.name} for {self.assignee_id} set to CANCELLED. Reason: {reason}")
+        # print(f"DEBUG: Goal {self.type.name} for {self.assignee_id} set to CANCELLED. Reason: {reason}")
 
 # Default goal instance for characters when they have nothing else to do.
 # Assignee will be set by the character itself.
