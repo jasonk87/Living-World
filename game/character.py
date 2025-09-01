@@ -2313,24 +2313,170 @@ class Character:
         return False
 
     def _execute_seek_recognition(self, world: 'World'):
-        self.add_memory("I need to do something impressive to get noticed.")
-        # Placeholder: Wander for now, will be replaced with more specific actions.
-        self._execute_wander(world)
-        # In the future, this could involve crafting a high-quality item,
-        # or performing a difficult task in a public place.
+        """
+        Executes the goal of seeking recognition. Involves moving to a public place
+        and performing an action to demonstrate skill.
+        """
+        # Define a public square (e.g., center of the map)
+        public_square_loc = (world.grid_size[0] // 2, world.grid_size[1] // 2)
+
+        # State machine for the goal, stored in goal parameters
+        sub_state = self.current_goal.parameters.get("sub_state", "moving_to_public_square")
+
+        if sub_state == "moving_to_public_square":
+            self.add_memory("I need to get noticed. I'll go to the public square.")
+            if (self.x, self.y) == public_square_loc:
+                self.current_goal.parameters["sub_state"] = "performing_action"
+                self.add_memory("I'm at the public square. Time to do something impressive.")
+                # Fall through to the next state in the same tick
+            else:
+                self.move_towards(public_square_loc[0], public_square_loc[1], world)
+                return # Still moving
+
+        # After moving, or if already there, perform the action
+        if self.current_goal.parameters.get("sub_state") == "performing_action":
+            # Determine highest skill
+            highest_skill = "None"
+            highest_level = -1
+            if self.skills:
+                 # Filter out non-actionable skills if necessary
+                actionable_skills = {k: v for k, v in self.skills.items() if k in ["Crafting", "Construction", "Woodcutting", "Stonemasonry", "Medicine"]}
+                if actionable_skills:
+                    highest_skill, skill_data = max(actionable_skills.items(), key=lambda item: item[1]['level'])
+                    highest_level = skill_data['level']
+
+            self.add_memory(f"My best skill is {highest_skill} (Lvl {highest_level}). I will demonstrate it.")
+
+            # Simple demonstration: just log it and check for witnesses
+            # Future: Could trigger a sub-goal like CRAFT_MASTERPIECE
+            action_description = f"demonstrating my {highest_skill} skill"
+            if highest_skill == "None":
+                action_description = "trying to look important"
+
+            witnesses = world.get_nearby_characters(self, radius=4)
+            if witnesses:
+                witness_names = [w.name for w in witnesses]
+                self.add_memory(f"I am {action_description} in front of {', '.join(witness_names)}.")
+                world.add_event_log_message(f"{self.name} is {action_description} in the public square, witnessed by {', '.join(witness_names)}.")
+
+                # Esteem boost for being witnessed
+                esteem_boost = 10 + len(witnesses) * 2
+                self.needs['Esteem'] = min(config.NEED_SCORE_MAX, self.needs.get('Esteem', 50) + esteem_boost)
+                self.add_memory(f"Being watched gave my esteem a boost of {esteem_boost}! Esteem: {self.needs['Esteem']:.0f}")
+
+                # Relationship boost with witnesses
+                for witness in witnesses:
+                    witness.modify_relationship(self.name, 2, world, reason=f"Was impressed by their public display of skill.")
+                    witness.add_memory(f"Was impressed by {self.name}'s demonstration of {highest_skill}.")
+            else:
+                self.add_memory(f"I am {action_description}, but no one is around to see.")
+                # Smaller esteem boost for the attempt
+                self.needs['Esteem'] = min(config.NEED_SCORE_MAX, self.needs.get('Esteem', 50) + 3)
+                self.add_memory(f"Even though no one saw, I feel a bit better for trying. Esteem: {self.needs['Esteem']:.0f}")
+
+
+            # Goal is completed after one demonstration action
+            self.current_goal.set_completed()
+            self.current_goal = self.get_default_goal()
 
     def _execute_make_new_friend(self, world: 'World'):
-        self.add_memory("I'm going to try and make a new friend.")
-        # This can be more complex, for now, it will just try to find a stranger to talk to.
-        # It can be a sub-goal of finding a stranger, then introducing.
-        # For now, just a placeholder.
-        self._execute_wander(world)
+        """
+        Executes the goal of making a new friend. Involves finding a stranger
+        and initiating an introduction.
+        """
+        # State machine for the goal
+        sub_state = self.current_goal.parameters.get("sub_state", "finding_stranger")
+        target_stranger_name = self.current_goal.parameters.get("target_stranger_name")
+
+        if sub_state == "finding_stranger":
+            self.add_memory("I feel lonely. I'm going to find someone new to talk to.")
+            potential_strangers = [
+                char for char in world.characters
+                if char.name != self.name and char.name not in self.known_characters
+            ]
+
+            if not potential_strangers:
+                self.add_memory("I couldn't find anyone new to meet right now.")
+                self.current_goal.set_failed(reason="No strangers available")
+                self.current_goal = self.get_default_goal()
+                return
+
+            # Choose the closest stranger
+            closest_stranger = min(
+                potential_strangers,
+                key=lambda s: abs(self.x - s.x) + abs(self.y - s.y)
+            )
+
+            self.current_goal.parameters["sub_state"] = "moving_to_stranger"
+            self.current_goal.parameters["target_stranger_name"] = closest_stranger.name
+            self.add_memory(f"I see someone I don't know, {closest_stranger.name}. I'll go say hello.")
+            # Fall through to next state
+            target_stranger_name = closest_stranger.name
+
+        if self.current_goal.parameters.get("sub_state") == "moving_to_stranger":
+            if not target_stranger_name:
+                self.add_memory("I lost track of who I was going to meet.")
+                self.current_goal.set_failed(reason="Target stranger name was lost")
+                self.current_goal = self.get_default_goal()
+                return
+
+            stranger = world.get_character_by_name(target_stranger_name)
+            if not stranger or stranger.name in self.known_characters:
+                self.add_memory(f"My target {target_stranger_name} is gone or I already met them.")
+                self.current_goal.set_failed(reason="Target stranger no longer valid")
+                self.current_goal = self.get_default_goal()
+                return
+
+            distance = abs(self.x - stranger.x) + abs(self.y - stranger.y)
+            if distance <= 2:
+                # Close enough, switch to introduction goal
+                self.add_memory(f"I'm close enough to {stranger.name}. Time to introduce myself.")
+                self.current_goal = Goal(
+                    GoalType.INTRODUCE_SELF_TO_STRANGER,
+                    assignee_id=self.name,
+                    originator_id=self.name,
+                    parameters={"target_char_name": stranger.name}
+                )
+                # The 'decide_action' loop will now execute the introduction.
+                # The belonging need will be fulfilled within _execute_introduce_self.
+            else:
+                self.move_towards(stranger.x, stranger.y, world)
 
     def _execute_improve_dwelling(self, world: 'World'):
-        self.add_memory("I need to improve my home to feel safer.")
-        # Placeholder: This would involve finding a home (if they exist)
-        # and then maybe generating a work order to add a door or a wall.
-        self._execute_wander(world)
+        """
+        Executes the goal of improving one's dwelling for safety.
+        Phase 1: Gather basic materials for a shelter.
+        """
+        self.add_memory("I need to improve my dwelling to feel safer. I'll start by gathering wood.")
+
+        # Define the amount of wood needed for this phase
+        wood_needed = self.current_goal.parameters.get("wood_needed", 10)
+
+        # Check if we already have enough wood
+        if self.inventory.get("Wood", 0) >= wood_needed:
+            self.add_memory(f"I have gathered enough wood ({self.inventory.get('Wood', 0)}/{wood_needed}) to improve my dwelling for now.")
+            # Fulfill the Safety need
+            safety_boost = 25
+            self.needs['Safety'] = min(config.NEED_SCORE_MAX, self.needs.get('Safety', 50) + safety_boost)
+            self.add_memory(f"Feeling safer after gathering materials. Safety increased by {safety_boost} to {self.needs['Safety']:.0f}.")
+
+            self.current_goal.set_completed()
+            self.current_goal = self.get_default_goal()
+            return
+
+        # If we don't have enough wood, switch to a gathering goal
+        self.add_memory(f"I need more wood for my dwelling (have {self.inventory.get('Wood', 0)}/{wood_needed}).")
+
+        # This goal now becomes a GATHER_RESOURCE goal.
+        # The `decide_action` loop will then pick up this new goal and execute it.
+        # When the character is idle again, and the Safety need is still low,
+        # they might re-trigger IMPROVE_DWELLING, and the check for wood will pass.
+        self.current_goal = Goal(
+            GoalType.GATHER_RESOURCE,
+            assignee_id=self.name,
+            originator_id=self.name,
+            parameters={"resource_name": "Wood", "task_name": "Chop Wood", "quota": wood_needed}
+        )
 
     def _execute_praise_character(self, world: 'World'):
         if not self.current_goal or not self.current_goal.parameters or "target_char_name" not in self.current_goal.parameters:
