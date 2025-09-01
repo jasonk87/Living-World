@@ -494,6 +494,35 @@ class Character:
         self.crafting_progress = 0; self.workshop_location = None
         # self.hauling_info = None # Attribute removed
 
+    def to_dict(self):
+        """Converts the character object to a dictionary for serialization."""
+        return {
+            "name": self.name,
+            "personality": self.personality,
+            "traits": self.traits,
+            "skills": self.skills,
+            "x": self.x,
+            "y": self.y,
+            "inventory": self.inventory,
+            "memory": self.memory,
+            "needs": self.needs,
+            "job": self.job,
+            "current_goal": self.current_goal.to_dict() if self.current_goal else None,
+            "rank": self.rank,
+            "is_sick": self.is_sick,
+            "sickness_severity": self.sickness_severity,
+            "is_injured": self.is_injured,
+            "injury_severity": self.injury_severity,
+            "supervisor_name": self.supervisor_name,
+            "subordinates_names": self.subordinates_names,
+            "performance_rating": self.performance_rating,
+            "warning_count": self.warning_count,
+            "known_characters": self.known_characters,
+            "relationships": self.relationships,
+            "opinions": self.opinions,
+            "dialogue_history": self.dialogue_history[-10:] # Return last 10 for brevity
+        }
+
     def __str__(self):
         goal_str = str(self.current_goal) if self.current_goal else "None"
         base_info = (f"Character(Name: {self.name}, Rank: {self.rank}, Job: {self.job}, Pos: ({self.x},{self.y}), Goal: {goal_str}, WO: {self.active_work_order_id}, Load: {self.get_inventory_load()}/{self.max_inventory_items})")

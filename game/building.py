@@ -139,3 +139,18 @@ class Building:
     def remove_occupant(self, char_name: str):
         if char_name in self.occupants:
             self.occupants.remove(char_name)
+
+    def to_dict(self):
+        """Converts the building object to a dictionary for serialization."""
+        return {
+            "structure_type": self.structure_type,
+            "display_name": self.display_name,
+            "location": self.location,
+            "size": self.size,
+            "is_operational": self.is_operational,
+            "current_progress": self.current_progress,
+            "build_time": self.build_time,
+            "map_char": self.get_current_map_char(),
+            "current_phase_name": self.get_current_phase_name(),
+            "occupants": self.occupants
+        }

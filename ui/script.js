@@ -1,509 +1,307 @@
 document.addEventListener('DOMContentLoaded', () => {
+    // --- Element Selectors ---
+    const gameStatusHeader = document.getElementById('game-status-header');
     const gameMapDiv = document.getElementById('game-map');
     const entityDetailsDiv = document.getElementById('entity-details');
     const eventLogDiv = document.getElementById('event-log');
-    const gameStatusDiv = document.getElementById('game-status');
     const pauseButton = document.getElementById('pause-button');
-    const toggleDetailsButton = document.getElementById('toggle-details-button');
     const speedButtons = document.querySelectorAll('.speed-button');
+    const tabs = document.querySelectorAll('.tab-button');
+    const tabContents = document.querySelectorAll('.tab-content');
 
-    let API_BASE_URL = 'http://localhost:8000';
-    let showEntityDetails = false; // Controlled by toggle button
-    let currentSpeedMultiplier = 1.0; // To keep track locally for UI updates
-    let isFetchingGameState = false; // Prevent multiple simultaneous fetches
+    // --- API & State ---
+    const API_BASE_URL = 'http://localhost:8000';
+    let isFetchingGameState = false;
 
+    // --- Tab Switching Logic ---
+    tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            // Deactivate all tabs and content
+            tabs.forEach(item => item.classList.remove('active'));
+            tabContents.forEach(content => content.classList.remove('active'));
+
+            // Activate the clicked tab and its content
+            tab.classList.add('active');
+            const targetContent = document.getElementById(tab.dataset.tab);
+            if (targetContent) {
+                targetContent.classList.add('active');
+            }
+        });
+    });
+
+    // --- API Calls ---
     async function fetchGameState() {
-        if (isFetchingGameState) return null; // Don't fetch if already fetching
+        if (isFetchingGameState) return null;
         isFetchingGameState = true;
-        // Simple loading indicator for game status
-        // gameStatusDiv.innerHTML = 'Loading game state...';
         try {
             const response = await fetch(`${API_BASE_URL}/game_state`);
             if (!response.ok) {
                 console.error(`HTTP error! status: ${response.status}`);
-                if (gameStatusDiv) gameStatusDiv.innerHTML = `<p class="error">Error fetching game state: ${response.status}</p>`;
+                if (gameStatusHeader) gameStatusHeader.innerHTML = `<span class="error">Error: ${response.status}</span>`;
                 return null;
             }
-            const data = await response.json();
-            // Clear loading message from gameStatusDiv if it was set there, by updateGameInfo
-            return data;
+            return await response.json();
         } catch (error) {
             console.error('Error fetching game state:', error);
-            if (gameStatusDiv) gameStatusDiv.innerHTML = '<p class="error">Failed to connect to game server. Is it running?</p>';
+            if (gameStatusHeader) gameStatusHeader.innerHTML = `<span class="error">Connection Failed</span>`;
             return null;
         } finally {
             isFetchingGameState = false;
         }
     }
 
-    async function setSimulationSpeed(multiplier) {
-        try {
-            const response = await fetch(`${API_BASE_URL}/set_speed?multiplier=${multiplier}`, { method: 'POST' });
-            if (!response.ok) {
-                console.error(`HTTP error setting speed! status: ${response.status}`);
-                return;
-            }
-            const data = await response.json();
-            currentSpeedMultiplier = data.new_speed_multiplier; // Update local state
-            updateUI(); // Refresh UI to show new speed and button state
-        } catch (error) {
-            console.error('Error setting simulation speed:', error);
-        }
-    }
-
-    async function fetchBuildingDetails(x, y) {
-        if (!showEntityDetails) {
-            displayEntityDetails(null, 'building_detailed'); // Clear or hide panel
+    async function fetchEntityDetails(type, identifier) {
+        entityDetailsDiv.innerHTML = `<p>Loading details...</p>`;
+        let url = '';
+        if (type === 'character') {
+            url = `${API_BASE_URL}/character_info?name=${encodeURIComponent(identifier)}`;
+        } else if (type === 'building') {
+            url = `${API_BASE_URL}/building_info?x=${identifier.x}&y=${identifier.y}`;
+        } else {
+            entityDetailsDiv.innerHTML = `<p>Unknown entity type.</p>`;
             return;
         }
-        entityDetailsDiv.innerHTML = `<p>Loading details for (${x},${y})...</p>`;
+
         try {
-            const response = await fetch(`${API_BASE_URL}/building_info?x=${x}&y=${y}`);
+            const response = await fetch(url);
             if (!response.ok) {
-                console.error(`HTTP error fetching building details! status: ${response.status}`);
-                let errorMsg = `Error fetching building details for (${x},${y}): ${response.status}`;
-                if (response.status === 404) {
-                     errorMsg = `<p>No building or stockpile found at (${x},${y}).</p>`;
-                }
-                entityDetailsDiv.innerHTML = `<p class="error">${errorMsg}</p>`;
+                entityDetailsDiv.innerHTML = `<p class="error">Error fetching details: ${response.status}</p>`;
                 return;
             }
-            const buildingDetails = await response.json();
-            // Use display_name from buildingDetails for the header, and pass the whole object
-            displayEntityDetails({ name: buildingDetails.display_name, ...buildingDetails }, 'building_detailed');
+            const details = await response.json();
+            displayEntityDetails(details, type);
         } catch (error) {
-            console.error('Error fetching building details:', error);
-            entityDetailsDiv.innerHTML = `<p class="error">Failed to fetch building details for (${x},${y}). Check connection.</p>`;
+            console.error(`Error fetching ${type} details:`, error);
+            entityDetailsDiv.innerHTML = `<p class="error">Failed to fetch details.</p>`;
         }
     }
 
+    async function performControlAction(url) {
+        try {
+            await fetch(url, { method: 'POST' });
+            updateUI(); // Refresh UI immediately after action
+        } catch (error) {
+            console.error('Error performing control action:', error);
+        }
+    }
+
+    // --- Rendering Functions ---
     function renderMap(gameState) {
-        if (!gameMapDiv || !gameState || !gameState.grid) {
-            console.error("Map div or game state for map rendering not found/valid.");
-            return;
-        }
-        gameMapDiv.innerHTML = ''; // Clear previous map
-        gameMapDiv.style.gridTemplateColumns = `repeat(${gameState.grid_size[1]}, 1fr)`;
+        if (!gameMapDiv || !gameState || !gameState.grid) return;
 
-        gameState.grid.forEach((row, r_idx) => {
-            row.forEach((tile, c_idx) => {
+        gameMapDiv.innerHTML = '';
+        gameMapDiv.style.gridTemplateColumns = `repeat(${gameState.grid_size[1]}, 1fr)`;
+        gameMapDiv.style.gridTemplateRows = `repeat(${gameState.grid_size[0]}, 1fr)`;
+
+        // Render base tiles
+        for (let r = 0; r < gameState.grid_size[0]; r++) {
+            for (let c = 0; c < gameState.grid_size[1]; c++) {
                 const cell = document.createElement('div');
                 cell.classList.add('map-cell');
-                const tileClassName = `tile-${tile.replace(/\s+/g, '-') || 'Unknown'}`;
-                cell.classList.add(tileClassName);
-
-                // Set textContent based on proposed symbols
-                let tileSymbol = '';
-                switch (tile) {
-                    case 'Grass': tileSymbol = '.'; break;
-                    case 'Forest': tileSymbol = '♣'; break;
-                    case 'Water': tileSymbol = '≈'; break;
-                    case 'Rocks': tileSymbol = '▲'; break;
-                    case 'OutOfBounds': tileSymbol = 'X'; break;
-                    default: tileSymbol = '?'; // For unknown tiles
-                }
-                cell.textContent = tileSymbol;
-                cell.title = tile; // Tooltip shows full tile name
-                cell.dataset.x = c_idx;
-                cell.dataset.y = r_idx;
-                cell.addEventListener('click', handleMapCellClick);
+                const tileType = gameState.grid[r][c];
+                cell.classList.add(`tile-${tileType.replace(/\s+/g, '-') || 'Unknown'}`);
+                cell.title = `${tileType} (${c}, ${r})`;
                 gameMapDiv.appendChild(cell);
-            });
-        });
-
-        // Render buildings and stockpiles
-        if (gameState.buildings) {
-            gameState.buildings.forEach(b => {
-                for (let r_offset = 0; r_offset < b.height; r_offset++) {
-                    for (let c_offset = 0; c_offset < b.width; c_offset++) {
-                        const buildingCellX = b.x + c_offset;
-                        const buildingCellY = b.y + r_offset;
-
-                        if (buildingCellY >= gameState.grid_size[0] || buildingCellX >= gameState.grid_size[1]) continue;
-
-                        const cellIndex = buildingCellY * gameState.grid_size[1] + buildingCellX;
-                        const cellDiv = gameMapDiv.children[cellIndex];
-
-                        if (cellDiv) {
-                            cellDiv.innerHTML = ''; // Clear base tile symbol
-                            // Use map_char from backend for building/stockpile symbol
-                            cellDiv.textContent = b.map_char;
-                            cellDiv.title = `${b.display_name} (${b.structure_type} at ${buildingCellX},${buildingCellY})`;
-
-                            cellDiv.className = 'map-cell'; // Reset to base
-                            if (b.structure_type === "Stockpile") {
-                                cellDiv.classList.add('stockpile-cell');
-                            } else {
-                                cellDiv.classList.add('building-cell');
-                                if (b.structure_type) { // e.g., building-wooden_hut
-                                     cellDiv.classList.add(`building-${b.structure_type.replace(/\s+/g, '_')}`);
-                                }
-                            }
-                            cellDiv.removeEventListener('click', handleMapCellClick);
-                            cellDiv.addEventListener('click', (e) => {
-                                e.stopPropagation();
-                                fetchBuildingDetails(buildingCellX, buildingCellY);
-                            });
-                        }
-                    }
-                }
-            });
+            }
         }
 
-        // Render characters on top
-        if (gameState.characters) {
-            gameState.characters.forEach(char => {
-                const cellIndex = char.y * gameState.grid_size[1] + char.x;
-                const cellDiv = gameMapDiv.children[cellIndex];
-                if (cellDiv) {
-                    // If the cell is a base tile (not a building/stockpile), clear its text content (e.g., 'G' for Grass)
-                    // to make way for the character marker.
-                    // If it's a building/stockpile cell, its textContent (e.g. 'H') should remain,
-                    // and the absolutely positioned charMarker will appear on top.
-                    if (!cellDiv.classList.contains('building-cell') && !cellDiv.classList.contains('stockpile-cell')) {
-                        cellDiv.innerHTML = ''; // Clear only base tile character's text content
-                    } else {
-                        // For building/stockpile cells, we might have set textContent.
-                        // To ensure the charMarker span can be appended and positioned correctly,
-                        // we ensure any existing text content is wrapped or cleared if charMarker is sole content.
-                        // However, since charMarker is absolute, appending it should just work.
-                        // If there's an issue, we might need to wrap existing building char in a span too.
-                        // For now, let's assume direct append + absolute positioning is enough.
+        // Render buildings on top of tiles
+        (gameState.buildings || []).forEach(b => {
+            for (let r_offset = 0; r_offset < b.height; r_offset++) {
+                for (let c_offset = 0; c_offset < b.width; c_offset++) {
+                    const cellX = b.x + c_offset;
+                    const cellY = b.y + r_offset;
+                    const cellIndex = cellY * gameState.grid_size[1] + cellX;
+                    const cellDiv = gameMapDiv.children[cellIndex];
+                    if (cellDiv) {
+                        cellDiv.className = 'map-cell'; // Reset classes
+                        const typeClass = b.structure_type === "Stockpile" ? 'stockpile-cell' : 'building-cell';
+                        cellDiv.classList.add(typeClass);
+                        cellDiv.title = `${b.display_name} (${b.structure_type})`;
+                        cellDiv.addEventListener('click', () => fetchEntityDetails('building', {x: cellX, y: cellY}));
                     }
-
-                    const charMarker = document.createElement('span');
-                    charMarker.classList.add('char-marker');
-                    charMarker.textContent = char.name[0]; // Default: first initial
-
-                    // Basic visual cue for social interaction
-                    const socialGoals = ["Greet Character", "Introduce Self to Stranger", "Small Talk"];
-                    if (socialGoals.includes(char.goal)) {
-                        charMarker.classList.add('socializing');
-                        // Could also change textContent, e.g., to add a speech bubble icon if using FontAwesome or similar
-                        // charMarker.innerHTML = `${char.name[0]} <i class="fas fa-comment"></i>`; // Example
-                        charMarker.title = `${char.name} (${char.job}) - ${char.goal}`;
-                    } else {
-                        charMarker.title = `${char.name} (${char.job}) at (${char.x},${char.y}) - Goal: ${char.goal}`;
-                    }
-
-                    charMarker.style.color = char.is_sick ? 'orange' : (char.is_injured ? 'red' : 'blue'); // Dynamic color based on health
-
-                    charMarker.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        fetchCharacterDetails(char.name);
-                    });
-                    cellDiv.appendChild(charMarker); // Append, CSS will handle overlay
                 }
-            });
-        }
-    }
-
-    function updateEventLog(gameState) {
-        if (!eventLogDiv || !gameState || !gameState.event_log) return;
-        eventLogDiv.innerHTML = '';
-        // Display latest events first
-        gameState.event_log.slice().reverse().forEach(logEntry => {
-            const p = document.createElement('p');
-            p.textContent = logEntry;
-            eventLogDiv.appendChild(p);
+            }
         });
-    }
 
-    function updateGameInfo(gameState) {
-        if (!gameStatusDiv || !gameState) return;
-        let electionText = gameState.days_until_election >= 0 ? `Election in: ${gameState.days_until_election} days` : "Election TBD";
-        currentSpeedMultiplier = gameState.current_speed_multiplier || 1.0; // Update local speed
-        gameStatusDiv.innerHTML = `
-            Day: ${gameState.day}, Tick: ${gameState.tick}/${gameState.ticks_per_day}<br>
-            Season: ${gameState.season}, Weather: ${gameState.weather}<br>
-            Status: ${gameState.is_paused ? "Paused" : "Running"} | Speed: ${currentSpeedMultiplier}x <br>
-            ${electionText}
-        `;
-        pauseButton.textContent = gameState.is_paused ? "Resume" : "Pause";
+        // Render characters as circles on top of everything
+        (gameState.characters || []).forEach(char => {
+            const cellIndex = char.y * gameState.grid_size[1] + char.x;
+            const cellDiv = gameMapDiv.children[cellIndex];
+            if (cellDiv) {
+                const charMarker = document.createElement('div');
+                charMarker.classList.add('char-marker');
+                charMarker.title = `${char.name} (${char.job})`;
+                if (char.is_sick) charMarker.style.backgroundColor = 'orange';
+                if (char.is_injured) charMarker.style.borderColor = 'red';
 
-        speedButtons.forEach(button => {
-            if (parseFloat(button.dataset.speed) === currentSpeedMultiplier) {
-                button.style.fontWeight = 'bold';
-                button.style.backgroundColor = '#0056b3'; // Highlight active speed
-            } else {
-                button.style.fontWeight = 'normal';
-                button.style.backgroundColor = '#007bff';
+                charMarker.addEventListener('click', (e) => {
+                    e.stopPropagation(); // Prevent tile click
+                    fetchEntityDetails('character', char.name);
+                });
+                cellDiv.appendChild(charMarker);
             }
         });
     }
 
     function displayEntityDetails(entity, type) {
-        if (!showEntityDetails) {
-            entityDetailsDiv.innerHTML = '<p><em>Entity details are currently hidden. Click "Toggle Entity Details" to show.</em></p>';
-            return;
-        }
-        if (!entityDetailsDiv) return;
-        if (!entity && type !== 'clear') { // If entity is null but not a clear instruction, show placeholder
-             entityDetailsDiv.innerHTML = '<p>Select an entity to see details, or enable details view.</p>';
-             return;
-        }
-         if (type === 'clear' || !showEntityDetails) {
-            entityDetailsDiv.innerHTML = '<p><em>Entity details are currently hidden. Click "Toggle Entity Details" to show.</em></p>';
-            return;
-        }
+        entityDetailsDiv.innerHTML = '';
+        const dl = document.createElement('dl');
 
-        if (!entityDetailsDiv) return;
-        if (!entity && type !== 'clear') {
-             entityDetailsDiv.innerHTML = '<p>Select an entity to see details, or enable details view.</p>';
-             return;
+        if (type === 'character') {
+            dl.innerHTML = `
+                <dt>Name</dt><dd>${entity.name}</dd>
+                <dt>Job</dt><dd>${entity.job} (${entity.rank})</dd>
+                <dt>Goal</dt><dd>${entity.current_goal.type}</dd>
+                <dt>Position</dt><dd>(${entity.x}, ${entity.y})</dd>
+                <dt>Needs</dt><dd>${JSON.stringify(entity.needs)}</dd>
+                <dt>Inventory</dt><dd>${JSON.stringify(entity.inventory)}</dd>
+            `;
+        } else if (type === 'building') {
+            dl.innerHTML = `
+                <dt>Name</dt><dd>${entity.display_name}</dd>
+                <dt>Type</dt><dd>${entity.structure_type}</dd>
+                <dt>Operational</dt><dd>${entity.is_operational}</dd>
+                ${entity.inventory ? `<dt>Inventory</dt><dd>${JSON.stringify(entity.inventory)}</dd>` : ''}
+            `;
         }
-         if (type === 'clear' || !showEntityDetails) {
-            entityDetailsDiv.innerHTML = '<p><em>Entity details are currently hidden. Click "Toggle Entity Details" to show.</em></p>';
-            return;
-        }
+        entityDetailsDiv.appendChild(dl);
+    }
 
-        let detailsHtml = `<h4>Details: ${entity.name || entity.display_name || 'N/A'}</h4><dl class="details-list">`;
+    function updateEventLog(log) {
+        if (!eventLogDiv || !log) return;
+        eventLogDiv.innerHTML = log.slice().reverse().map(entry => `<p>${entry}</p>`).join('');
+    }
 
-        function formatObject(obj) {
-            if (typeof obj !== 'object' || obj === null) return obj;
-            return Object.entries(obj).map(([key, value]) => `${key}: ${value}`).join('<br>');
-        }
+    function updateGameInfo(gameState) {
+        if (!gameStatusHeader || !gameState) return;
+        gameStatusHeader.innerHTML = `
+            <span>Day: ${gameState.day}, ${gameState.season}</span> |
+            <span>Status: ${gameState.is_paused ? "Paused" : "Running"}</span> |
+            <span>Speed: ${gameState.current_speed_multiplier}x</span>
+        `;
+        pauseButton.textContent = gameState.is_paused ? "Resume" : "Pause";
+    }
 
-        if (type === 'character_detailed') {
-            detailsHtml += `<dt>Name</dt><dd>${entity.name}</dd>`;
-            detailsHtml += `<dt>Job</dt><dd>${entity.job || 'N/A'} (Rank: ${entity.rank || 'N/A'})</dd>`;
-            detailsHtml += `<dt>Position</dt><dd>(${entity.x}, ${entity.y})</dd>`;
-            detailsHtml += `<dt>Goal</dt><dd>${entity.current_goal || 'N/A'}</dd>`;
-            detailsHtml += `<dt>Personality</dt><dd>${entity.personality || 'N/A'}</dd>`;
-            detailsHtml += `<dt>Traits</dt><dd>${(entity.traits || []).join(', ') || 'None'}</dd>`;
-            detailsHtml += `<dt>Health</dt><dd>Sick: ${entity.is_sick ? `Yes (Sev: ${entity.sickness_severity})` : 'No'}, Injured: ${entity.is_injured ? `Yes (Sev: ${entity.injury_severity})` : 'No'}</dd>`;
+    function renderCharacterList(characters) {
+        const characterListDiv = document.getElementById('character-list');
+        const characterDetailsPanel = document.getElementById('character-details-panel');
+        if (!characterListDiv || !characters) return;
 
-            detailsHtml += `<dt>Needs</dt><dd>${formatObject(entity.needs)}</dd>`;
-            detailsHtml += `<dt>Inventory</dt><dd>${formatObject(entity.inventory)}</dd>`;
-            detailsHtml += `<dt>Skills</dt><dd>${formatObject(entity.skills)}</dd>`;
+        // Sort characters alphabetically
+        const sortedCharacters = [...characters].sort((a, b) => a.name.localeCompare(b.name));
 
-            detailsHtml += `<dt>Supervisor</dt><dd>${entity.supervisor_name || 'None'}</dd>`;
-            detailsHtml += `<dt>Appointed By</dt><dd>${entity.appointed_by || 'N/A'}</dd>`;
-            detailsHtml += `<dt>Subordinates</dt><dd>${(entity.subordinates_names || []).join(', ') || 'None'}</dd>`;
-            detailsHtml += `<dt>Performance</dt><dd>${entity.performance_rating || 'N/A'} (Warnings: ${entity.warning_count || 0})</dd>`;
-            detailsHtml += `<dt>Last 5 Memories:</dt><dd><ul>`;
-            (entity.memory || []).slice(-5).reverse().forEach(mem => {
-                detailsHtml += `<li>${mem}</li>`;
+        characterListDiv.innerHTML = '<ul>' + sortedCharacters.map(char => `
+            <li data-char-name="${char.name}">
+                <strong>${char.name}</strong><br>
+                <small>${char.job} | Goal: ${char.current_goal ? char.current_goal.type : 'None'}</small>
+            </li>
+        `).join('') + '</ul>';
+
+        // Add event listeners
+        characterListDiv.querySelectorAll('li').forEach(li => {
+            li.addEventListener('click', () => {
+                // Remove active class from any previously selected character
+                characterListDiv.querySelectorAll('li').forEach(item => item.classList.remove('active'));
+                // Add active class to the clicked character
+                li.classList.add('active');
+                fetchEntityDetails('character', li.dataset.charName, 'character-details-panel');
             });
-            detailsHtml += `</ul></dd></dl>`; // Close the main DL
-
-            // Social Info Section (conditionally shown if data exists)
-            detailsHtml += `<div id="character-social-info" style="display: none;">`; // Initially hidden
-            detailsHtml += `<h3>Social Info</h3>`;
-
-            detailsHtml += `<div id="char-known-chars"><h4>Known Characters:</h4><ul>`;
-            if (entity.known_characters && entity.known_characters.length > 0) {
-                entity.known_characters.forEach(charName => { detailsHtml += `<li>${charName}</li>`; });
-            } else {
-                detailsHtml += `<li>N/A</li>`;
-            }
-            detailsHtml += `</ul></div>`;
-
-            detailsHtml += `<div id="char-relationships"><h4>Relationships:</h4><ul>`;
-            if (entity.relationships && Object.keys(entity.relationships).length > 0) {
-                Object.entries(entity.relationships).forEach(([charName, score]) => {
-                    detailsHtml += `<li>${charName}: ${score}</li>`;
-                });
-            } else {
-                detailsHtml += `<li>N/A</li>`;
-            }
-            detailsHtml += `</ul></div>`;
-
-            detailsHtml += `<div id="char-opinions"><h4>Opinions About Others:</h4><ul>`;
-            if (entity.opinions && Object.keys(entity.opinions).length > 0) {
-                Object.entries(entity.opinions).forEach(([charName, opinionTags]) => {
-                    let opinionDetails = Object.entries(opinionTags).map(([tag, score]) => `${tag.replace(/_/g, ' ')}: ${score}`).join(', ');
-                    detailsHtml += `<li><strong>${charName}:</strong> ${opinionDetails}</li>`;
-                });
-            } else {
-                detailsHtml += `<li>N/A</li>`;
-            }
-            detailsHtml += `</ul></div>`;
-
-            detailsHtml += `<div id="char-dialogue-history"><h4>Recent Dialogue (last 5):</h4><ul>`;
-            if (entity.dialogue_history && entity.dialogue_history.length > 0) {
-                entity.dialogue_history.slice(-5).forEach(dialogueEntry => {
-                    let entryText = '';
-                    const interactionType = dialogueEntry.type || 'unknown_interaction';
-                    // Generic way to format the type: replace underscores, capitalize words
-                    const typeFormatted = interactionType.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-
-                    entryText += `<em>${typeFormatted} with ${dialogueEntry.target || 'Unknown'} (Day ${dialogueEntry.day || '?'})</em><br/>`;
-
-                    if (dialogueEntry.dialogue_exchanges && dialogueEntry.dialogue_exchanges.length > 0) {
-                        dialogueEntry.dialogue_exchanges.forEach(exchange => {
-                            entryText += `&nbsp;&nbsp;<strong>${exchange.speaker}:</strong> "${exchange.line}"<br/>`;
-                        });
-                    } else if (dialogueEntry.dialogue && dialogueEntry.dialogue.length > 0 && typeof dialogueEntry.dialogue[0] === 'object') {
-                        // Fallback for old format if dialogue_exchanges is missing (assuming dialogue was an array of objects)
-                        dialogueEntry.dialogue.forEach(exchange => {
-                             entryText += `&nbsp;&nbsp;<strong>${exchange.speaker}:</strong> "${exchange.line}"<br/>`;
-                        });
-                    } else {
-                        entryText += "&nbsp;&nbsp;No detailed dialogue recorded for this exchange.";
-                    }
-                    detailsHtml += `<li>${entryText}</li>`;
-                });
-            } else {
-                detailsHtml += `<li>N/A</li>`;
-            }
-            detailsHtml += `</ul></div>`;
-            detailsHtml += `</div>`; // End of character-social-info
-
-        } else if (type === 'building_detailed') {
-            detailsHtml += `<dt>Name</dt><dd>${entity.display_name}</dd>`;
-            detailsHtml += `<dt>Type</dt><dd>${entity.structure_type}</dd>`;
-            detailsHtml += `<dt>Location</dt><dd>(${entity.location[0]}, ${entity.location[1]})</dd>`;
-            detailsHtml += `<dt>Size</dt><dd>(${entity.size[0]} x ${entity.size[1]})</dd>`;
-            detailsHtml += `<dt>Operational</dt><dd>${entity.is_operational ? 'Yes' : 'No'}</dd>`;
-            if (!entity.is_operational && entity.build_time > 0) {
-                detailsHtml += `<dt>Construction</dt><dd>${entity.current_progress.toFixed(1)} / ${entity.build_time.toFixed(1)} (${entity.current_phase_name || 'N/A'})</dd>`;
-            }
-            if (entity.inventory && Object.keys(entity.inventory).length > 0) {
-                detailsHtml += `<dt>Inventory</dt><dd>${formatObject(entity.inventory)}</dd>`;
-            } else if (entity.inventory) {
-                 detailsHtml += `<dt>Inventory</dt><dd>Empty</dd>`;
-            }
-            if (entity.allowed_resources) {
-                detailsHtml += `<dt>Allowed Resources</dt><dd>${entity.allowed_resources.join(', ') || 'Any'}</dd>`;
-            }
-        } else if (type === 'tile') {
-             detailsHtml += `<dt>Tile Type</dt><dd>${entity.tileType}</dd>`;
-             detailsHtml += `<dt>Coordinates</dt><dd>(${entity.x}, ${entity.y})</dd>`;
-        }
-        // detailsHtml += `</dl>`; // DL is closed earlier if it's a character
-        entityDetailsDiv.innerHTML = detailsHtml;
-
-        // After setting innerHTML, if it's a character and social data might exist, try to show the section
-        if (type === 'character_detailed' && (entity.known_characters || entity.relationships || entity.dialogue_history)) {
-            const socialInfoDiv = document.getElementById('character-social-info');
-            if (socialInfoDiv) {
-                socialInfoDiv.style.display = 'block'; // Show the social info section
-            }
-        }
+        });
     }
 
-    async function fetchCharacterDetails(characterName) {
-        if (!showEntityDetails) { // Don't fetch if panel is hidden
-            displayEntityDetails(null, 'character_detailed'); // Clear or hide panel
+    async function fetchEntityDetails(type, identifier, targetPanelId) {
+        const targetPanel = document.getElementById(targetPanelId || 'entity-details');
+        if (!targetPanel) return;
+
+        targetPanel.innerHTML = `<p>Loading details...</p>`;
+        let url = '';
+        if (type === 'character') {
+            url = `${API_BASE_URL}/character_info?name=${encodeURIComponent(identifier)}`;
+        } else if (type === 'building') {
+            url = `${API_BASE_URL}/building_info?x=${identifier.x}&y=${identifier.y}`;
+        } else {
+            targetPanel.innerHTML = `<p>Unknown entity type.</p>`;
             return;
         }
-        entityDetailsDiv.innerHTML = `<p>Loading details for ${characterName}...</p>`;
+
         try {
-            const response = await fetch(`${API_BASE_URL}/character_info?name=${encodeURIComponent(characterName)}`);
+            const response = await fetch(url);
             if (!response.ok) {
-                console.error(`HTTP error fetching character details! status: ${response.status}`);
-                let errorMsg = `Error fetching details for ${characterName}: ${response.status}`;
-                 if (response.status === 404) {
-                    errorMsg = `Character ${characterName} not found.`;
-                }
-                entityDetailsDiv.innerHTML = `<p class="error">${errorMsg}</p>`;
+                targetPanel.innerHTML = `<p class="error">Error fetching details: ${response.status}</p>`;
                 return;
             }
-            const charDetails = await response.json();
-            displayEntityDetails(charDetails, 'character_detailed');
+            const details = await response.json();
+            displayEntityDetails(details, type, targetPanelId);
         } catch (error) {
-            console.error('Error fetching character details:', error);
-            entityDetailsDiv.innerHTML = `<p class="error">Failed to fetch details for ${characterName}. Check connection.</p>`;
+            console.error(`Error fetching ${type} details:`, error);
+            targetPanel.innerHTML = `<p class="error">Failed to fetch details.</p>`;
         }
     }
 
-    async function togglePause() {
-        try {
-            const response = await fetch(`${API_BASE_URL}/toggle_pause`, { method: 'POST' }); // POST is often better for actions
-            if (!response.ok) {
-                console.error(`HTTP error! status: ${response.status}`);
-                return;
+    function displayEntityDetails(entity, type, targetPanelId) {
+        const targetPanel = document.getElementById(targetPanelId || 'entity-details');
+        if (!targetPanel) return;
+
+        targetPanel.innerHTML = '';
+        const dl = document.createElement('dl');
+
+        if (type === 'character') {
+            let skillsHtml = '<ul>';
+            for (const [skill, data] of Object.entries(entity.skills)) {
+                skillsHtml += `<li>${skill}: ${data.level}</li>`;
             }
-            const data = await response.json();
-            game_paused = data.paused; // Update local state if needed, though /game_state will also update it
-            pauseButton.textContent = game_paused ? "Resume" : "Pause";
-            updateUI(); // Refresh UI immediately to show change
-        } catch (error) {
-            console.error('Error toggling pause:', error);
-        }
-    }
+            skillsHtml += '</ul>';
 
-    toggleDetailsButton.addEventListener('click', () => {
-        showEntityDetails = !showEntityDetails;
-        toggleDetailsButton.textContent = `Toggle Entity Details (${showEntityDetails ? 'On' : 'Off'})`;
-        if (!showEntityDetails) {
-            entityDetailsDiv.innerHTML = '<p><em>Entity details are hidden. Click button above to show.</em></p>';
-        } else {
-            entityDetailsDiv.innerHTML = '<p>Click on a character/building on the map for details.</p>';
-        }
-    });
-
-    // Generic click handler for map cells (tiles)
-    function handleMapCellClick(event) {
-        const cell = event.currentTarget; // `currentTarget` refers to the element the listener was attached to
-        if (cell && cell.dataset.x && cell.dataset.y) {
-            // Check if the click was on a character marker (span) inside the cell
-            // If the click target is the cell itself (not a child span), then it's a tile click.
-            if (event.target === cell || !event.target.closest('span')) {
-                 displayEntityDetails({
-                    name: `Tile (${cell.dataset.x},${cell.dataset.y})`,
-                    x: cell.dataset.x,
-                    y: cell.dataset.y,
-                    tileType: cell.title
-                }, 'tile');
+            let needsHtml = '<ul>';
+            for (const [need, value] of Object.entries(entity.needs)) {
+                needsHtml += `<li>${need}: ${value}</li>`;
             }
+            needsHtml += '</ul>';
+
+            dl.innerHTML = `
+                <h3>${entity.name}</h3>
+                <dt>Job</dt><dd>${entity.job} (${entity.rank})</dd>
+                <dt>Goal</dt><dd>${entity.current_goal.type} (Prio: ${entity.current_goal.priority})</dd>
+                <dt>Goal Status</dt><dd>${entity.current_goal.status}</dd>
+                <dt>Health</dt><dd>Sick: ${entity.is_sick ? `Yes (Sev: ${entity.sickness_severity})` : 'No'}, Injured: ${entity.is_injured ? `Yes (Sev: ${entity.injury_severity})` : 'No'}</dd>
+                <hr>
+                <dt>Needs</dt><dd>${needsHtml}</dd>
+                <hr>
+                <dt>Skills</dt><dd>${skillsHtml}</dd>
+                <hr>
+                <dt>Inventory</dt><dd>${Object.keys(entity.inventory).length > 0 ? JSON.stringify(entity.inventory) : 'Empty'}</dd>
+            `;
+        } else if (type === 'building') {
+            dl.innerHTML = `
+                <h3>${entity.display_name}</h3>
+                <dt>Type</dt><dd>${entity.structure_type}</dd>
+                <dt>Operational</dt><dd>${entity.is_operational}</dd>
+                ${entity.inventory ? `<dt>Inventory</dt><dd>${JSON.stringify(entity.inventory)}</dd>` : ''}
+            `;
         }
+        targetPanel.appendChild(dl);
     }
-
-    // Initial setup of the main map click listener. Specific listeners for buildings/chars are added in renderMap.
-    // This listener will catch clicks on cells that don't get a more specific listener.
-    // However, the logic in renderMap now adds specific listeners to building/stockpile cells
-    // which might override or precede this. We need to be careful.
-    // A better approach is to add this generic listener to each cell, and let building/char listeners use stopPropagation.
-    // The current renderMap logic already adds specific listeners to building/stockpile cells.
-    // The character listeners also use stopPropagation.
-    // So, this generic listener should be added to cells that *don't* become building/stockpile cells.
-    // This is handled in renderMap where cells are created. The generic listener is added there.
-    // The below is redundant if individual cells get listeners in renderMap.
-    // For now, let's ensure each cell gets a listener if it's not a building/char.
-
-    // Modified the renderMap function to add the generic click listener to non-building/non-stockpile cells.
-    // The gameMapDiv.addEventListener part below becomes a fallback or can be removed if cell-specific listeners are comprehensive.
-
-    // Fallback click listener for the map grid container itself
-    // This can be simplified if individual cell listeners are robust.
-    // gameMapDiv.addEventListener('click', (event) => {
-    //     const cell = event.target.closest('.map-cell');
-    //     // Ensure it's a direct click on a cell, not on a character or already handled building
-    //     if (cell && cell.dataset.x && cell.dataset.y &&
-    //         !event.target.closest('span') && // Not a character marker
-    //         !cell.classList.contains('building-cell') &&
-    //         !cell.classList.contains('stockpile-cell')) {
-    //              displayEntityDetails({ name: `Tile (${cell.dataset.x},${cell.dataset.y})`, x: cell.dataset.x, y: cell.dataset.y, tileType: cell.title }, 'tile');
-    //     }
-    // });
-
 
     async function updateUI() {
         const gameState = await fetchGameState();
         if (gameState) {
             renderMap(gameState);
-            updateEventLog(gameState);
+            updateEventLog(gameState.event_log);
             updateGameInfo(gameState);
+            renderCharacterList(gameState.characters);
         }
     }
 
-    if (pauseButton) {
-        pauseButton.addEventListener('click', togglePause);
-    }
-
+    // --- Event Listeners ---
+    pauseButton.addEventListener('click', () => performControlAction(`${API_BASE_URL}/toggle_pause`));
     speedButtons.forEach(button => {
         button.addEventListener('click', () => {
-            const speed = parseFloat(button.dataset.speed);
-            setSimulationSpeed(speed);
+            performControlAction(`${API_BASE_URL}/set_speed?multiplier=${button.dataset.speed}`);
         });
     });
 
-    // Initial UI update and start interval
+    // --- Initial Load & Interval ---
     updateUI();
-    setInterval(updateUI, 2000); // Refresh every 2 seconds
-
-    // Hide entity details by default
-    entityDetailsDiv.innerHTML = '<p><em>Entity details are hidden. Click "Toggle Entity Details" to show.</em></p>';
+    setInterval(updateUI, 2000);
 });

@@ -1,286 +1,284 @@
+/* --- Global Styles & Dark Theme --- */
+:root {
+    --bg-color: #1a1a1c;
+    --primary-surface-color: #2a2a2e;
+    --secondary-surface-color: #3a3a3e;
+    --text-color: #e0e0e0;
+    --text-muted-color: #a0a0a0;
+    --accent-color: #00aaff;
+    --accent-hover-color: #0088cc;
+    --border-color: #444;
+    --font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
 body {
-    font-family: Arial, sans-serif;
+    font-family: var(--font-family);
     margin: 0;
-    padding: 10px;
-    background-color: #f0f0f0;
+    padding: 20px;
+    background-color: var(--bg-color);
+    color: var(--text-color);
     display: flex;
     flex-direction: column;
     align-items: center;
+    height: 100vh;
+    box-sizing: border-box;
 }
 
-.container {
-    display: flex;
-    flex-wrap: wrap; /* Allow wrapping for smaller screens if necessary */
-    gap: 20px;
+h1, h2, h3, h4 {
+    color: var(--text-color);
+    margin-top: 0;
+}
+
+/* --- Header --- */
+header {
     width: 95%;
-    max-width: 1200px; /* Max width for very large screens */
+    max-width: 1400px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+    padding: 10px 20px;
+    background-color: var(--primary-surface-color);
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+}
+
+#game-status-header {
+    font-size: 0.9em;
+    color: var(--text-muted-color);
+    text-align: right;
+}
+
+/* --- Tabs --- */
+.tabs {
+    width: 95%;
+    max-width: 1400px;
+    display: flex;
+    border-bottom: 2px solid var(--border-color);
+}
+
+.tab-button {
+    padding: 10px 20px;
+    cursor: pointer;
+    background-color: transparent;
+    color: var(--text-muted-color);
+    border: none;
+    font-size: 1.1em;
+    border-bottom: 3px solid transparent;
+    transition: all 0.3s ease;
+}
+
+.tab-button.active {
+    color: var(--accent-color);
+    border-bottom: 3px solid var(--accent-color);
+}
+
+.tab-button:hover {
+    background-color: var(--secondary-surface-color);
+    color: var(--text-color);
+}
+
+/* --- Tab Content --- */
+.tab-content-container {
+    width: 95%;
+    max-width: 1400px;
+    flex-grow: 1; /* Takes up remaining vertical space */
+    overflow: hidden;
+}
+
+.tab-content {
+    display: none;
+    padding: 20px;
+    background-color: var(--primary-surface-color);
+    border: 1px solid var(--border-color);
+    border-top: none;
+    border-radius: 0 0 8px 8px;
+    height: 100%;
+    box-sizing: border-box;
+}
+
+.tab-content.active {
+    display: flex; /* Using flex for layout within tabs */
+    flex-direction: column;
+}
+
+/* --- World Tab Layout --- */
+#world-tab {
+    flex-direction: row;
+    gap: 20px;
+}
+
+.world-container {
+    flex: 3;
+    display: flex;
+    gap: 20px;
+    height: 100%;
 }
 
 #game-map-area {
-    flex: 2; /* Takes up more space */
-    min-width: 300px; /* Minimum width before wrapping or shrinking too much */
-    padding: 10px;
-    border: 1px solid #ccc;
-    background-color: #fff;
+    flex: 3;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
 }
 
 #game-map {
     display: grid;
-    border: 1px solid #999;
-    margin-top: 10px;
-    /* Grid columns will be set by JavaScript */
+    border: 1px solid var(--border-color);
+    flex-grow: 1;
 }
 
+#info-panel {
+    flex: 1;
+    background-color: var(--secondary-surface-color);
+    padding: 15px;
+    border-radius: 8px;
+    overflow-y: auto;
+}
+
+#controls-area {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background-color: rgba(42, 42, 46, 0.9);
+    padding: 15px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    z-index: 100;
+}
+
+/* --- Map & Entity Styling --- */
 .map-cell {
-    width: 30px; /* Fixed width for cells */
-    height: 30px; /* Fixed height for cells */
-    border: 1px solid #eee;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 10px; /* Smaller font for tile content */
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    position: relative; /* For potential absolute positioning of character markers if needed */
+    position: relative;
+    background-color: #333; /* Default empty space */
 }
 
-.map-cell:hover {
-    outline: 1px solid blue;
-    box-shadow: 0 0 5px rgba(0,0,255,0.5);
-}
+.tile-Grass { background-color: #4a6b4a; }
+.tile-Forest { background-color: #3a593a; }
+.tile-Water { background-color: #4a6b8b; }
+.tile-Rocks { background-color: #6a6a6a; }
 
-/* Tile-specific styling */
-.tile-Grass { background-color: #90ee90; color: #556B2F; /* DarkOliveGreen for symbol */ font-size: 1.2em; }
-.tile-Forest { background-color: #228B22; color: #004d00; /* Darker Green for symbol */ font-size: 1.4em; }
-.tile-Water { background-color: #add8e6; color: #0000CD; /* MediumBlue for symbol */ font-size: 1.4em; }
-.tile-Rocks { background-color: #silver; color: #696969; /* DimGray for symbol */ font-size: 1.2em; }
-.tile-OutOfBounds { background-color: #333; color: #555; }
-/* Default for unknown tiles, if any */
-.tile-Unknown { background-color: #ffccff; } /* Light pink for unknown tiles */
-
-
-/* Building and Stockpile cell styling */
-.building-cell { /* Generic building, can be overridden by specific types */
-    font-weight: bold;
-    background-color: #f5deb3; /* Wheat - default for buildings */
-    color: #8B4513; /* SaddleBrown for symbol */
-    font-size: 1.4em; /* Make building symbols larger */
+.building-cell {
+    background-color: #7a5c3a;
     cursor: pointer;
 }
 .stockpile-cell {
-    font-weight: bold;
-    background-color: #d2b48c; /* Tan - for stockpiles */
-    color: #542709; /* Darker Brown for symbol */
+    background-color: #6a4c2a;
     cursor: pointer;
-    font-size: 1.4em; /* Make stockpile 'S' or symbol larger */
 }
-.building-wooden_hut {
-    background-color: #deb887; /* BurlyWood */
-    color: #8B4513; /* SaddleBrown for symbol */
-}
-.building-small_workshop { /* Example for another building type */
-    background-color: #c0c0c0; /* Silver for workshop */
-    color: #404040;
-}
-/* Add more specific building styles here */
 
 .char-marker {
-    cursor: pointer;
-    position: absolute; /* To ensure it's on top and can be centered if cell content is cleared */
+    position: absolute;
     top: 50%;
     left: 50%;
+    width: 16px;
+    height: 16px;
+    background-color: var(--accent-color);
+    border: 2px solid var(--text-color);
+    border-radius: 50%; /* Perfect circle */
     transform: translate(-50%, -50%);
-    padding: 2px;
-    background-color: rgba(255, 255, 255, 0.7); /* Slight background for readability */
-    border-radius: 3px;
-    line-height: 1; /* Ensure text is centered vertically */
-    z-index: 10; /* Ensure it's above tile background/building char */
-}
-
-.char-marker.socializing {
-    border: 2px solid purple; /* Example: purple border for socializing characters */
-    box-shadow: 0 0 5px purple;
-}
-
-
-#info-panel {
-    flex: 1; /* Takes less space than map */
-    min-width: 250px;
-    padding: 10px;
-    border: 1px solid #ccc;
-    background-color: #fff;
-    display: flex;
-    flex-direction: column;
-    gap: 15px;
-}
-
-#game-status, #controls, #entity-details, #event-log {
-    padding: 10px;
-    border: 1px solid #ddd;
-    background-color: #f9f9f9;
-    overflow-y: auto; /* Allow scrolling for content that overflows */
-}
-
-#event-log-area {
-    width: calc(95% - 20px); /* Match container width minus gap */
-    max-width: calc(1200px - 20px);
-    margin-top: 20px;
-    padding: 10px;
-    border: 1px solid #ccc;
-    background-color: #fff;
-}
-#event-log {
-    height: 150px; /* Fixed height with scrolling */
-    font-size: 0.9em;
-    line-height: 1.4;
-}
-
-#event-log p {
-    margin: 0 0 5px 0;
-    padding-bottom: 5px;
-    border-bottom: 1px dotted #eee;
-}
-#event-log p:last-child {
-    border-bottom: none;
-}
-
-
-button {
-    padding: 8px 12px;
-    margin-right: 10px;
     cursor: pointer;
-    background-color: #007bff;
-    color: white;
-    border: none;
-    border-radius: 4px;
+    transition: transform 0.2s ease;
+    z-index: 10;
 }
 
-button:hover {
-    background-color: #0056b3;
+.char-marker:hover {
+    transform: translate(-50%, -50%) scale(1.5);
 }
 
-h2 {
-    margin-top: 0;
-    font-size: 1.2em;
-    color: #333;
+/* --- Character Tab Layout --- */
+#characters-tab {
+    flex-direction: row;
+    gap: 20px;
 }
 
-/* Styling for Opinions Section */
-#char-opinions ul {
-    list-style-type: none; /* No bullets for opinions list */
-    padding-left: 10px;
+.character-list-container {
+    flex: 1;
+    overflow-y: auto;
+    background-color: var(--secondary-surface-color);
+    padding: 15px;
+    border-radius: 8px;
 }
 
-#char-opinions li {
-    margin-bottom: 5px;
-    line-height: 1.3;
+#character-details-panel {
+    flex: 2;
+    overflow-y: auto;
+    padding: 15px;
 }
 
-#char-opinions li strong { /* Character name being opined about */
-    color: #222;
-}
-
-/* Entity Details Panel Styling */
-#entity-details dl {
-    margin: 0;
+/* --- Event Log Tab Layout --- */
+#event-log-tab {
     padding: 0;
 }
-#entity-details dt {
-    font-weight: bold;
-    margin-top: 8px;
-    color: #555;
-}
-#entity-details dd {
-    margin-left: 15px;
-    margin-bottom: 5px;
-    color: #333;
-}
-#entity-details pre {
-    white-space: pre-wrap; /* Allow wrapping for long JSON strings */
-    word-wrap: break-word;
-    background-color: #eee;
-    padding: 5px;
-    border-radius: 3px;
-    font-size: 0.9em;
-    max-height: 100px; /* Limit height of preformatted blocks */
+#event-log {
+    height: 100%;
     overflow-y: auto;
+    padding: 20px;
 }
-#entity-details ul { /* For memories list */
-    padding-left: 20px;
-    margin-top: 0;
+#event-log p {
+    margin: 0 0 8px 0;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border-color);
+    line-height: 1.5;
 }
-#entity-details li {
-    margin-bottom: 3px;
+
+/* --- Controls --- */
+button {
+    padding: 8px 15px;
+    cursor: pointer;
+    background-color: var(--accent-color);
+    color: white;
+    border: none;
+    border-radius: 5px;
+    transition: background-color 0.2s ease;
 }
-.error {
-    color: red;
+button:hover {
+    background-color: var(--accent-hover-color);
+}
+#controls span {
+    margin: 0 10px;
+}
+
+/* --- Details Panel --- */
+#entity-details dl, #character-details-panel dl {
+    margin: 0; padding: 0;
+}
+#entity-details dt, #character-details-panel dt {
     font-weight: bold;
+    margin-top: 12px;
+    color: var(--text-muted-color);
+    font-size: 0.9em;
 }
-
-/* Styling for Social Info Sections */
-#character-social-info {
-    margin-top: 15px;
-    padding-top: 10px;
-    border-top: 1px dashed #ccc;
+#entity-details dd, #character-details-panel dd {
+    margin-left: 0;
+    margin-bottom: 8px;
+    color: var(--text-color);
+    padding-left: 10px;
+    border-left: 2px solid var(--accent-color);
 }
-
-#character-social-info h3 {
-    margin-top: 0;
-    margin-bottom: 10px;
-    font-size: 1.1em;
-    color: #444;
+#entity-details ul, #character-details-panel ul {
+    padding-left: 20px;
+    margin: 5px 0;
 }
-
-#character-social-info h4 {
-    margin-top: 10px;
-    margin-bottom: 5px;
-    font-size: 1em;
-    color: #555;
-}
-
-#character-social-info ul {
-    list-style-type: disc; /* Or 'circle' or 'square' */
-    padding-left: 25px; /* Indent list items */
-    margin-top: 0;
-    font-size: 0.95em;
-}
-
-#character-social-info li {
+#entity-details li, #character-details-panel li {
     margin-bottom: 4px;
 }
 
-#char-known-chars, #char-relationships, #char-dialogue-history {
-    margin-bottom: 10px;
-    padding: 8px;
-    border: 1px solid #e0e0e0;
-    background-color: #fdfdfd;
+.error {
+    color: #ff6b6b;
+}
+
+#character-details-panel ul {
+    list-style-type: none;
+    padding-left: 5px;
+    margin: 0;
+}
+
+#character-details-panel li {
+    padding: 2px 5px;
     border-radius: 3px;
 }
 
-/* More specific styling for dialogue history list items */
-#char-dialogue-history ul {
-    list-style-type: none; /* Remove default bullets for dialogue */
-    padding-left: 10px; /* Less indent for dialogue */
-}
-
-#char-dialogue-history li {
-    padding: 5px;
-    border-bottom: 1px dotted #eee;
-    line-height: 1.4; /* Improve readability of multi-line dialogue entries */
-}
-
-#char-dialogue-history li:last-child {
-    border-bottom: none;
-}
-
-#char-dialogue-history li em { /* Style for the "Greeting with X (Day Y)" part */
-    font-style: italic;
-    color: #666;
-    display: block; /* Make it take its own line */
-    margin-bottom: 3px;
-}
-
-#char-dialogue-history li strong { /* Style for speaker name */
-    color: #333;
+#character-details-panel li:nth-child(odd) {
+    background-color: rgba(0,0,0,0.1);
 }

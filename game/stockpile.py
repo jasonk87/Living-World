@@ -114,3 +114,15 @@ class Stockpile:
 
     def __str__(self):
         return f"Stockpile(Name='{self.name}', Rect={self.rect}, Inv={self.inventory}, Load={self.get_current_load()}/{self.total_capacity if self.total_capacity else 'Inf'}, Allowed={self.allowed_resources})"
+
+    def to_dict(self):
+        """Converts the stockpile object to a dictionary for serialization."""
+        return {
+            "name": self.name,
+            "rect": self.rect,
+            "inventory": self.inventory,
+            "allowed_resources": self.allowed_resources,
+            "total_capacity": self.total_capacity,
+            "current_load": self.get_current_load(),
+            "structure_type": "Stockpile" # To help frontend distinguish
+        }
