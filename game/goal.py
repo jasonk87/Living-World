@@ -64,9 +64,10 @@ class GoalType(Enum):
     PRAISE_CHARACTER = auto() # Added
     MAKE_NEW_FRIEND = auto() # Added
 
-    # Need-Driven
+    # Need-Driven & Prosocial
     SEEK_RECOGNITION = auto() # Esteem
     IMPROVE_DWELLING = auto() # Safety
+    HELP_FRIEND = auto() # Belonging / Relationship
 
     # Noble Specific
     OVERSEE_DOMAIN = auto() # Landed Nobles
