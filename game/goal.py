@@ -143,6 +143,18 @@ class Goal:
         if reason: self.parameters["cancellation_reason"] = reason
         # print(f"DEBUG: Goal {self.type.name} for {self.assignee_id} set to CANCELLED. Reason: {reason}")
 
+    def to_dict(self) -> Dict[str, Any]:
+        """Converts the Goal object to a dictionary for JSON serialization."""
+        return {
+            "type": self.type.name,
+            "originator_id": self.originator_id,
+            "assignee_id": self.assignee_id,
+            "priority": self.priority,
+            "parameters": self.parameters,
+            "status": self.status.name,
+            "sub_goals": [sg.to_dict() for sg in self.sub_goals]
+        }
+
 # Default goal instance for characters when they have nothing else to do.
 # Assignee will be set by the character itself.
 DEFAULT_IDLE_GOAL = Goal(GoalType.IDLE, originator_id="System", priority=10)

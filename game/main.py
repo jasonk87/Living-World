@@ -11,6 +11,7 @@ from game.world import World
 from game.time import Time
 from game.stockpile import Stockpile
 from game.work_order import WorkOrder
+from game.goal import Goal, GoalType
 from game.data import BLUEPRINTS, JOB_TASK_DEFINITIONS, STRUCTURE_BLUEPRINTS
 from game.building import Building
 from game import config
@@ -208,6 +209,16 @@ def simulation_thread_func():
 
 # --- HTTP Server Logic ---
 PORT = 8000
+
+class CustomJSONEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, Goal):
+            return obj.to_dict()
+        if isinstance(obj, GoalType):
+            return obj.name
+        # Let the base class default method raise the TypeError
+        return json.JSONEncoder.default(self, obj)
+
 class GameDataHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         global game_world, game_time_obj, game_paused, simulation_running, SIMULATION_SPEED_MULTIPLIER # Correct placement
@@ -286,7 +297,7 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_header('Content-type', 'application/json')
                 self.send_header('Access-Control-Allow-Origin', '*') # For local UI development
                 self.end_headers()
-                self.wfile.write(json.dumps(state).encode('utf-8'))
+                self.wfile.write(json.dumps(state, cls=CustomJSONEncoder).encode('utf-8'))
             else:
                 self.send_response(503) # Service Unavailable
                 self.end_headers()
@@ -388,7 +399,7 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_header('Content-type', 'application/json')
                 self.send_header('Access-Control-Allow-Origin', '*')
                 self.end_headers()
-                self.wfile.write(json.dumps(char_data).encode('utf-8'))
+                self.wfile.write(json.dumps(char_data, cls=CustomJSONEncoder).encode('utf-8'))
             else:
                 self.send_error(404, f"Character '{char_name}' not found")
 
