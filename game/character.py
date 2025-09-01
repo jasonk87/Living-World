@@ -55,7 +55,7 @@ class Character:
                 self.current_goal: Goal = job_goal
             else:
                 # Fallback to a default idle goal if job goal creation fails or job is "Unemployed" and has no default
-                self.current_goal: Goal = DEFAULT_IDLE_GOAL(assignee_id=self.name, originator_id="SystemInit")
+                self.current_goal: Goal = Goal(GoalType.IDLE, assignee_id=self.name, originator_id="SystemInit")
 
         # Ensure assignee_id is always set on the initial goal
         if self.current_goal.assignee_id is None:
@@ -817,12 +817,16 @@ class Character:
 
             craft_time_per_unit = blueprint.get("craft_time_per_unit", 5)
 
-            # --- Mood, Trait Effects on Crafting Progress ---
+            # --- Mood, Trait, Skill Effects on Crafting Progress ---
             base_craft_progress = 1.0
             mood_productivity_modifier = config.MOOD_EFFECT_PRODUCTIVITY.get(self.mood, 1.0)
             current_crafting_progress_gain = base_craft_progress * mood_productivity_modifier
             if mood_productivity_modifier != 1.0:
                  self.add_memory(f"My mood ({self.mood}) is affecting my crafting of {item_name} (Modifier: {mood_productivity_modifier:.2f}).")
+
+            crafting_skill_level = self.skills.get("Crafting", {}).get("level", 0)
+            skill_modifier = 1 + (crafting_skill_level * 0.05) # 5% progress boost per skill level
+            current_crafting_progress_gain *= skill_modifier
 
             is_slacking_craft = False
 
@@ -871,6 +875,16 @@ class Character:
                 self.update_mood_score(config.MOOD_CHANGE_SUCCESSFUL_TASK_MINOR, f"Crafted a {item_name}")
                 self.needs['Esteem'] = min(config.NEED_SCORE_MAX, self.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) + 3)
                 self.add_memory(f"Crafting {item_name} boosted my esteem. Esteem: {self.needs['Esteem']}")
+                self._grant_skill_experience("Crafting", 1.2, world)
+
+                # --- Trigger Praise from Witnesses ---
+                for witness in world.get_nearby_characters(self, radius=3):
+                    if witness.current_goal.type in [GoalType.GREET_CHARACTER, GoalType.SMALL_TALK, GoalType.ARGUE, GoalType.PRAISE_CHARACTER]:
+                        continue
+                    if random.random() < 0.2:
+                        witness.add_memory(f"Was impressed by {self.name} crafting a {item_name}.")
+                        witness.current_goal = Goal(GoalType.PRAISE_CHARACTER, assignee_id=witness.name, originator_id=witness.name, parameters={"target_char_name": self.name})
+                        break
 
                 self.crafting_progress -= craft_time_per_unit # Subtract cost of one unit
 
@@ -2017,6 +2031,12 @@ class Character:
         elif self.current_goal.type == GoalType.ASK_FOR_HELP: self._execute_ask_for_help(world)
         elif self.current_goal.type == GoalType.SHARE_SECRET: self._execute_share_secret(world)
         elif self.current_goal.type == GoalType.FORMAL_APOLOGY: self._execute_formal_apology(world)
+        elif self.current_goal.type == GoalType.PRAISE_CHARACTER: self._execute_praise_character(world)
+
+        # Need-Driven Goals
+        elif self.current_goal.type == GoalType.SEEK_RECOGNITION: self._execute_seek_recognition(world)
+        elif self.current_goal.type == GoalType.MAKE_NEW_FRIEND: self._execute_make_new_friend(world)
+        elif self.current_goal.type == GoalType.IMPROVE_DWELLING: self._execute_improve_dwelling(world)
 
         # Default/Fallback Behaviors
         elif self.current_goal.type == GoalType.IDLE:
@@ -2032,6 +2052,12 @@ class Character:
             self._execute_wander(world) # Wander if unhandled goal
             goal_executed_this_tick = True
 
+
+        # --- Need-Driven Goal Generation ---
+        # If idle, consider if any critical needs should spawn a new long-term goal.
+        if self.current_goal.type in [GoalType.IDLE, GoalType.WANDER]:
+            if self._consider_need_driven_goals(world):
+                return # A new need-driven goal was set, so end this turn's decision making.
 
         # --- Social Interaction Initiation (if previous goal didn't consume the tick or led to Idle/Wander) ---
         # This block is for proactive social interactions (greeting, small talk, news).
@@ -2240,6 +2266,107 @@ class Character:
                         self.add_memory(f"Feeling remorseful about past conflict with {target_for_apology.name}. Decided to offer a formal apology.")
 
         return # End of decide_action
+
+    def _execute_craft_order_simple(self, world: 'World', blueprint, item_name, item_qty_total):
+        # Simplified version for debugging
+        craft_time_per_unit = blueprint.get("craft_time_per_unit", 5)
+        base_craft_progress = 1.0
+        crafting_skill_level = self.skills.get("Crafting", {}).get("level", 0)
+        skill_modifier = 1 + (crafting_skill_level * 0.05)
+        current_crafting_progress_gain = base_craft_progress * skill_modifier
+        self.crafting_progress += current_crafting_progress_gain
+        if self.crafting_progress >= craft_time_per_unit:
+            self.inventory[item_name] = self.inventory.get(item_name, 0) + 1
+            if self.inventory.get(item_name, 0) >= item_qty_total:
+                self.items_crafted_for_wo = True
+
+    def _consider_need_driven_goals(self, world: 'World') -> bool:
+        """
+        Checks for critical needs and has a chance to generate a long-term goal to address them.
+        Returns True if a new goal was set, False otherwise.
+        """
+        # Do not override existing high-priority goals
+        if self.current_goal and self.current_goal.priority < 7: # 1-6 are high prio
+            return False
+
+        # Check Esteem
+        if self.needs.get('Esteem', 50) < config.NEED_ESTEEM_CRITICAL_THRESHOLD:
+            if random.random() < 0.1: # 10% chance per tick when esteem is critical
+                self.add_memory("Feeling a deep need for recognition. I should do something to prove my worth.")
+                self.current_goal = Goal(GoalType.SEEK_RECOGNITION, assignee_id=self.name, originator_id=self.name, priority=8)
+                return True
+
+        # Check Belonging
+        if self.needs.get('Belonging', 60) < config.NEED_BELONGING_CRITICAL_THRESHOLD:
+            if random.random() < 0.1:
+                self.add_memory("I feel so alone. I need to make a connection.")
+                self.current_goal = Goal(GoalType.MAKE_NEW_FRIEND, assignee_id=self.name, originator_id=self.name, priority=8)
+                return True
+
+        # Check Safety
+        if self.needs.get('Safety', 70) < config.NEED_SAFETY_CRITICAL_THRESHOLD:
+            if random.random() < 0.1:
+                self.add_memory("This place doesn't feel safe. I must do something to protect myself.")
+                self.current_goal = Goal(GoalType.IMPROVE_DWELLING, assignee_id=self.name, originator_id=self.name, priority=7)
+                return True
+
+        return False
+
+    def _execute_seek_recognition(self, world: 'World'):
+        self.add_memory("I need to do something impressive to get noticed.")
+        # Placeholder: Wander for now, will be replaced with more specific actions.
+        self._execute_wander(world)
+        # In the future, this could involve crafting a high-quality item,
+        # or performing a difficult task in a public place.
+
+    def _execute_make_new_friend(self, world: 'World'):
+        self.add_memory("I'm going to try and make a new friend.")
+        # This can be more complex, for now, it will just try to find a stranger to talk to.
+        # It can be a sub-goal of finding a stranger, then introducing.
+        # For now, just a placeholder.
+        self._execute_wander(world)
+
+    def _execute_improve_dwelling(self, world: 'World'):
+        self.add_memory("I need to improve my home to feel safer.")
+        # Placeholder: This would involve finding a home (if they exist)
+        # and then maybe generating a work order to add a door or a wall.
+        self._execute_wander(world)
+
+    def _execute_praise_character(self, world: 'World'):
+        if not self.current_goal or not self.current_goal.parameters or "target_char_name" not in self.current_goal.parameters:
+            self.current_goal = self.get_default_goal()
+            return
+
+        target_name = self.current_goal.parameters["target_char_name"]
+        target_char = world.get_character_by_name(target_name)
+
+        if not target_char:
+            self.add_memory(f"Wanted to praise {target_name}, but they are gone.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        if abs(self.x - target_char.x) + abs(self.y - target_char.y) > 2:
+            self.add_memory(f"Moving closer to praise {target_name}.")
+            self.move_towards(target_char.x, target_char.y, world)
+            return
+
+        # At praising distance
+        self.add_memory(f"I praised {target_name} for their excellent work.")
+        target_char.add_memory(f"I was praised by {self.name}! It feels good to be recognized.")
+
+        # Boost target's esteem significantly
+        target_char.needs['Esteem'] = min(config.NEED_SCORE_MAX, target_char.needs.get('Esteem', 50) + 20)
+        target_char.add_memory(f"The praise from {self.name} boosted my esteem to {target_char.needs['Esteem']:.0f}.")
+        target_char.update_mood_score(15, f"Was praised by {self.name}")
+
+        # Relationship boost
+        self.modify_relationship(target_name, 5, world, reason="Praised their work.")
+        target_char.modify_relationship(self.name, 10, world, reason="They praised my work.")
+
+        # Mood boost for praiser
+        self.update_mood_score(5, f"Praised {target_name}")
+
+        self.current_goal = self.get_default_goal()
 
 
     # --- Management Actions ---
