@@ -13,6 +13,7 @@ class Rumor:
         self.initial_strength: int = initial_strength # How strong it was when created
         self.current_strength: int = initial_strength # Current strength, decays over time
         self.creation_day: int = creation_day
+        self.last_spread_day: int = creation_day # Track when it was last spread
         self.is_positive: bool = is_positive # True if positive, False if negative/neutral gossip
 
         # Optional: Who was directly involved or perceived as the source. Can be None.

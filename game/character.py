@@ -1056,8 +1056,12 @@ class Character:
 
                 if "Strict" in self.traits or self.personality == "Demanding": warning_chance += 0.2
                 if "Forgiving" in self.traits or self.personality == "Kind": warning_chance -= 0.2
-                if relationship_to_sub < -30: warning_chance += 0.15 # Bad relationship increases chance
-                if relationship_to_sub > 30: warning_chance -= 0.15  # Good relationship decreases chance
+
+                # Relationship influence (scaled)
+                # A score of -100 adds +0.25 to chance, a score of 100 subtracts -0.25
+                relationship_modifier = (relationship_to_sub / 100.0) * -0.25
+                warning_chance += relationship_modifier
+
                 warning_chance = max(0.05, min(0.95, warning_chance)) # Clamp chance
 
                 if random.random() < warning_chance:
@@ -1081,8 +1085,14 @@ class Character:
                 firing_chance = 0.5 # Base chance
                 if "Ruthless" in self.traits or self.personality == "Stern": firing_chance += 0.25
                 if "Compassionate" in self.traits or self.personality == "Kind": firing_chance -= 0.25
-                if relationship_to_sub < -50: firing_chance += 0.20 # Very bad relationship
-                elif relationship_to_sub > 50: firing_chance -= 0.30 # Very good relationship might save them
+
+                # Relationship influence (scaled)
+                # A score of -100 adds +0.3 to chance, a score of 100 subtracts -0.4
+                if relationship_to_sub < 0:
+                    relationship_modifier = (relationship_to_sub / 100.0) * -0.30 # e.g. -100 score -> +0.3 chance
+                else:
+                    relationship_modifier = (relationship_to_sub / 100.0) * -0.40 # e.g. +100 score -> -0.4 chance
+                firing_chance += relationship_modifier
 
                 firing_chance = max(0.01, min(0.99, firing_chance)) # Clamp chance
 
@@ -2061,6 +2071,7 @@ class Character:
         elif self.current_goal.type == GoalType.SHARE_SECRET: self._execute_share_secret(world)
         elif self.current_goal.type == GoalType.FORMAL_APOLOGY: self._execute_formal_apology(world)
         elif self.current_goal.type == GoalType.PRAISE_CHARACTER: self._execute_praise_character(world)
+        elif self.current_goal.type == GoalType.SHARE_RUMOR: self._execute_share_rumor(world)
 
         # Need-Driven Goals
         elif self.current_goal.type == GoalType.SEEK_RECOGNITION: self._execute_seek_recognition(world)
@@ -2202,6 +2213,39 @@ class Character:
                     self.current_goal = Goal(interaction_goal_type, assignee_id=self.name, originator_id=self.name, parameters=goal_params)
                     self.add_memory(f"Decided to '{interaction_goal_type.name}' with {target_char_for_interaction.name}.") # Changed .value to .name
                     # Goal set, dispatcher will handle it.
+                else: # If no other social interaction chosen, consider sharing a rumor
+                    share_rumor_chance = config.RUMOR_SPREAD_CHANCE_BASE
+                    if "Chatty" in self.traits:
+                        share_rumor_chance += config.RUMOR_SPREAD_CHATTY_BONUS
+
+                    if random.random() < share_rumor_chance and self.known_rumor_ids:
+                        # Find a rumor to share and a target who doesn't know it
+                        target_for_rumor: Optional['Character'] = None
+                        rumor_to_share: Optional[Rumor] = None
+
+                        # Find best rumor (strongest) that self knows
+                        known_rumors = [world.get_rumor_by_id(rid) for rid in self.known_rumor_ids if world.get_rumor_by_id(rid)]
+                        if known_rumors:
+                            known_rumors.sort(key=lambda r: r.current_strength, reverse=True)
+
+                            # Find a nearby character who doesn't know the best rumors
+                            for r in known_rumors:
+                                potential_listeners = [
+                                    char for char in world.get_nearby_characters(self, radius=4)
+                                    if char.name in self.known_characters and r.rumor_id not in char.known_rumor_ids
+                                ]
+                                if potential_listeners:
+                                    # Prefer listeners with higher relationship
+                                    potential_listeners.sort(key=lambda l: self.get_relationship_score(l.name), reverse=True)
+                                    target_for_rumor = potential_listeners[0]
+                                    rumor_to_share = r
+                                    break # Found a rumor and a target
+
+                        if target_for_rumor and rumor_to_share:
+                            goal_params = {"target_char_name": target_for_rumor.name, "rumor_id": rumor_to_share.rumor_id}
+                            self.current_goal = Goal(GoalType.SHARE_RUMOR, assignee_id=self.name, originator_id=self.name, parameters=goal_params)
+                            self.add_memory(f"Feeling gossipy, decided to share a rumor about {rumor_to_share.subject_char_id} with {target_for_rumor.name}.")
+
 
         # --- Reactive Social Interaction Checks (Offer Comfort, Argue, Formal Apology) ---
         # These checks happen even if not strictly Idle/Wandering, but not if already in a social goal
@@ -2537,6 +2581,7 @@ class Character:
         # Relationship boost
         self.modify_relationship(target_name, 5, world, reason="Praised their work.")
         target_char.modify_relationship(self.name, 10, world, reason="They praised my work.")
+        self._apply_family_splash_effect(target_char, 10, world, reason="praised")
 
         # Mood boost for praiser
         self.update_mood_score(5, f"Praised {target_name}")
@@ -2589,24 +2634,26 @@ class Character:
 
         # --- Supervisor's Subjective Modifiers ---
         final_rating = objective_rating
-        rating_modifier_score = 0 # -2 to +2 scale for simplicity
+        rating_modifier_score = 0.0 # -2 to +2 scale for simplicity, now float
 
         # Personality/Traits based modifier
-        if "Strict" in self.traits or self.personality == "Demanding": rating_modifier_score -= 1
-        if "Kind" in self.traits or self.personality == "Forgiving": rating_modifier_score += 1
-        if "Lazy" in self.traits and random.random() < 0.3: rating_modifier_score +=1 # Lazy supervisor might inflate rating
+        if "Strict" in self.traits or self.personality == "Demanding": rating_modifier_score -= 1.0
+        if "Kind" in self.traits or self.personality == "Forgiving": rating_modifier_score += 1.0
+        if "Lazy" in self.traits and random.random() < 0.3: rating_modifier_score += 1.0 # Lazy supervisor might inflate rating
 
-        # Relationship based modifier
+        # Relationship based modifier (more granular)
         relationship_to_sub = self.get_relationship_score(subordinate.name)
-        if relationship_to_sub > 50: rating_modifier_score += 1
-        elif relationship_to_sub < -50: rating_modifier_score -= 1
+        # Scale relationship score from -100..100 to a modifier of -1.5..1.5
+        relationship_modifier = (relationship_to_sub / 100.0) * 1.5
+        rating_modifier_score += relationship_modifier
 
         # Apply modifier score to objective rating
         # Define rating scale: Poor (-2), Needs Improvement (-1), Satisfactory (0), Good (1), Excellent (2)
         rating_scale = {"Poor": -2, "Needs Improvement": -1, "Satisfactory": 0, "Good": 1, "Excellent": 2, "Not Evaluated": 0}
         objective_score = rating_scale.get(objective_rating, 0)
 
-        final_score = max(-2, min(2, objective_score + rating_modifier_score)) # Clamp final score
+        final_score_float = max(-2.0, min(2.0, objective_score + rating_modifier_score)) # Clamp final score as float
+        final_score = int(round(final_score_float)) # Round to nearest integer for rating lookup
 
         for r_name, r_val in rating_scale.items(): # Convert score back to string rating
             if r_val == final_score: final_rating = r_name; break
@@ -2702,6 +2749,9 @@ class Character:
         elif "Forgiving" in self.traits: manager_mood_hit +=2
         self.update_mood_score(manager_mood_hit, f"Issued warning to {subordinate.name}")
 
+        # Splash effect on family
+        self._apply_family_splash_effect(subordinate, -15, world, reason=f"issued a warning to")
+
         if subordinate.warning_count >= config.FIRING_WARNING_THRESHOLD: # Threshold for automatic performance degradation
             if subordinate.performance_rating != "Poor":
                 subordinate.performance_rating = "Poor"
@@ -2791,6 +2841,7 @@ class Character:
         print(f"{self.name} FIRED {subordinate.name} who was a {original_job}.")
 
         subordinate.add_memory(f"Was fired by {self.name} from job {original_job}. Now Unemployed.")
+        self._apply_family_splash_effect(subordinate, -50, world, reason=f"fired") # Use a large, but not extreme, base for splash
 
         # Optional: Remove from world or mark inactive. For now, they become "Unemployed".
         # If you want to remove them from the simulation entirely:
@@ -2826,6 +2877,44 @@ class Character:
 
         # Example: If a supervisor reviews poorly, supervisor's relationship to subordinate might not change much,
         # but subordinate's relationship to supervisor likely worsens. This would be handled by the calling function.
+
+    def _apply_family_splash_effect(self, target_char: 'Character', original_change: int, world: 'World', reason: str):
+        """
+        Applies a smaller, 'splashed' relationship change to the target's family members
+        from the perspective of the character initiating the action.
+        """
+        if not target_char.family_members:
+            return
+
+        splash_change = int(round(original_change * config.FAMILY_RELATIONSHIP_SPLASH_FACTOR))
+
+        # Ensure a very significant event still has some splash, even if the factor is low
+        if splash_change == 0:
+            if original_change > 5: splash_change = 1
+            elif original_change < -5: splash_change = -1
+
+        if splash_change == 0:
+            return # No splash effect to apply
+
+        for family_member_name in target_char.family_members:
+            if family_member_name == self.name or family_member_name == target_char.name:
+                continue
+
+            # The initiator's (self) relationship towards the family member changes.
+            # This represents the initiator thinking "I like/dislike this family now"
+            splash_reason_self = f"Family association: {reason} {target_char.name}"
+            self.modify_relationship(family_member_name, splash_change, world, reason=splash_reason_self)
+
+            # The family member's relationship towards the initiator also changes.
+            family_member = world.get_character_by_name(family_member_name)
+            if family_member:
+                # Family member must know the initiator to have their opinion changed.
+                if self.name not in family_member.known_characters:
+                    continue
+
+                splash_reason_family = f"Family splash: {self.name} {reason} {target_char.name}"
+                family_member.modify_relationship(self.name, splash_change, world, reason=splash_reason_family)
+                family_member.add_memory(f"I heard {self.name} {reason} my family member {target_char.name}. It affects how I see them.")
 
     def get_relationship_tier(self, target_char_name: str) -> str:
         """Determines the descriptive relationship tier with another character."""
@@ -3139,6 +3228,10 @@ class Character:
         self.modify_relationship(target_name, relationship_change, world, reason="Formal apology offered.")
         target_char.modify_relationship(self.name, relationship_change // 2, world, reason=f"{self.name} offered an apology.") # Target also slightly mollified by attempt
 
+        # Apply splash effect if apology was accepted and had a positive impact
+        if relationship_change > 5: # Threshold for a "successful" apology
+            self._apply_family_splash_effect(target_char, relationship_change, world, reason="successfully apologized to")
+
         dialogue_entry = { "type": "formal_apology", "initiator": self.name, "target": target_name,
                            "day": world.game_time.current_day if world.game_time else -1,
                            "dialogue_exchanges": [{"speaker": self.name, "line": dialogue_line_self}, {"speaker": target_name, "line": dialogue_line_target}] }
@@ -3199,6 +3292,90 @@ class Character:
         self.dialogue_history.append(dialogue_entry); target_char.dialogue_history.append(dialogue_entry)
         world.add_event_log_message(f"{self.name} shared a secret with {target_name}.")
 
+        self.current_goal = self.get_default_goal()
+        return
+
+    def _execute_share_rumor(self, world: 'World'):
+        if not self.current_goal or not self.current_goal.parameters or "target_char_name" not in self.current_goal.parameters or "rumor_id" not in self.current_goal.parameters:
+            self.add_memory("Wanted to share a rumor, but goal parameters were incomplete.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        target_name = self.current_goal.parameters["target_char_name"]
+        rumor_id = self.current_goal.parameters["rumor_id"]
+        target_char = world.get_character_by_name(target_name)
+        rumor = world.get_rumor_by_id(rumor_id)
+
+        if not target_char or not rumor:
+            self.add_memory("Wanted to share a rumor, but the target or rumor is gone.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        if abs(self.x - target_char.x) + abs(self.y - target_char.y) > 2:
+            self.add_memory(f"Moving closer to {target_name} to share a juicy rumor.")
+            self.move_towards(target_char.x, target_char.y, world)
+            return
+
+        # At location, share the rumor
+        self.add_memory(f"Sharing a rumor about {rumor.subject_char_id} with {target_name}.")
+
+        # Target learns the rumor, which also affects their opinion of the subject
+        # The rumor object itself tracks who knows it
+        was_new_rumor_for_target = rumor.is_known_by(target_char.name)
+        rumor.add_knower(target_char.name)
+        target_char.known_rumor_ids.add(rumor.rumor_id)
+        if not was_new_rumor_for_target:
+            target_char._process_learned_rumor(rumor, world)
+
+        # Rumor dynamics: strength increases, decay is reset for the day
+        rumor.current_strength += config.RUMOR_SPREAD_STRENGTH_INCREASE
+        if world.game_time:
+            rumor.last_spread_day = world.game_time.current_day
+
+        # Social consequences for the sharer and target
+        rel_change = 1
+        if "Chatty" in self.traits: rel_change += 1
+        if rumor.is_positive: rel_change += 1
+        else: rel_change -= 1 # Sharing negative rumors is a bit less bonding
+
+        self.modify_relationship(target_name, rel_change, world, reason="Shared a rumor.")
+        target_char.modify_relationship(self.name, rel_change, world, reason="They shared a rumor with me.")
+
+        # Target forms an opinion about the sharer's gossipy nature
+        if self.name not in target_char.opinions: target_char.opinions[self.name] = {}
+        opinion_tag = "gossipy"
+        gossip_opinion_change = 1
+        if not rumor.is_positive: gossip_opinion_change += 1 # Sharing negative rumors is more gossipy
+        target_char.opinions[self.name][opinion_tag] = target_char.opinions[self.name].get(opinion_tag, 0) + gossip_opinion_change
+        target_char.opinions[self.name][opinion_tag] = max(-5, min(5, target_char.opinions[self.name].get(opinion_tag,0)))
+
+
+        # Dialogue generation
+        dialogue_line_self = f"Psst, {target_name}, did you hear about {rumor.subject_char_id}?"
+        if "Chatty" in self.traits:
+            dialogue_line_self = f"Oh my goodness, {target_name}, you will not BELIEVE what I heard about {rumor.subject_char_id}!"
+
+        dialogue_line_target = "Oh? Do tell."
+        if "Grumpy" in target_char.traits:
+            dialogue_line_target = "I don't care for gossip."
+        elif "Friendly" in target_char.traits:
+            dialogue_line_target = "No! What happened?"
+
+        dialogue_entry = {
+            "type": "share_rumor", "initiator": self.name, "target": target_name,
+            "day": world.game_time.current_day if world.game_time else -1,
+            "dialogue_exchanges": [
+                {"speaker": self.name, "line": dialogue_line_self},
+                {"speaker": target_name, "line": dialogue_line_target},
+                {"speaker": self.name, "line": f"(Whispering) They say... {rumor.content_key}!"}
+            ]
+        }
+        self.dialogue_history.append(dialogue_entry)
+        target_char.dialogue_history.append(dialogue_entry)
+
+        world.add_event_log_message(f"{self.name} shared a rumor with {target_name} about {rumor.subject_char_id}.")
+
+        # Finalize
         self.current_goal = self.get_default_goal()
         return
 
@@ -3316,6 +3493,7 @@ class Character:
 
         # Listeners might form strong negative opinions or gain negative social fulfillment
         self._process_nearby_listeners(world, target_char, "argue", self.traits, target_char.traits)
+        self._apply_family_splash_effect(target_char, rel_penalty, world, reason="argued with")
 
         self.current_goal = self.get_default_goal()
         return

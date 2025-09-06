@@ -61,8 +61,9 @@ class GoalType(Enum):
     ARGUE = auto()
     SHARE_SECRET = auto() # Added
     FORMAL_APOLOGY = auto() # Added
-    PRAISE_CHARACTER = auto() # Added
-    MAKE_NEW_FRIEND = auto() # Added
+    PRAISE_CHARACTER = auto()
+    MAKE_NEW_FRIEND = auto()
+    SHARE_RUMOR = auto()
 
     # Need-Driven & Prosocial
     SEEK_RECOGNITION = auto() # Esteem

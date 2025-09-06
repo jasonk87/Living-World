@@ -379,3 +379,10 @@ class World:
         self.rumors.append(rumor)
         self.add_event_log_message(f"New Rumor Circulating: {rumor.subject_char_id} - {rumor.content_key} (Strength: {rumor.initial_strength})")
         # print(f"DEBUG: World added rumor: {rumor}")
+
+    def get_rumor_by_id(self, rumor_id: str) -> Optional[Rumor]:
+        """Finds a rumor in the world by its unique ID."""
+        for rumor in self.rumors:
+            if rumor.rumor_id == rumor_id:
+                return rumor
+        return None

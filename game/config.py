@@ -157,6 +157,9 @@ RELATIONSHIP_ASK_FOR_HELP_MODIFIERS = {
 # Example: A successful "Offer Comfort" to a "Friend" might be +5, but to a "Rival" might be +2 (harder to improve bad relations)
 # This can be implemented in the _execute methods directly.
 
+# Family Dynamics
+FAMILY_RELATIONSHIP_SPLASH_FACTOR = 0.25 # How much of a relationship change is "splashed" to family members
+
 # Rumor System Configs
 RUMOR_STRENGTH_DECAY_DAILY = 5 # How much strength a rumor loses each day
 MIN_RUMOR_STRENGTH_TO_SPREAD = 10 # Rumor must have at least this strength to be considered for spreading
@@ -164,6 +167,7 @@ RUMOR_MAX_STRENGTH = 100
 RUMOR_INITIAL_STRENGTH_SMALL_EVENT = 30  # e.g., for an accepted apology
 RUMOR_INITIAL_STRENGTH_SIGNIFICANT_EVENT = 60 # e.g., for being fired, or a major heroic act
 REPUTATION_FOR_RUMOR_THRESHOLD = 3 # Minimum absolute reputation change to potentially start a rumor (e.g. if rep changes by +/-3 or more)
+RUMOR_SPREAD_STRENGTH_INCREASE = 10 # How much strength a rumor gains when successfully spread
 RUMOR_SPREAD_CHANCE_BASE = 0.1 # Base chance to spread a rumor during certain social interactions
 RUMOR_SPREAD_CHATTY_BONUS = 0.15 # Additional chance if character is "Chatty"
 RUMOR_OPINION_EFFECT_STRENGTH_FACTOR = 0.1 # e.g. rumor strength 50 * 0.1 = 5 opinion points
