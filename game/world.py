@@ -5,7 +5,7 @@ from .ledger import Ledger
 from .time import Time
 from .work_order import WorkOrder
 from .building import Building
-from .data import STRUCTURE_BLUEPRINTS # For get_tile fallback if needed, and add_building
+from .data import STRUCTURE_BLUEPRINTS, MARKET_PRICES # For get_tile fallback if needed, and add_building
 # from .furniture import Furniture # Keep commented if main.py doesn't use it for this test
 from .rumor import Rumor # Added for rumor system
 
@@ -37,6 +37,8 @@ class World:
         self.active_world_effects: Dict[str, Any] = {}
         self.recent_notable_events: List[Dict[str, Any]] = [] # For rumor spreading
         self.rumors: List[Rumor] = [] # Added for rumor system
+        self.market_prices: Dict[str, int] = MARKET_PRICES
+        self.market_location: Tuple[int, int] = (5, 5) # Central market location
 
     def update_rumors_daily(self):
         """Decays strength of all rumors and removes very weak ones."""

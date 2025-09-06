@@ -4,7 +4,7 @@ import random
 from .llm_integration import generate_dialogue # Kept as it's used
 # from .stockpile import Stockpile # Not directly used by Character methods
 # from .work_order import WorkOrder # Not directly used by Character methods
-from .data import BLUEPRINTS, JOB_TASK_DEFINITIONS, STRUCTURE_BLUEPRINTS
+from .data import BLUEPRINTS, JOB_TASK_DEFINITIONS, STRUCTURE_BLUEPRINTS, JOB_SALARIES
 from . import config
 from .goal import Goal, GoalType, GoalStatus, DEFAULT_IDLE_GOAL, create_goal_from_job
 from .rumor import Rumor # Added for rumor generation
@@ -23,8 +23,10 @@ class Character:
                  job: Optional[str] = None,
                  max_inventory_items: int = 10,
                  rank: str = "Worker",
+                 money: int = 10,
                  family_members: Optional[List[str]] = None): # New family_members parameter
         self.name = name; self.personality = personality; self.traits = traits;
+        self.money: int = money
         self.family_members: List[str] = family_members if family_members else []
         self.skills: Dict[str, Dict[str, Any]] = {}
         if skills:
@@ -462,6 +464,7 @@ class Character:
                     self.update_mood_score(config.MOOD_CHANGE_SUCCESSFUL_TASK_MAJOR, f"Completed building {target_building.display_name}")
                     self.needs['Esteem'] = min(config.NEED_SCORE_MAX, self.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) + 10) # Completing a whole building is a major esteem boost
                     self.add_memory(f"Completing the building {target_building.display_name} greatly boosted my esteem. Esteem: {self.needs['Esteem']}")
+                    self._receive_payment(JOB_SALARIES.get("Execute Build Order", 25), f"completing {target_building.display_name}")
                     self._reset_building_state()
                     self.current_goal = self.get_default_goal() # Changed from create_goal_from_job
                     return
@@ -507,6 +510,7 @@ class Character:
             "memory": self.memory,
             "needs": self.needs,
             "job": self.job,
+            "money": self.money,
             "current_goal": self.current_goal.to_dict() if self.current_goal else None,
             "rank": self.rank,
             "is_sick": self.is_sick,
@@ -538,6 +542,15 @@ class Character:
     def remove_subordinate(self, s: str): self.subordinates_names.remove(s) if s in self.subordinates_names else None
     def get_inventory_load(self) -> int: return sum(self.inventory.values())
     def add_memory(self, e: str): self.memory.append(e); self.memory=self.memory[-20:]
+
+    def _receive_payment(self, amount: int, reason: str):
+        """Increases character's money and adds a memory."""
+        if amount <= 0:
+            return
+        self.money += amount
+        self.add_memory(f"Received {amount} coins for {reason}.")
+        self.update_mood_score(config.MOOD_CHANGE_GOT_PAID, f"Got paid for {reason}")
+
     def interact(self, o: 'OtherCharacter', w: 'World'): pass
 
     def move(self, dx: int, dy: int, world: 'World') -> bool:
@@ -685,6 +698,20 @@ class Character:
                 self.tool_to_fetch_type = None; self.goal_before_fetching_tool = None
                 return False
         if not stockpile_to_search or not target_tool_name:
+            # NEW: Check market if no tool is available
+            # Find a tool of the required type from the market prices
+            tool_to_buy = None
+            for item_name, price in world.market_prices.items():
+                if item_name in BLUEPRINTS and BLUEPRINTS[item_name].get("tool_type") == self.tool_to_fetch_type:
+                    if self.money >= price:
+                        tool_to_buy = item_name
+                        break
+
+            if tool_to_buy:
+                self.add_memory(f"No {self.tool_to_fetch_type} in stockpiles. Decided to buy one.")
+                self.current_goal = Goal(GoalType.SEEK_TO_BUY_ITEM, assignee_id=self.name, originator_id=self.name, parameters={"item_name": tool_to_buy})
+                return False # Let the dispatcher handle the new goal
+
             self.current_goal = self.goal_before_fetching_tool or self.get_default_goal()
             self.tool_to_fetch_type = None; self.goal_before_fetching_tool = None
             return False
@@ -941,6 +968,7 @@ class Character:
                  self.update_mood_score(config.MOOD_CHANGE_SUCCESSFUL_TASK_MAJOR, f"Fully completed WO {order.order_id}")
                  self.needs['Esteem'] = min(config.NEED_SCORE_MAX, self.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) + 8) # Fully completing a WO is a major esteem boost
                  self.add_memory(f"Fully completing and stocking WO {order.order_id} gave a major boost to my esteem. Esteem: {self.needs['Esteem']}")
+                 self._receive_payment(JOB_SALARIES.get("Execute Craft Order", 10), f"completing WO for {item_name}")
                  self._reset_crafting_state()
                  self.current_goal = self.get_default_goal()
                  return
@@ -999,6 +1027,7 @@ class Character:
                 new_order = WorkOrder(order_type="CraftItem", details=order_details, creation_day=world.game_time.current_day, priority=2)
                 world.add_work_order(new_order); self.order_cooldown[item_name] = world.game_time.current_day
                 self.add_memory(f"Generated WO for {qty_to_order} {item_name}."); print(f"{self.name} (MC) generated WO for {qty_to_order} {item_name}(s).")
+                self._receive_payment(JOB_SALARIES.get("Assess Production Needs", 10), f"creating WO for {item_name}")
                 item_processed_this_tick = True; self._mc_item_check_idx = (current_idx + 1) % len(target_item_names); break
         if not item_processed_this_tick:
             self.current_goal = self.get_default_goal()
@@ -1131,8 +1160,12 @@ class Character:
                 if avail < req_qty: can_approve = False; missing_notes.append(f"{resource} (need {req_qty}, has {avail})")
         if stale_concerns and not can_approve: print(f"{self.name} (Manager) notes stale data for {order_to_process.order_id}, and resources confirmed insufficient.")
         elif stale_concerns: print(f"{self.name} (Manager) notes stale data for {order_to_process.order_id}, proceeding with caution.")
-        if can_approve: order_to_process.status = "Approved"; order_to_process.approved_by = self.name; order_to_process.approval_day = world.game_time.current_day; self.add_memory(f"Approved WO {order_to_process.order_id}"); print(f"{self.name} (Manager) APPROVED {order_to_process.order_id[:8]}.")
-        else: order_to_process.status = "Denied"; order_to_process.denied_by = self.name; order_to_process.denial_reason = f"Insuff: {', '.join(missing_notes) or 'stale data'}"; self.add_memory(f"Denied WO {order_to_process.order_id}"); print(f"{self.name} (Manager) DENIED {order_to_process.order_id[:8]}. Reason: {order_to_process.denial_reason}")
+        if can_approve:
+            order_to_process.status = "Approved"; order_to_process.approved_by = self.name; order_to_process.approval_day = world.game_time.current_day; self.add_memory(f"Approved WO {order_to_process.order_id}"); print(f"{self.name} (Manager) APPROVED {order_to_process.order_id[:8]}.")
+            self._receive_payment(JOB_SALARIES.get("Manage Subordinates", 3), f"reviewing WO {order_to_process.order_id[:4]}")
+        else:
+            order_to_process.status = "Denied"; order_to_process.denied_by = self.name; order_to_process.denial_reason = f"Insuff: {', '.join(missing_notes) or 'stale data'}"; self.add_memory(f"Denied WO {order_to_process.order_id}"); print(f"{self.name} (Manager) DENIED {order_to_process.order_id[:8]}. Reason: {order_to_process.denial_reason}")
+            self._receive_payment(JOB_SALARIES.get("Manage Subordinates", 3), f"reviewing WO {order_to_process.order_id[:4]}")
     def _execute_maintain_ledger(self, world: 'World'):
         if self.job != "Bookkeeper":
             self.current_goal = self.get_default_goal()
@@ -1190,6 +1223,7 @@ class Character:
 
             world.ledger.update_stockpile_record(target_stockpile_name, recorded_inventory, world.game_time.current_day)
             self.add_memory(f"Counted {target_stockpile_name}"); print(f"{self.name} (Bookkeeper) finished counting {target_stockpile_name}. Ledger updated with: {recorded_inventory}. Day: {world.game_time.current_day}.")
+            self._receive_payment(JOB_SALARIES.get("Maintain Ledger", 4), f"counting {target_stockpile_name}")
             self.current_goal = create_goal_from_job("Maintain Ledger", self.name) or self.get_default_goal()
             self.decide_action(world)
             return
@@ -1315,6 +1349,13 @@ class Character:
                     order.status = "Completed"
                     self.add_memory(f"Completed WO {order.order_id} ({res}).")
                 self._reset_crafting_state()
+
+            # Pay for hauling if it's a primary job duty
+            if self.job == "Woodcutter" and res == "Wood":
+                self._receive_payment(JOB_SALARIES.get("Perform Woodcutter Duties", 5), f"hauling {res}")
+            elif self.job == "Stonemason" and res == "Stone":
+                self._receive_payment(JOB_SALARIES.get("Perform Stonemason Duties", 5), f"hauling {res}")
+
             self.current_goal = self.get_default_goal()
         else:
             self.move_towards(spot[0],spot[1],world)
@@ -1534,6 +1575,7 @@ class Character:
 
         if treatment_successful_this_tick:
             self._grant_skill_experience("Medicine", 1.5, world) # More XP for successful application
+            self._receive_payment(JOB_SALARIES.get("Provide Medical Care", 8), f"treating {target_patient.name}")
         else:
             self._grant_skill_experience("Medicine", 0.2, world) # Minor XP for attempt
 
@@ -1893,6 +1935,15 @@ class Character:
                 self.update_mood_score(config.MOOD_CHANGE_NEED_CRITICAL * 2, f"Severely injured (severity: {self.injury_severity})") # Larger mood hit
                 self.current_goal = Goal(GoalType.SEEK_MEDICAL_ATTENTION, assignee_id=self.name, originator_id=self.name)
 
+        # Hunger check: If hungry, character will prioritize eating or getting food.
+        if self.needs.get('Hunger', 100) < config.HUNGER_THRESHOLD_EAT and self.current_goal.type not in [GoalType.EAT_FOOD, GoalType.SEEK_TO_BUY_ITEM]:
+            if self.inventory.get("Food", 0) > 0:
+                self.add_memory(f"I am hungry (Hunger: {self.needs.get('Hunger', 100)}). I will eat the food I have.")
+                self.current_goal = Goal(GoalType.EAT_FOOD, assignee_id=self.name, originator_id=self.name, priority=2)
+            else:
+                self.add_memory(f"I am hungry (Hunger: {self.needs.get('Hunger', 100)}) and have no food. I must go to the market.")
+                self.current_goal = Goal(GoalType.SEEK_TO_BUY_ITEM, assignee_id=self.name, originator_id=self.name, parameters={"item_name": "Food"}, priority=2)
+
         # Mood-driven goal check (simple example: seek solitude if very sad/stressed)
         # This should ideally be before job-default goals but after critical needs like medical attention.
         if self.current_goal.type not in [GoalType.SEEK_MEDICAL_ATTENTION, GoalType.ASK_FOR_HELP]: # Don't override critical states
@@ -2072,8 +2123,10 @@ class Character:
         elif self.current_goal.type == GoalType.FORMAL_APOLOGY: self._execute_formal_apology(world)
         elif self.current_goal.type == GoalType.PRAISE_CHARACTER: self._execute_praise_character(world)
         elif self.current_goal.type == GoalType.SHARE_RUMOR: self._execute_share_rumor(world)
+        elif self.current_goal.type == GoalType.SEEK_TO_BUY_ITEM: self._execute_buy_item(world)
 
         # Need-Driven Goals
+        elif self.current_goal.type == GoalType.EAT_FOOD: self._execute_eat_food(world)
         elif self.current_goal.type == GoalType.SEEK_RECOGNITION: self._execute_seek_recognition(world)
         elif self.current_goal.type == GoalType.MAKE_NEW_FRIEND: self._execute_make_new_friend(world)
         elif self.current_goal.type == GoalType.IMPROVE_DWELLING: self._execute_improve_dwelling(world)
@@ -3378,6 +3431,67 @@ class Character:
         # Finalize
         self.current_goal = self.get_default_goal()
         return
+
+    def _execute_buy_item(self, world: 'World'):
+        if not self.current_goal or not self.current_goal.parameters or "item_name" not in self.current_goal.parameters:
+            self.add_memory("Wanted to buy an item, but no item was specified.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        item_name = self.current_goal.parameters["item_name"]
+        price = world.market_prices.get(item_name)
+
+        if price is None:
+            self.add_memory(f"Wanted to buy {item_name}, but it's not sold at the market.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        if self.money < price:
+            self.add_memory(f"Wanted to buy {item_name}, but I can't afford it.")
+            # Maybe generate a "need money" goal in the future
+            self.current_goal = self.get_default_goal()
+            return
+
+        # Move to the market
+        if (self.x, self.y) != world.market_location:
+            self.add_memory(f"Moving to the market to buy {item_name}.")
+            self.move_towards(world.market_location[0], world.market_location[1], world)
+            return
+
+        # At the market, perform the transaction
+        self.money -= price
+        self.inventory[item_name] = self.inventory.get(item_name, 0) + 1
+        self.add_memory(f"Bought 1 {item_name} for {price} coins. I have {self.money} coins left.")
+
+        # If it was a tool, equip it immediately and go back to what we were doing
+        if BLUEPRINTS.get(item_name, {}).get("type") == "Tool":
+            self.equip_tool(item_name)
+            self.current_goal = self.goal_before_fetching_tool or self.get_default_goal()
+            self.goal_before_fetching_tool = None
+            self.tool_to_fetch_type = None
+            self.fetching_tool_info = None
+        else:
+            # For other items, just go back to the default goal for now
+            self.current_goal = self.get_default_goal()
+
+    def _execute_eat_food(self, world: 'World'):
+        if self.inventory.get("Food", 0) > 0:
+            self.inventory["Food"] -= 1
+            if self.inventory["Food"] <= 0:
+                del self.inventory["Food"]
+
+            hunger_satisfaction = BLUEPRINTS.get("Food", {}).get("hunger_satisfaction", 40)
+            if 'Hunger' not in self.needs:
+                self.needs['Hunger'] = 0
+            self.needs['Hunger'] = min(100, self.needs['Hunger'] + hunger_satisfaction)
+
+            self.add_memory(f"Ate some food. Hunger is now {self.needs['Hunger']}.")
+            self.update_mood_score(config.MOOD_CHANGE_NEED_FULFILLED, "Ate some food")
+            self.current_goal = self.get_default_goal()
+        else:
+            self.add_memory("Wanted to eat, but I have no food.")
+            self.current_goal.set_failed(reason="No food in inventory")
+            self.current_goal = self.get_default_goal()
 
     def _execute_argue(self, world: 'World'):
         if not self.current_goal or not self.current_goal.parameters or "target_char_name" not in self.current_goal.parameters:

@@ -78,6 +78,7 @@ MOOD_CHANGE_RECEIVED_WARNING = -15
 MOOD_CHANGE_FIRED = -50
 MOOD_CHANGE_PROMOTED = 20 # Example for future use
 MOOD_CHANGE_NEW_FRIEND = 10 # Example for future use
+MOOD_CHANGE_GOT_PAID = 2 # A small boost for getting paid for work
 
 # Mood Effects (Examples - can be tuned)
 # Productivity: 1.0 is baseline.
@@ -175,6 +176,8 @@ MIN_RUMOR_STRENGTH_FOR_OPINION_EFFECT = 20 # Rumor needs this strength to affect
 MAX_OPINION_CHANGE_FROM_RUMOR = 5 # Max opinion points a single rumor instance can change
 
 # Complex Needs System
+HUNGER_THRESHOLD_EAT = 40 # Below this, character will try to eat
+HUNGER_DECAY_RATE_PER_TICK = 0.5 # How much hunger decays each tick
 NEED_SCORE_MIN = 0
 NEED_SCORE_MAX = 100
 NEED_SAFETY_DEFAULT = 70

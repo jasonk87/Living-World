@@ -65,7 +65,11 @@ class GoalType(Enum):
     MAKE_NEW_FRIEND = auto()
     SHARE_RUMOR = auto()
 
+    # Economic
+    SEEK_TO_BUY_ITEM = auto()
+
     # Need-Driven & Prosocial
+    EAT_FOOD = auto()
     SEEK_RECOGNITION = auto() # Esteem
     IMPROVE_DWELLING = auto() # Safety
     HELP_FRIEND = auto() # Belonging / Relationship

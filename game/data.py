@@ -52,6 +52,11 @@ BLUEPRINTS = {
         "type": "MedicalSupply", # A more specific type for medical items
         "description": "Simple bandages for treating injuries.",
         "craft_time_per_unit": 3
+    },
+    "Food": {
+        "type": "Consumable",
+        "description": "A simple meal to satisfy hunger.",
+        "hunger_satisfaction": 40 # Custom property for consumables
     }
     # Add other items as needed, e.g., "Wooden Shield", "Stone Hammer"
 }
@@ -521,3 +526,25 @@ ROLE_DETAILS = {
 # }
 # Ensure character.py's job_default_goal() is updated for these.
 # For now, the ROLE_DETAILS includes a "job_default_goal" field for easy reference to Character.py
+
+# --- Economy Data ---
+JOB_SALARIES = {
+    "Perform Woodcutter Duties": 5,
+    "Perform Stonemason Duties": 5,
+    "Assess Production Needs": 10, # Master Craftsman creating a WO
+    "Manage Subordinates": 3, # Manager reviewing a WO
+    "Maintain Ledger": 4, # Bookkeeper counting a stockpile
+    "Provide Medical Care": 8, # Medic treating a patient
+    "Execute Craft Order": 10, # Generic payment for completing a craft WO
+    "Execute Build Order": 25, # Generic payment for completing a build WO
+}
+
+MARKET_PRICES = {
+    "Stone Axe": 15,
+    "Stone Pickaxe": 20,
+    "Wooden Chair": 10,
+    "Bandages": 5,
+    "Wood": 2, # Price to buy 1 unit of wood
+    "Stone": 3, # Price to buy 1 unit of stone
+    "Food": 4, # Price to buy 1 unit of food
+}

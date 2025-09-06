@@ -232,6 +232,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
             const details = await response.json();
+            console.log("Received entity details:", details);
             displayEntityDetails(details, type, targetPanelId);
         } catch (error) {
             console.error(`Error fetching ${type} details:`, error);
@@ -262,6 +263,7 @@ document.addEventListener('DOMContentLoaded', () => {
             dl.innerHTML = `
                 <h3>${entity.name}</h3>
                 <dt>Job</dt><dd>${entity.job} (${entity.rank})</dd>
+                <dt>Money</dt><dd>${entity.money} coins</dd>
                 <dt>Goal</dt><dd>${entity.current_goal.type} (Prio: ${entity.current_goal.priority})</dd>
                 <dt>Goal Status</dt><dd>${entity.current_goal.status}</dd>
                 <dt>Health</dt><dd>Sick: ${entity.is_sick ? `Yes (Sev: ${entity.sickness_severity})` : 'No'}, Injured: ${entity.is_injured ? `Yes (Sev: ${entity.injury_severity})` : 'No'}</dd>
