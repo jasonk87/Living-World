@@ -55,10 +55,10 @@ def initialize_game_world():
     initial_setup_messages.append(f"Added WoodStore stockpile with {wood_stockpile.inventory.get('Wood',0)} Wood.")
 
     # Characters (example setup)
-    liam_skills = {"Construction": 1, "Leadership": 5} # Give Liam some leadership for potential Mayor candidacy
+    liam_skills = {"Construction": 2, "Crafting": 1, "Woodcutting": 1}
     liam = Character(name="Liam", personality="Optimistic", traits=["Diligent"],
                       job="Builder", x=2,y=1, skills=liam_skills, rank="Worker",
-                      needs={"Hunger": 80, "Thirst": 70, "Energy": 100})
+                      needs={"Hunger": 80, "Social": 60, "Energy": 100})
     game_world.add_character(liam)
     test_characters_list.append(liam)
     initial_setup_messages.append(f"  Added: {liam.name} (Job: {liam.job}) at ({liam.x},{liam.y})")
@@ -66,10 +66,20 @@ def initialize_game_world():
     # Add a potential Mayor candidate
     elara_skills = {"Leadership": 7, "Medicine": 2}
     elara = Character(name="Elara", personality="Wise", traits=["Intelligent", "Forgiving"],
-                        job="Noble", x=5,y=5, skills=elara_skills, rank="Noble Lord")
+                        job="Noble", x=5,y=5, skills=elara_skills, rank="Noble Lord",
+                        needs={"Hunger": 85, "Social": 80, "Energy": 100})
     game_world.add_character(elara)
     test_characters_list.append(elara)
     initial_setup_messages.append(f"  Added: {elara.name} (Job: {elara.job}, Rank: {elara.rank}) at ({elara.x},{elara.y})")
+
+    # Add a Woodcutter
+    finn_skills = {"Woodcutting": 3, "Mining": 1}
+    finn = Character(name="Finn", personality="Gruff", traits=["Strong"],
+                        job="Woodcutter", x=1, y=8, skills=finn_skills, rank="Worker",
+                        needs={"Hunger": 75, "Social": 40, "Energy": 100})
+    game_world.add_character(finn)
+    test_characters_list.append(finn)
+    initial_setup_messages.append(f"  Added: {finn.name} (Job: {finn.job}) at ({finn.x},{finn.y})")
 
 
     # Initial Build Order (Optional, can be removed if Mayor initiates projects)
@@ -117,7 +127,11 @@ def tick_simulation():
                 game_world.update_rumors_daily()
 
 
-            # Daily needs update and goal reset for idle characters
+            # Daily updates for needs, rumors, etc.
+            game_world.update_character_needs()
+            game_world.update_rumors_daily()
+
+            # Daily status checks (sickness, injury) and goal resets for idle characters
             for char_daily_reset in game_world.characters:
                 # Sickness & Injury Chance
                 if not char_daily_reset.is_sick and random.random() < 0.005: # 0.5% chance per day to get sick
@@ -140,31 +154,12 @@ def tick_simulation():
                     char_daily_reset.needs['Safety'] = max(config.NEED_SCORE_MIN, char_daily_reset.needs.get('Safety', config.NEED_SAFETY_DEFAULT) - 20) # Injury significantly reduces safety
                     char_daily_reset.add_memory(f"Injury reduced my safety. Safety: {char_daily_reset.needs['Safety']}")
 
-                char_daily_reset.needs['Hunger'] = max(0, char_daily_reset.needs.get('Hunger', 100) - random.randint(10, 20))
-                char_daily_reset.needs['Thirst'] = max(0, char_daily_reset.needs.get('Thirst', 100) - random.randint(15, 25))
-                char_daily_reset.needs['Energy'] = max(0, char_daily_reset.needs.get('Energy', 100) - random.randint(10, 15)) # Energy decay from general activity
-
-                # Social Need Decay
-                current_social_need = char_daily_reset.needs.get('Social', 70) # Default to 70 if somehow not set
-                decay_amount = config.SOCIAL_NEED_DECAY_RATE_PER_DAY
-                # Trait influence on decay: e.g., "Outgoing" might decay faster, "Loner" slower
-                if "Loner" in char_daily_reset.traits: # Assuming "Loner" trait exists
-                    decay_amount *= 0.5
-                if "Outgoing" in char_daily_reset.traits: # Assuming "Outgoing" trait exists
-                    decay_amount *= 1.5
-                char_daily_reset.needs['Social'] = max(0, current_social_need - int(decay_amount))
-
-                # Decay for new complex needs
-                char_daily_reset.needs['Safety'] = max(config.NEED_SCORE_MIN, char_daily_reset.needs.get('Safety', config.NEED_SAFETY_DEFAULT) - config.NEED_SAFETY_DECAY_DAILY)
-                char_daily_reset.needs['Belonging'] = max(config.NEED_SCORE_MIN, char_daily_reset.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) - config.NEED_BELONGING_DECAY_DAILY)
-                char_daily_reset.needs['Esteem'] = max(config.NEED_SCORE_MIN, char_daily_reset.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) - config.NEED_ESTEEM_DECAY_DAILY)
-
-                # ... other needs updates
-                if char_daily_reset.current_goal in ["Wander", None, "Idle"] and \
+                # Reset goal for idle characters so they re-evaluate their primary job goal
+                if char_daily_reset.current_goal.type in [GoalType.IDLE, GoalType.WANDER] and \
                    not char_daily_reset.active_work_order_id and \
                    not char_daily_reset.active_build_order_id and \
                    char_daily_reset.job != "Unemployed":
-                    char_daily_reset.current_goal = char_daily_reset.job_default_goal()
+                    char_daily_reset.current_goal = char_daily_reset.get_default_goal()
 
             # Season advancement
             days_per_season = config.DAYS_PER_SEASON if hasattr(config, 'DAYS_PER_SEASON') else 10 # Default if not in config

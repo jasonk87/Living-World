@@ -27,6 +27,7 @@ class World:
         self.season = World.SEASONS[self.season_index]
         self.weather = "Sunny"
         self.characters: List['Character'] = []
+        self.characters_by_name: Dict[str, 'Character'] = {}
         self.stockpiles: List[Stockpile] = []
         self.buildings: List[Building] = [] # Re-added
         # self.furniture: List[Furniture] = [] # Re-added, but keep commented if not used by this test
@@ -60,6 +61,28 @@ class World:
         # return f"World(Size: {self.grid_size}, Season: {self.season}, Chars: {len(self.characters)}, SPs: {len(self.stockpiles)}, Buildings: {len(self.buildings)}, Furniture: {furniture_count}, WOs: {len(self.work_orders)})"
         return f"World(Size: {self.grid_size}, Season: {self.season}, Chars: {len(self.characters)}, SPs: {len(self.stockpiles)}, Buildings: {len(self.buildings)}, WOs: {len(self.work_orders)})"
 
+    def update_character_needs(self):
+        """
+        Updates the needs of all characters in the world based on decay rates.
+        This is intended to be called once per day.
+        """
+        from . import config # Import config to access decay rates
+
+        for char in self.characters:
+            # Decay basic needs
+            if 'Hunger' in char.needs:
+                char.needs['Hunger'] = max(config.NEED_SCORE_MIN, char.needs['Hunger'] - (config.HUNGER_DECAY_RATE_PER_TICK * config.TICKS_PER_DAY))
+            if 'Social' in char.needs:
+                char.needs['Social'] = max(config.NEED_SCORE_MIN, char.needs['Social'] - config.SOCIAL_NEED_DECAY_RATE_PER_DAY)
+
+            # Decay complex needs
+            if 'Safety' in char.needs:
+                char.needs['Safety'] = max(config.NEED_SCORE_MIN, char.needs['Safety'] - config.NEED_SAFETY_DECAY_DAILY)
+            if 'Belonging' in char.needs:
+                char.needs['Belonging'] = max(config.NEED_SCORE_MIN, char.needs['Belonging'] - config.NEED_BELONGING_DECAY_DAILY)
+            if 'Esteem' in char.needs:
+                char.needs['Esteem'] = max(config.NEED_SCORE_MIN, char.needs['Esteem'] - config.NEED_ESTEEM_DECAY_DAILY)
+
 
     def add_event_log_message(self, message: str): # Added from later step, useful for logging
         if not self.game_time:
@@ -83,6 +106,10 @@ class World:
         if building_at_loc:
             return building_at_loc.get_current_map_char()
 
+        stockpile_at_loc = self.get_stockpile_at(x, y)
+        if stockpile_at_loc:
+            return "S" # Represent stockpiles with "S"
+
         # furniture_at_loc = self.get_furniture_at(x,y) # If furniture is re-enabled
         # if furniture_at_loc:
         #     return furniture_at_loc.map_char
@@ -102,6 +129,9 @@ class World:
                 if not (0 <= tile_coord[0] < self.grid_size[0] and 0 <= tile_coord[1] < self.grid_size[1]):
                     print(f"Error: Building '{building.display_name}' at {building.location} is out of bounds.")
                     return
+                if self.get_stockpile_at(tile_coord[0], tile_coord[1]):
+                    print(f"Error: Building '{building.display_name}' overlaps with a stockpile at {tile_coord}.")
+                    return
                 for existing_b in self.buildings:
                     if tile_coord in existing_b.get_tiles_occupied():
                         print(f"Error: Building '{building.display_name}' overlaps with '{existing_b.display_name}' at {tile_coord}.")
@@ -119,6 +149,13 @@ class World:
         for building in self.buildings:
             if (x,y) in building.get_tiles_occupied():
                 return building
+        return None
+
+    def get_stockpile_at(self, x: int, y: int) -> Optional[Stockpile]:
+        for stockpile in self.stockpiles:
+            sp_x, sp_y, sp_w, sp_h = stockpile.rect
+            if sp_x <= x < sp_x + sp_w and sp_y <= y < sp_y + sp_h:
+                return stockpile
         return None
 
     def get_operational_buildings_of_type(self, structure_type_str: str) -> List[Building]:
@@ -174,10 +211,14 @@ class World:
         else: self.update_weather("Cloudy")
 
     def add_character(self, character: 'Character'):
-        if character not in self.characters: self.characters.append(character)
+        if character.name not in self.characters_by_name:
+            self.characters.append(character)
+            self.characters_by_name[character.name] = character
 
     def remove_character(self, character: 'Character'):
-        if character in self.characters: self.characters.remove(character)
+        if character.name in self.characters_by_name:
+            self.characters.remove(character)
+            del self.characters_by_name[character.name]
 
     def get_characters_at_location(self, x: int, y: int) -> List['Character']:
         return [char for char in self.characters if char.x == x and char.y == y]
@@ -213,17 +254,21 @@ class World:
 
     def add_stockpile(self, stockpile: Stockpile):
         if stockpile not in self.stockpiles:
-            self.stockpiles.append(stockpile)
-            if self.game_time:
-                 self.ledger.update_stockpile_record(stockpile.name, stockpile.inventory, self.game_time.current_day)
             x, y, w, h = stockpile.rect
+            # Check for overlaps before adding
             for r_offset in range(h):
                 for c_offset in range(w):
                     tile_x, tile_y = x + c_offset, y + r_offset
-                    if 0 <= tile_x < self.grid_size[0] and 0 <= tile_y < self.grid_size[1]:
-                        # Stockpiles are overlays, don't change base self.grid tile like resources do
-                        # The get_tile method will need to account for stockpiles if they have a map char
-                        pass
+                    if not (0 <= tile_x < self.grid_size[0] and 0 <= tile_y < self.grid_size[1]):
+                        print(f"Error: Stockpile '{stockpile.name}' at {stockpile.rect} is out of bounds.")
+                        return
+                    if self.get_building_at(tile_x, tile_y) or self.get_stockpile_at(tile_x, tile_y):
+                        print(f"Error: Stockpile '{stockpile.name}' overlaps with an existing structure at ({tile_x}, {tile_y}).")
+                        return
+
+            self.stockpiles.append(stockpile)
+            if self.game_time:
+                self.ledger.update_stockpile_record(stockpile.name, stockpile.inventory, self.game_time.current_day)
 
 
     def get_stockpiles_for_resource(self, resource_name: str) -> List[Stockpile]:
@@ -266,10 +311,7 @@ class World:
         return None
 
     def get_character_by_name(self, name: str) -> Optional['Character']: # Added utility
-        for char in self.characters:
-            if char.name == name:
-                return char
-        return None
+        return self.characters_by_name.get(name)
 
     # Event related methods (can be kept minimal if EventManager is not fully used)
     def apply_event_effects(self, event_instance: Any): # Using Any if ActiveEvent is not defined

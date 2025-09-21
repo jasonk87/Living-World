@@ -50,31 +50,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    async function fetchEntityDetails(type, identifier) {
-        entityDetailsDiv.innerHTML = `<p>Loading details...</p>`;
-        let url = '';
-        if (type === 'character') {
-            url = `${API_BASE_URL}/character_info?name=${encodeURIComponent(identifier)}`;
-        } else if (type === 'building') {
-            url = `${API_BASE_URL}/building_info?x=${identifier.x}&y=${identifier.y}`;
-        } else {
-            entityDetailsDiv.innerHTML = `<p>Unknown entity type.</p>`;
-            return;
-        }
-
-        try {
-            const response = await fetch(url);
-            if (!response.ok) {
-                entityDetailsDiv.innerHTML = `<p class="error">Error fetching details: ${response.status}</p>`;
-                return;
-            }
-            const details = await response.json();
-            displayEntityDetails(details, type);
-        } catch (error) {
-            console.error(`Error fetching ${type} details:`, error);
-            entityDetailsDiv.innerHTML = `<p class="error">Failed to fetch details.</p>`;
-        }
-    }
 
     async function performControlAction(url) {
         try {
@@ -137,36 +112,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 charMarker.addEventListener('click', (e) => {
                     e.stopPropagation(); // Prevent tile click
-                    fetchEntityDetails('character', char.name);
+                    fetchEntityDetails('character', char.name, 'entity-details');
                 });
                 cellDiv.appendChild(charMarker);
             }
         });
     }
 
-    function displayEntityDetails(entity, type) {
-        entityDetailsDiv.innerHTML = '';
-        const dl = document.createElement('dl');
-
-        if (type === 'character') {
-            dl.innerHTML = `
-                <dt>Name</dt><dd>${entity.name}</dd>
-                <dt>Job</dt><dd>${entity.job} (${entity.rank})</dd>
-                <dt>Goal</dt><dd>${entity.current_goal.type}</dd>
-                <dt>Position</dt><dd>(${entity.x}, ${entity.y})</dd>
-                <dt>Needs</dt><dd>${JSON.stringify(entity.needs)}</dd>
-                <dt>Inventory</dt><dd>${JSON.stringify(entity.inventory)}</dd>
-            `;
-        } else if (type === 'building') {
-            dl.innerHTML = `
-                <dt>Name</dt><dd>${entity.display_name}</dd>
-                <dt>Type</dt><dd>${entity.structure_type}</dd>
-                <dt>Operational</dt><dd>${entity.is_operational}</dd>
-                ${entity.inventory ? `<dt>Inventory</dt><dd>${JSON.stringify(entity.inventory)}</dd>` : ''}
-            `;
-        }
-        entityDetailsDiv.appendChild(dl);
-    }
 
     function updateEventLog(log) {
         if (!eventLogDiv || !log) return;
