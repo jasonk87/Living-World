@@ -575,5 +575,23 @@ EDICTS = {
         "description": "Declares a day of festival, boosting morale.",
         "duration": 1,
         "effects": {"global_mood_modifier": 15, "production_speed_modifier": -0.5}
+    },
+    "Curfew": {
+        "description": "A curfew is enacted, increasing security but lowering morale.",
+        "duration": 10,
+        "effects": {"security_level_modifier": 5, "global_mood_modifier": -5}
+    },
+    "Militia_Training_Drill": {
+        "description": "Militia are ordered to conduct training drills, increasing security but lowering productivity.",
+        "duration": 5,
+        "effects": {"security_level_modifier": 7, "production_speed_modifier": -0.1}
     }
+}
+
+ROLE_EDICTS = {
+    "Mayor": ["Tax_Hike", "Tax_Relief", "Festival_Day", "Increased_Production"],
+    "Sheriff": ["Conscription", "Curfew"],
+    "Militia Commander": ["Conscription", "Militia_Training_Drill"],
+    "Noble Lord": ["Tax_Hike", "Increased_Production"],
+    "Baron": ["Tax_Hike", "Increased_Production"],
 }

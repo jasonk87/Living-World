@@ -14,54 +14,54 @@ class TestEdicts(unittest.TestCase):
         self.world.add_edict = lambda edict: self.world.edicts.append(edict)
 
 
-        self.noble = Character(
-            name="Baron Von Edict",
+        self.mayor = Character(
+            name="Mayor McCheese",
             personality="Greedy",
             traits=["Greedy", "Ambitious"],
-            job="Noble Lord",
-            rank="Noble Lord",
+            job="Mayor",
+            rank="Mayor",
             money=100,
             skills={}
         )
-        self.world.add_character(self.noble)
+        self.world.add_character(self.mayor)
 
     @patch('random.choices', return_value=['Tax_Hike'])
-    def test_issue_edict_tax_hike_by_greedy_noble(self, mock_choices):
-        # A greedy noble should favor a tax hike
-        self.noble.current_goal = Goal(GoalType.ISSUE_DOMAIN_EDICT, assignee_id=self.noble.name)
+    def test_issue_edict_tax_hike_by_greedy_mayor(self, mock_choices):
+        # A greedy mayor should favor a tax hike
+        self.mayor.current_goal = Goal(GoalType.ISSUE_DOMAIN_EDICT, assignee_id=self.mayor.name)
 
-        self.noble.decide_action(self.world)
+        self.mayor.decide_action(self.world)
 
         self.assertEqual(len(self.world.edicts), 1)
         issued_edict = self.world.edicts[0]
 
         # With the mock, this should always be the outcome
         self.assertEqual(issued_edict.edict_type, "Tax_Hike")
-        self.assertEqual(issued_edict.issued_by, self.noble.name)
-        self.assertEqual(self.noble.last_edict_day, self.time.current_day)
-        self.assertTrue(any("I have issued the 'Tax_Hike' edict" in m for m in self.noble.memory))
+        self.assertEqual(issued_edict.issued_by, self.mayor.name)
+        self.assertEqual(self.mayor.last_edict_day, self.time.current_day)
+        self.assertTrue(any("I have issued the 'Tax_Hike' edict" in m for m in self.mayor.memory))
 
     def test_issue_edict_cooldown(self):
         # Issue first edict
-        self.noble.current_goal = Goal(GoalType.ISSUE_DOMAIN_EDICT, assignee_id=self.noble.name)
-        self.noble.decide_action(self.world)
+        self.mayor.current_goal = Goal(GoalType.ISSUE_DOMAIN_EDICT, assignee_id=self.mayor.name)
+        self.mayor.decide_action(self.world)
         self.assertEqual(len(self.world.edicts), 1)
-        self.assertEqual(self.noble.last_edict_day, 1)
+        self.assertEqual(self.mayor.last_edict_day, 1)
 
         # Try to issue another edict on the same day
-        self.noble.current_goal = Goal(GoalType.ISSUE_DOMAIN_EDICT, assignee_id=self.noble.name)
-        self.noble.decide_action(self.world)
+        self.mayor.current_goal = Goal(GoalType.ISSUE_DOMAIN_EDICT, assignee_id=self.mayor.name)
+        self.mayor.decide_action(self.world)
 
         self.assertEqual(len(self.world.edicts), 1) # Should not have issued another edict
-        self.assertTrue(any("It is too soon to issue another edict." in m for m in self.noble.memory))
+        self.assertTrue(any("It is too soon to issue another edict." in m for m in self.mayor.memory))
 
         # Advance time, but not enough to reset cooldown
         for _ in range((config.EDICT_COOLDOWN_DAYS - 1) * self.time.ticks_per_day):
             self.time.tick()
         self.assertEqual(self.time.current_day, config.EDICT_COOLDOWN_DAYS)
 
-        self.noble.current_goal = Goal(GoalType.ISSUE_DOMAIN_EDICT, assignee_id=self.noble.name)
-        self.noble.decide_action(self.world)
+        self.mayor.current_goal = Goal(GoalType.ISSUE_DOMAIN_EDICT, assignee_id=self.mayor.name)
+        self.mayor.decide_action(self.world)
         self.assertEqual(len(self.world.edicts), 1) # Still on cooldown
 
         # Advance time enough to reset cooldown
@@ -69,16 +69,16 @@ class TestEdicts(unittest.TestCase):
             self.time.tick()
         self.assertEqual(self.time.current_day, config.EDICT_COOLDOWN_DAYS + 1)
 
-        self.noble.current_goal = Goal(GoalType.ISSUE_DOMAIN_EDICT, assignee_id=self.noble.name)
-        self.noble.decide_action(self.world)
+        self.mayor.current_goal = Goal(GoalType.ISSUE_DOMAIN_EDICT, assignee_id=self.mayor.name)
+        self.mayor.decide_action(self.world)
         self.assertEqual(len(self.world.edicts), 2) # Should now be able to issue a new edict
 
     @patch('random.choices', return_value=['Tax_Hike'])
     def test_edict_effect_and_expiration(self, mock_choices):
         # Issue a tax hike edict
-        self.noble.traits = ["Greedy"]
-        self.noble.current_goal = Goal(GoalType.ISSUE_DOMAIN_EDICT, assignee_id=self.noble.name)
-        self.noble.decide_action(self.world)
+        self.mayor.traits = ["Greedy"]
+        self.mayor.current_goal = Goal(GoalType.ISSUE_DOMAIN_EDICT, assignee_id=self.mayor.name)
+        self.mayor.decide_action(self.world)
 
         self.assertEqual(len(self.world.edicts), 1)
         tax_hike_edict = self.world.edicts[0]
@@ -112,26 +112,61 @@ class TestEdicts(unittest.TestCase):
     @patch('random.choices', side_effect=[['Tax_Hike'], ['Increased_Production']])
     def test_cannot_issue_active_edict(self, mock_choices):
         # Issue a tax hike edict
-        self.noble.traits = ["Greedy"]
-        self.noble.current_goal = Goal(GoalType.ISSUE_DOMAIN_EDICT, assignee_id=self.noble.name)
-        self.noble.decide_action(self.world)
+        self.mayor.traits = ["Greedy"]
+        self.mayor.current_goal = Goal(GoalType.ISSUE_DOMAIN_EDICT, assignee_id=self.mayor.name)
+        self.mayor.decide_action(self.world)
         self.assertEqual(len(self.world.edicts), 1)
         self.assertEqual(self.world.edicts[0].edict_type, "Tax_Hike")
 
         # Set cooldown to allow another edict
-        self.noble.last_edict_day = -100
+        self.mayor.last_edict_day = -100
 
-        # Try to issue another edict. Since the noble is greedy, they will try for Tax_Hike again,
+        # Try to issue another edict. Since the mayor is greedy, they will try for Tax_Hike again,
         # but it should be filtered out. They should issue another edict instead.
-        self.noble.current_goal = Goal(GoalType.ISSUE_DOMAIN_EDICT, assignee_id=self.noble.name)
-        self.noble.decide_action(self.world)
+        self.mayor.current_goal = Goal(GoalType.ISSUE_DOMAIN_EDICT, assignee_id=self.mayor.name)
+        self.mayor.decide_action(self.world)
 
         self.assertEqual(len(self.world.edicts), 2)
         # The new edict should not be Tax_Hike
         new_edict_types = [e.edict_type for e in self.world.edicts]
         self.assertIn("Tax_Hike", new_edict_types)
         self.assertIn("Increased_Production", new_edict_types)
-        self.assertTrue(any("Considered issuing an edict" not in m for m in self.noble.memory)) # Should not fail with "unsuitable" message
+        self.assertTrue(any("Considered issuing an edict" not in m for m in self.mayor.memory)) # Should not fail with "unsuitable" message
+
+    @patch('random.choices', return_value=['Curfew'])
+    def test_sheriff_can_issue_curfew(self, mock_choices):
+        sheriff = Character(name="Sheriff", personality="Strict", traits=["Strict"], job="Sheriff", rank="Sheriff", skills={}, money=50)
+        self.world.add_character(sheriff)
+
+        sheriff.current_goal = Goal(GoalType.ISSUE_DOMAIN_EDICT, assignee_id=sheriff.name)
+        sheriff.decide_action(self.world)
+
+        self.assertEqual(len(self.world.edicts), 1)
+        self.assertEqual(self.world.edicts[0].edict_type, "Curfew")
+        self.assertTrue(any("I have issued the 'Curfew' edict" in m for m in sheriff.memory))
+
+    def test_sheriff_cannot_issue_tax_hike(self):
+        sheriff = Character(name="Sheriff", personality="Strict", traits=["Strict"], job="Sheriff", rank="Sheriff", skills={}, money=50)
+        self.world.add_character(sheriff)
+
+        sheriff.current_goal = Goal(GoalType.ISSUE_DOMAIN_EDICT, assignee_id=sheriff.name)
+        sheriff.decide_action(self.world)
+
+        self.assertEqual(len(self.world.edicts), 1)
+        # The only edicts a sheriff can issue are Conscription and Curfew. It should not be Tax_Hike.
+        self.assertNotEqual(self.world.edicts[0].edict_type, "Tax_Hike")
+
+    def test_character_with_no_edict_permissions(self):
+        # A character with a job not in ROLE_EDICTS
+        crafter = Character(name="Crafter", personality="Neutral", traits=[], job="Master Craftsman", rank="Worker", skills={}, money=20)
+        self.world.add_character(crafter)
+
+        crafter.current_goal = Goal(GoalType.ISSUE_DOMAIN_EDICT, assignee_id=crafter.name)
+        crafter.decide_action(self.world)
+
+        self.assertEqual(len(self.world.edicts), 0)
+        self.assertTrue(any("My role does not permit me to issue any edicts." in m for m in crafter.memory))
+
 
 if __name__ == '__main__':
     unittest.main()

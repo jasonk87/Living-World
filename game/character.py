@@ -9,7 +9,7 @@ from . import config
 from .goal import Goal, GoalType, GoalStatus, DEFAULT_IDLE_GOAL, create_goal_from_job
 from .rumor import Rumor # Added for rumor generation
 from .edict import Edict
-from .data import EDICTS
+from .data import EDICTS, ROLE_EDICTS
 
 if TYPE_CHECKING:
     from .world import World
@@ -1536,11 +1536,6 @@ class Character:
         """
         Allows a Noble to issue a domain-wide edict.
         """
-        if self.rank not in ["Noble Lord", "Baron", "Mayor"]:
-            self.add_memory("I am not of a rank to issue edicts.")
-            self.current_goal = self.get_default_goal()
-            return
-
         if world.game_time is None:
             return # Should not happen
 
@@ -1550,8 +1545,15 @@ class Character:
             self.current_goal = self.get_default_goal()
             return
 
-        # Trait-based edict selection
-        edict_weights = {edict_name: 1.0 for edict_name in EDICTS.keys()}
+        # Role-based edict filtering
+        allowed_edicts = ROLE_EDICTS.get(self.job, [])
+        if not allowed_edicts:
+            self.add_memory("My role does not permit me to issue any edicts.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        # Trait-based edict selection from the allowed list
+        edict_weights = {edict_name: 1.0 for edict_name in allowed_edicts}
 
         if "Greedy" in self.traits:
             edict_weights["Tax_Hike"] = edict_weights.get("Tax_Hike", 1.0) * 3.0
