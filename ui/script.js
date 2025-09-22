@@ -10,7 +10,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const tabContents = document.querySelectorAll('.tab-content');
 
     // --- API & State ---
-    const API_BASE_URL = 'http://localhost:8001/api';
+    const API_BASE_URL = 'http://localhost:8001';
     let isFetchingGameState = false;
 
     // --- Tab Switching Logic ---

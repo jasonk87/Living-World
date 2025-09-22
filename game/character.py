@@ -1849,6 +1849,65 @@ class Character:
         # Could add logic to return to a "Guardhouse" or report to Sheriff periodically.
         return
 
+    def _execute_oversee_domain(self, world: 'World'):
+        if self.rank not in ["Noble Lord", "Baron"]: # Assuming these are the landed nobles
+            self.current_goal = self.get_default_goal()
+            return
+
+        # Trait-based behavior modifications
+        if "Lazy" in self.traits and random.random() < 0.75:
+            self.add_memory("Felt too lazy to oversee my domain today. Stayed put.")
+            return # 75% chance to do nothing if lazy
+
+        # If no specific survey target, or reached target, or timer runs out, find a new one
+        survey_target = self.current_goal.parameters.get("survey_target")
+        survey_timer = self.current_goal.parameters.get("survey_timer", 0)
+
+        if not survey_target or (self.x, self.y) == survey_target or survey_timer <= 0:
+            new_target_x = random.randint(0, world.grid_size[1] - 1)
+            new_target_y = random.randint(0, world.grid_size[0] - 1)
+            self.current_goal.parameters["survey_target"] = (new_target_x, new_target_y)
+            self.current_goal.parameters["survey_timer"] = random.randint(15, 30) # Ticks to spend on this target
+            self.add_memory(f"Decided to survey the area around ({new_target_x}, {new_target_y}).")
+            survey_target = (new_target_x, new_target_y)
+
+        # Move towards the survey target
+        if (self.x, self.y) != survey_target:
+            self.move_towards(survey_target[0], survey_target[1], world)
+            self.current_goal.parameters["survey_timer"] -= 1
+
+        # --- Trait-based proactive actions while surveying ---
+        if random.random() < 0.15: # 15% chance each tick to perform a special action
+            if ("Strict" in self.traits or "Demanding" in self.personality) and "Kind" not in self.traits:
+                # Find a nearby worker to inspect
+                nearby_workers = [c for c in world.get_nearby_characters(self, 5) if c.job not in ["Noble", "Mayor"] and c.current_goal.type not in [GoalType.IDLE, GoalType.WANDER]]
+                if nearby_workers:
+                    worker_to_inspect = random.choice(nearby_workers)
+                    self.add_memory(f"Decided to inspect the work of {worker_to_inspect.name}.")
+                    # Simplified: 50/50 chance to praise or criticize (argue)
+                    if random.random() < 0.5:
+                        self.current_goal = Goal(GoalType.PRAISE_CHARACTER, assignee_id=self.name, originator_id=self.name, parameters={"target_char_name": worker_to_inspect.name})
+                    else:
+                        self.current_goal = Goal(GoalType.ARGUE, assignee_id=self.name, originator_id=self.name, parameters={"target_char_name": worker_to_inspect.name, "reason": "work_inspection"})
+                    return # New goal set
+
+            elif "Kind" in self.traits or "Compassionate" in self.traits:
+                # Find a nearby character in distress
+                distressed_chars = [c for c in world.get_nearby_characters(self, 5) if c.is_sick or c.is_injured or c.mood in ["Sad", "Stressed"]]
+                if distressed_chars:
+                    char_to_comfort = random.choice(distressed_chars)
+                    self.add_memory(f"Noticed {char_to_comfort.name} seems to be in distress. I will offer them comfort.")
+                    self.current_goal = Goal(GoalType.OFFER_COMFORT, assignee_id=self.name, originator_id=self.name, parameters={"target_char_name": char_to_comfort.name})
+                    return # New goal set
+
+        # --- Trait-based mood influence ---
+        if "Greedy" in self.traits:
+            total_resource_value = world.ledger.get_total_value_of_all_resources()
+            if total_resource_value > 500: # Arbitrary high value
+                self.update_mood_score(2, "Pleased with the wealth of the domain.")
+            elif total_resource_value < 100: # Arbitrary low value
+                self.update_mood_score(-2, "Displeased with the poverty of the domain.")
+
     def _execute_seek_medical_attention(self, world: 'World'):
         self.add_memory("Feeling unwell, seeking medical attention.")
 
@@ -2129,6 +2188,7 @@ class Character:
         elif self.current_goal.type == GoalType.PROVIDE_MEDICAL_CARE: self._execute_provide_medical_care(world)
         elif self.current_goal.type == GoalType.MAINTAIN_PEACE_IN_SETTLEMENT: self._execute_maintain_peace(world)
         elif self.current_goal.type == GoalType.PATROL_AREA: self._execute_patrol_area(world)
+        elif self.current_goal.type == GoalType.OVERSEE_DOMAIN: self._execute_oversee_domain(world)
         elif self.current_goal.type == GoalType.GIVE_SPEECH: self._execute_give_speech(world)
         elif self.current_goal.type == GoalType.SEEK_MEDICAL_ATTENTION: self._execute_seek_medical_attention(world)
 

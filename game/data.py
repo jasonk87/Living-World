@@ -528,6 +528,19 @@ ROLE_DETAILS = {
 # For now, the ROLE_DETAILS includes a "job_default_goal" field for easy reference to Character.py
 
 # --- Economy Data ---
+RESOURCE_VALUES = {
+    "Wood": 1,
+    "Stone": 2,
+    "Iron Ore": 5,
+    "Herbs": 3,
+    "Bandages": 7, # Value of 2 herbs (3*2) + 1 for labor
+    "Food": 4,
+    # Tools and furniture can also have values if they are tradeable
+    "Stone Axe": 12,
+    "Stone Pickaxe": 18,
+    "Wooden Chair": 8,
+}
+
 JOB_SALARIES = {
     "Perform Woodcutter Duties": 5,
     "Perform Stonemason Duties": 5,

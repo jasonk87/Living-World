@@ -8,7 +8,7 @@ Finn can't find Forest for Chop Wood.
 Simulation thread finished.
 Final Time: Day 1, Tick 1/10
 
-Character(Name: Liam, Rank: Worker, Job: Builder, Pos: (1,1), Goal: Goal(Type: IDLE, Prio: 10, Assignee: Liam, Status: PENDING, Params: {}, Orig: SystemAssignment), WO: None, Load: 0/10)
+Character(Name: Liam, Rank: Worker, Job: Builder, Pos: (2,2), Goal: Goal(Type: IDLE, Prio: 10, Assignee: Liam, Status: PENDING, Params: {}, Orig: SystemAssignment), WO: None, Load: 0/10)
   Supervisor: None;   Subordinates: 0
   Performance: Not Evaluated (Warnings: 0, Last Review: Day N/A)
   Equipped Tool: None
@@ -17,7 +17,7 @@ Character(Name: Liam, Rank: Worker, Job: Builder, Pos: (1,1), Goal: Goal(Type: I
   Recent Memories (last 10):
     - No build orders available for Builder Duties.
 
-Character(Name: Elara, Rank: Noble Lord, Job: Noble, Pos: (5,6), Goal: Goal(Type: IDLE, Prio: 10, Assignee: Elara, Status: PENDING, Params: {}, Orig: SystemAssignment), WO: None, Load: 0/10)
+Character(Name: Elara, Rank: Noble Lord, Job: Noble, Pos: (6,5), Goal: Goal(Type: IDLE, Prio: 10, Assignee: Elara, Status: PENDING, Params: {}, Orig: SystemAssignment), WO: None, Load: 0/10)
   Supervisor: None;   Subordinates: 0
   Performance: Not Evaluated (Warnings: 0, Last Review: Day N/A)
   Equipped Tool: None
@@ -29,7 +29,7 @@ Character(Name: Finn, Rank: Worker, Job: Woodcutter, Pos: (1,8), Goal: Goal(Type
   Supervisor: None;   Subordinates: 0
   Performance: Not Evaluated (Warnings: 0, Last Review: Day N/A)
   Equipped Tool: None
-  Final Needs: {'Hunger': 75, 'Social': 40, 'Energy': 100, 'Safety': 71, 'Belonging': 60, 'Esteem': 50}
+  Final Needs: {'Hunger': 75, 'Social': 40, 'Energy': 100, 'Safety': 70, 'Belonging': 60, 'Esteem': 50}
   Inventory: {}
   Recent Memories (last 10):
 
@@ -41,7 +41,7 @@ Character(Name: Finn, Rank: Worker, Job: Woodcutter, Pos: (1,8), Goal: Goal(Type
 [D1 T0]   Added: Finn (Job: Woodcutter) at (1,8)
 [D1 T0] --- Simulation Server Initialized ---
 Traceback (most recent call last):
-  File "/app/game/main.py", line 303, in <module>
+  File "/app/game/main.py", line 273, in <module>
     with socketserver.TCPServer(("", PORT), GameDataHandler) as httpd:
          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   File "/home/jules/.pyenv/versions/3.12.11/lib/python3.12/socketserver.py", line 457, in __init__

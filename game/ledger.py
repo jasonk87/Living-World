@@ -40,6 +40,16 @@ class Ledger:
     def get_stockpile_last_update_day(self, stockpile_name: str) -> Optional[int]:
         return self.stockpile_last_updated_day.get(stockpile_name)
 
+    def get_total_value_of_all_resources(self) -> int:
+        from .data import RESOURCE_VALUES # Local import to avoid circular dependency
+        total_value = 0
+        for resource_name, stockpiles in self.records.items():
+            resource_value = RESOURCE_VALUES.get(resource_name, 0)
+            if resource_value > 0:
+                total_quantity = sum(stockpiles.values())
+                total_value += total_quantity * resource_value
+        return total_value
+
     def __str__(self):
         summary = ["Ledger Records:"]
         if not self.records and not self.stockpile_last_updated_day: # Check both as empty records might still have timestamps if all items removed

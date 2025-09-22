@@ -203,93 +203,63 @@ def simulation_thread_func():
 
 
 # --- HTTP Server Logic ---
-PORT = 8001
+PORT = 8000
 class GameDataHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         global game_world, game_time_obj, game_paused, simulation_running, SIMULATION_SPEED_MULTIPLIER
-
-        if self.path.startswith('/api/'):
-            self.handle_api_request()
-        else:
-            self.serve_ui_file()
-
-    def handle_api_request(self):
-        global game_world, game_time_obj
-        path = self.path[5:] # Remove '/api/'
-
-        if path == 'game_state':
-            if not (game_world and game_time_obj):
-                self.send_error(503, "Game world not initialized")
-                return
-
-            grid_repr = [[game_world.get_tile(c, r) for c in range(game_world.grid_size[1])] for r in range(game_world.grid_size[0])]
-            characters_repr = [char.to_dict() for char in game_world.characters]
-            event_log_repr = game_world.event_log[-20:]
-            buildings_repr = [b.to_dict() for b in (game_world.buildings or []) + (game_world.stockpiles or [])]
-
-            state = {
-                "day": game_time_obj.current_day, "tick": game_time_obj.current_tick,
-                "ticks_per_day": game_time_obj.ticks_per_day, "season": game_world.season,
-                "weather": game_world.weather, "grid_size": game_world.grid_size,
-                "grid": grid_repr, "characters": characters_repr, "event_log": event_log_repr,
-                "is_paused": game_paused, "days_until_election": getattr(game_time_obj, 'days_until_election', -1),
-                "current_speed_multiplier": SIMULATION_SPEED_MULTIPLIER,
-                "buildings": buildings_repr
-            }
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps(state, default=lambda o: o.to_dict() if hasattr(o, 'to_dict') else str(o)).encode('utf-8'))
-
-        elif path.startswith('character_info'):
-            # ... (Add full character_info logic here if needed)
-            self.send_error(501, "Not Implemented")
-
-        else:
-            self.send_error(404, "API endpoint not found")
-
-    def serve_ui_file(self):
-        try:
-            req_path = self.path.lstrip('/')
-            if req_path == '':
-                req_path = 'index.html'
-
-            ui_dir = os.path.join(project_root, 'ui')
-            file_path = os.path.normpath(os.path.join(ui_dir, req_path))
-
-            if not file_path.startswith(ui_dir):
-                self.send_error(403, "Forbidden")
-                return
-
-            if os.path.isfile(file_path):
-                content_type, _ = mimetypes.guess_type(file_path)
+        if self.path == '/game_state':
+            if game_world and game_time_obj:
+                # This is the full, correct data structure for the game state
+                grid_repr = [[game_world.get_tile(c, r) for c in range(game_world.grid_size[1])] for r in range(game_world.grid_size[0])]
+                characters_repr = [char.to_dict() for char in game_world.characters]
+                event_log_repr = game_world.event_log[-20:]
+                buildings_repr = [b.to_dict() for b in (game_world.buildings or []) + (game_world.stockpiles or [])]
+                state = {
+                    "day": game_time_obj.current_day, "tick": game_time_obj.current_tick,
+                    "ticks_per_day": game_time_obj.ticks_per_day, "season": game_world.season,
+                    "weather": game_world.weather, "grid_size": game_world.grid_size,
+                    "grid": grid_repr, "characters": characters_repr, "event_log": event_log_repr,
+                    "is_paused": game_paused, "days_until_election": getattr(game_time_obj, 'days_until_election', -1),
+                    "current_speed_multiplier": SIMULATION_SPEED_MULTIPLIER,
+                    "buildings": buildings_repr
+                }
                 self.send_response(200)
-                self.send_header('Content-type', content_type or 'application/octet-stream')
+                self.send_header('Content-type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
                 self.end_headers()
-                with open(file_path, 'rb') as f:
-                    self.wfile.write(f.read())
+                self.wfile.write(json.dumps(state, default=lambda o: o.to_dict() if hasattr(o, 'to_dict') else str(o)).encode('utf-8'))
             else:
-                self.send_error(404, "File not found")
-        except Exception as e:
-            self.send_error(500, f"Server error: {e}")
+                self.send_error(503, "Game world not initialized")
+
+        # Add other API endpoints here as elif blocks
+
+        else:
+            # Fallback to serving files from the 'ui' directory
+            original_cwd = os.getcwd()
+            ui_path = os.path.join(project_root, 'ui')
+            try:
+                os.chdir(ui_path)
+                super().do_GET()
+            finally:
+                os.chdir(original_cwd)
 
     def do_POST(self):
         global game_paused, SIMULATION_SPEED_MULTIPLIER
-        path = self.path
-        if path == '/api/toggle_pause':
+        if self.path == '/toggle_pause':
             game_paused = not game_paused
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
             self.wfile.write(json.dumps({"paused": game_paused}).encode('utf-8'))
-        elif path.startswith('/api/set_speed'):
+        elif self.path.startswith('/set_speed'):
             # ... (logic for set_speed)
             self.send_response(200)
             self.end_headers()
         else:
             self.send_error(404, "Endpoint not found")
+
+
 
 # --- Main Execution ---
 if __name__ == "__main__":
