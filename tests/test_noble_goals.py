@@ -5,6 +5,7 @@ from game.world import World
 from game.time import Time
 from game.goal import Goal, GoalType
 from game.stockpile import Stockpile
+from game.edict import EdictStatus
 from game import config
 
 class TestNobleGoals(unittest.TestCase):
@@ -114,3 +115,98 @@ class TestNobleGoals(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class TestEdictReviewProcess(unittest.TestCase):
+    def setUp(self):
+        self.time = Time(ticks_per_day=10)
+        self.world = World(grid_size=(10, 10), game_time_ref=self.time)
+
+        self.mayor = Character(
+            name="Mayor McCheese",
+            personality="Kind",
+            traits=["Kind", "Diplomatic"],
+            job="Mayor",
+            rank="Mayor",
+            money=500,
+            skills={}
+        )
+        self.world.add_character(self.mayor)
+
+        self.sheriff = Character(
+            name="Sheriff of Nottingham",
+            personality="Strict",
+            traits=["Strict"],
+            job="Sheriff",
+            rank="Sheriff",
+            money=50,
+            skills={}
+        )
+        self.world.add_character(self.sheriff)
+
+        # Establish relationship
+        self.mayor.relationships[self.sheriff.name] = 20
+        self.sheriff.relationships[self.mayor.name] = 20
+
+    def test_sheriff_issues_edict_it_becomes_pending(self):
+        # Sheriff issues an edict
+        self.sheriff.current_goal = Goal(GoalType.ISSUE_DOMAIN_EDICT, assignee_id=self.sheriff.name)
+        self.sheriff.decide_action(self.world)
+
+        # Check that an edict was created and is pending
+        self.assertEqual(len(self.world.edicts), 1)
+        edict = self.world.edicts[0]
+        self.assertEqual(edict.issued_by, self.sheriff.name)
+        self.assertEqual(edict.status, EdictStatus.PENDING)
+
+    def test_mayor_chooses_to_review_pending_edicts(self):
+        # Sheriff issues a pending edict first
+        self.sheriff.current_goal = Goal(GoalType.ISSUE_DOMAIN_EDICT, assignee_id=self.sheriff.name)
+        self.sheriff.decide_action(self.world)
+        self.assertEqual(self.world.edicts[0].status, EdictStatus.PENDING)
+
+        # Mayor's turn to act, should see the pending edict
+        self.mayor.current_goal = Goal(GoalType.OVERSEE_SETTLEMENT, assignee_id=self.mayor.name)
+        with patch('random.random', return_value=0.1): # Ensure the 50% chance passes
+            self.mayor.decide_action(self.world)
+
+        # Check if the mayor's goal is now to review edicts
+        self.assertEqual(self.mayor.current_goal.type, GoalType.REVIEW_PENDING_EDICTS)
+        self.assertTrue(any("pending edicts that require my attention" in m for m in self.mayor.memory))
+
+    def test_mayor_approves_edict(self):
+        # Sheriff issues a pending edict
+        self.sheriff.current_goal = Goal(GoalType.ISSUE_DOMAIN_EDICT, assignee_id=self.sheriff.name)
+        self.sheriff.decide_action(self.world)
+        edict = self.world.edicts[0]
+        self.assertEqual(edict.status, EdictStatus.PENDING)
+
+        initial_relationship = self.mayor.get_relationship_score(self.sheriff.name)
+
+        # Mayor reviews and approves the edict
+        self.mayor.current_goal = Goal(GoalType.REVIEW_PENDING_EDICTS, assignee_id=self.mayor.name)
+        with patch('random.random', return_value=0.1): # Ensure approval
+            self.mayor.decide_action(self.world)
+
+        # Check edict status and relationship
+        self.assertEqual(edict.status, EdictStatus.ACTIVE)
+        self.assertGreater(self.mayor.get_relationship_score(self.sheriff.name), initial_relationship)
+        self.assertTrue(any(f"approved the '{edict.edict_type}' edict" in m for m in self.mayor.memory))
+
+    def test_mayor_rejects_edict(self):
+        # Sheriff issues a pending edict
+        self.sheriff.current_goal = Goal(GoalType.ISSUE_DOMAIN_EDICT, assignee_id=self.sheriff.name)
+        self.sheriff.decide_action(self.world)
+        edict = self.world.edicts[0]
+        self.assertEqual(edict.status, EdictStatus.PENDING)
+
+        initial_relationship = self.mayor.get_relationship_score(self.sheriff.name)
+
+        # Mayor reviews and rejects the edict
+        self.mayor.current_goal = Goal(GoalType.REVIEW_PENDING_EDICTS, assignee_id=self.mayor.name)
+        with patch('random.random', return_value=0.9): # Ensure rejection
+            self.mayor.decide_action(self.world)
+
+        # Check edict status and relationship
+        self.assertEqual(edict.status, EdictStatus.REJECTED)
+        self.assertLess(self.mayor.get_relationship_score(self.sheriff.name), initial_relationship)
+        self.assertTrue(any(f"rejected the '{edict.edict_type}' edict" in m for m in self.mayor.memory))

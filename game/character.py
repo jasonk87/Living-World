@@ -8,7 +8,7 @@ from .data import BLUEPRINTS, JOB_TASK_DEFINITIONS, STRUCTURE_BLUEPRINTS, JOB_SA
 from . import config
 from .goal import Goal, GoalType, GoalStatus, DEFAULT_IDLE_GOAL, create_goal_from_job
 from .rumor import Rumor # Added for rumor generation
-from .edict import Edict
+from .edict import Edict, EdictStatus
 from .data import EDICTS, ROLE_EDICTS
 
 if TYPE_CHECKING:
@@ -1583,12 +1583,16 @@ class Character:
 
         edict_data = EDICTS[chosen_edict_name]
 
+        # Determine initial edict status based on role
+        initial_status = EdictStatus.ACTIVE if self.job == "Mayor" else EdictStatus.PENDING
+
         new_edict = Edict(
             edict_type=chosen_edict_name,
             issued_by=self.name,
             start_day=world.game_time.current_day,
             duration=edict_data["duration"],
-            effects=edict_data["effects"].copy()
+            effects=edict_data["effects"].copy(),
+            status=initial_status
         )
 
         world.add_edict(new_edict)
@@ -1598,6 +1602,66 @@ class Character:
         world.add_event_log_message(f"{self.rank} {self.name} has issued the '{chosen_edict_name}' edict.")
 
         # Goal is complete for this cycle
+        self.current_goal = self.get_default_goal()
+
+    def _execute_review_pending_edicts(self, world: 'World'):
+        """
+        Allows a Mayor to review and approve/reject edicts issued by subordinates.
+        """
+        if self.job != "Mayor":
+            self.add_memory("I am not the Mayor and cannot review edicts.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        pending_edicts = [e for e in world.edicts if e.status == EdictStatus.PENDING]
+
+        if not pending_edicts:
+            self.add_memory("There are no pending edicts to review.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        # Review one edict per cycle for now
+        edict_to_review = pending_edicts[0]
+        issuer = world.get_character_by_name(edict_to_review.issued_by)
+        if not issuer:
+            edict_to_review.status = EdictStatus.REJECTED # Or some other status for invalid issuer
+            self.add_memory(f"Rejected edict {edict_to_review.edict_type} because issuer {edict_to_review.issued_by} not found.")
+            return
+
+        # Decision logic based on Mayor's traits and relationship
+        approval_chance = 0.6 # Base chance
+        if "Kind" in self.traits: approval_chance += 0.2
+        if "Strict" in self.traits: approval_chance -= 0.2
+        if "Ruthless" in self.traits: approval_chance -= 0.3
+
+        relationship_score = self.get_relationship_score(issuer.name)
+        relationship_modifier = (relationship_score / 100.0) * 0.2 # Max +/- 20% influence
+        approval_chance += relationship_modifier
+
+        approval_chance = max(0.05, min(0.95, approval_chance))
+
+        if random.random() < approval_chance:
+            # Approve the edict
+            edict_to_review.status = EdictStatus.ACTIVE
+            self.add_memory(f"I have approved the '{edict_to_review.edict_type}' edict from {issuer.name}.")
+            world.add_event_log_message(f"Mayor {self.name} has approved the '{edict_to_review.edict_type}' edict from {issuer.name}.")
+
+            # Relationship boost
+            self.modify_relationship(issuer.name, 10, world, f"Approved their '{edict_to_review.edict_type}' edict.")
+            issuer.modify_relationship(self.name, 15, world, f"My '{edict_to_review.edict_type}' edict was approved by the Mayor.")
+            issuer.update_mood_score(config.MOOD_CHANGE_SUCCESSFUL_TASK_MAJOR, f"My edict '{edict_to_review.edict_type}' was approved.")
+        else:
+            # Reject the edict
+            edict_to_review.status = EdictStatus.REJECTED
+            self.add_memory(f"I have rejected the '{edict_to_review.edict_type}' edict from {issuer.name}.")
+            world.add_event_log_message(f"Mayor {self.name} has rejected the '{edict_to_review.edict_type}' edict from {issuer.name}.")
+
+            # Relationship penalty
+            self.modify_relationship(issuer.name, -15, world, f"Rejected their '{edict_to_review.edict_type}' edict.")
+            issuer.modify_relationship(self.name, -20, world, f"My '{edict_to_review.edict_type}' edict was rejected by the Mayor.")
+            issuer.update_mood_score(config.MOOD_CHANGE_RECEIVED_WARNING, f"My edict '{edict_to_review.edict_type}' was rejected.")
+
+        # Move to the next goal
         self.current_goal = self.get_default_goal()
 
     def _execute_oversee_domain(self, world: 'World'):
@@ -1773,6 +1837,13 @@ class Character:
         # Specific events or critical thresholds might trigger a change in their goal or actions later.
         # For this initial implementation, the Mayor doesn't change their own goal here.
         # They also do not move unless a future sub-task of overseeing requires it (e.g. "Inspect Project X")
+
+        # Check for pending edicts to review
+        if any(e.status == EdictStatus.PENDING for e in world.edicts):
+            if random.random() < 0.5: # 50% chance to review edicts if any are pending
+                self.add_memory("There are pending edicts that require my attention.")
+                self.current_goal = Goal(GoalType.REVIEW_PENDING_EDICTS, assignee_id=self.name, originator_id=self.name)
+                return
 
         # Periodically review appointments
         if random.random() < 0.1: # 10% chance each time Mayor oversees settlement
@@ -2254,6 +2325,7 @@ class Character:
         elif self.current_goal.type == GoalType.OVERSEE_DOMAIN: self._execute_oversee_domain(world)
         elif self.current_goal.type == GoalType.COLLECT_REVENUE_FROM_DOMAIN: self._execute_collect_revenue_from_domain(world)
         elif self.current_goal.type == GoalType.ISSUE_DOMAIN_EDICT: self._execute_issue_domain_edict(world)
+        elif self.current_goal.type == GoalType.REVIEW_PENDING_EDICTS: self._execute_review_pending_edicts(world)
         elif self.current_goal.type == GoalType.OVERSEE_MEDICAL_OPERATIONS: self._execute_oversee_medical_operations(world)
         elif self.current_goal.type == GoalType.PROVIDE_MEDICAL_CARE: self._execute_provide_medical_care(world)
         elif self.current_goal.type == GoalType.MAINTAIN_PEACE_IN_SETTLEMENT: self._execute_maintain_peace(world)
