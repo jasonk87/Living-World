@@ -303,7 +303,6 @@ class World:
 
         self.edicts = [e for e in self.edicts if e.is_active]
 
-
     def get_modified_tax_rate(self) -> float:
         """Calculates the tax rate after applying all active edict effects."""
         base_rate = config.TAX_RATE

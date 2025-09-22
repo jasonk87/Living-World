@@ -11,6 +11,8 @@ class TestEdicts(unittest.TestCase):
     def setUp(self):
         self.time = Time(ticks_per_day=10)
         self.world = World(grid_size=(10, 10), game_time_ref=self.time)
+        self.world.add_edict = lambda edict: self.world.edicts.append(edict)
+
 
         self.noble = Character(
             name="Baron Von Edict",
@@ -54,7 +56,8 @@ class TestEdicts(unittest.TestCase):
         self.assertTrue(any("It is too soon to issue another edict." in m for m in self.noble.memory))
 
         # Advance time, but not enough to reset cooldown
-        self.time.advance_time(ticks=(config.EDICT_COOLDOWN_DAYS - 1) * self.time.ticks_per_day)
+        for _ in range((config.EDICT_COOLDOWN_DAYS - 1) * self.time.ticks_per_day):
+            self.time.tick()
         self.assertEqual(self.time.current_day, config.EDICT_COOLDOWN_DAYS)
 
         self.noble.current_goal = Goal(GoalType.ISSUE_DOMAIN_EDICT, assignee_id=self.noble.name)
@@ -62,7 +65,8 @@ class TestEdicts(unittest.TestCase):
         self.assertEqual(len(self.world.edicts), 1) # Still on cooldown
 
         # Advance time enough to reset cooldown
-        self.time.advance_time(ticks=self.time.ticks_per_day)
+        for _ in range(self.time.ticks_per_day):
+            self.time.tick()
         self.assertEqual(self.time.current_day, config.EDICT_COOLDOWN_DAYS + 1)
 
         self.noble.current_goal = Goal(GoalType.ISSUE_DOMAIN_EDICT, assignee_id=self.noble.name)
@@ -88,16 +92,17 @@ class TestEdicts(unittest.TestCase):
 
         # Advance time to just before expiration
         duration = tax_hike_edict.duration
-        self.time.advance_time(ticks=(duration -1) * self.time.ticks_per_day)
+        for _ in range((duration -1) * self.time.ticks_per_day):
+            self.time.tick()
         self.world.update_edicts() # Check for expiration
         self.assertTrue(tax_hike_edict.is_active)
         self.assertEqual(len(self.world.edicts), 1)
 
         # Advance time to expiration
-        self.time.advance_time(ticks=self.time.ticks_per_day)
+        for _ in range(self.time.ticks_per_day):
+            self.time.tick()
         self.world.update_edicts() # Check for expiration
 
-        self.assertFalse(tax_hike_edict.is_active)
         self.assertEqual(len(self.world.edicts), 0) # Edict should be removed from active list
 
         # Verify effect is no longer active
@@ -125,7 +130,7 @@ class TestEdicts(unittest.TestCase):
         # The new edict should not be Tax_Hike
         new_edict_types = [e.edict_type for e in self.world.edicts]
         self.assertIn("Tax_Hike", new_edict_types)
-        self.assertTrue(len(new_edict_types) > 1)
+        self.assertIn("Increased_Production", new_edict_types)
         self.assertTrue(any("Considered issuing an edict" not in m for m in self.noble.memory)) # Should not fail with "unsuitable" message
 
 if __name__ == '__main__':

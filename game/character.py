@@ -4,11 +4,12 @@ import random
 from .llm_integration import generate_dialogue # Kept as it's used
 # from .stockpile import Stockpile # Not directly used by Character methods
 # from .work_order import WorkOrder # Not directly used by Character methods
-from .data import BLUEPRINTS, JOB_TASK_DEFINITIONS, STRUCTURE_BLUEPRINTS, JOB_SALARIES, EDICTS
+from .data import BLUEPRINTS, JOB_TASK_DEFINITIONS, STRUCTURE_BLUEPRINTS, JOB_SALARIES
 from . import config
 from .goal import Goal, GoalType, GoalStatus, DEFAULT_IDLE_GOAL, create_goal_from_job
 from .rumor import Rumor # Added for rumor generation
 from .edict import Edict
+from .data import EDICTS
 
 if TYPE_CHECKING:
     from .world import World
@@ -1515,7 +1516,7 @@ class Character:
             self.current_goal = self.get_default_goal()
             return
 
-        tax_amount = int(total_wealth * config.TAX_RATE)
+        tax_amount = int(total_wealth * world.get_modified_tax_rate())
 
         if tax_amount <= 0:
             self.add_memory(f"The calculated tax revenue ({tax_amount}) is too low to collect.")
@@ -1940,7 +1941,11 @@ class Character:
         return
 
     def _execute_patrol_area(self, world: 'World'): # For Deputy
-        self.add_memory("I am patrolling my assigned area.")
+        if self.job != "Deputy":
+            self.current_goal = self.get_default_goal()
+            return
+
+        self.add_memory(f"Deputy {self.name} is patrolling their assigned area.")
 
         # Simple patrolling behavior: move randomly or towards predefined points.
         # For now, just a random move.
