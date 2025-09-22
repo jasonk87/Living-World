@@ -260,9 +260,7 @@ class Character:
                 self.add_memory(f"Need {res_name} for building, but no stockpile has it.")
                 # Cannot proceed with this resource, _execute_build_order will be stuck on it.
                 return
-
-            # Find the closest suitable stockpile
-            stockpile_to_fetch = min(suitable_stockpiles, key=lambda sp: abs(self.x - sp.rect[0]) + abs(self.y - sp.rect[1]))
+            stockpile_to_fetch = suitable_stockpiles[0] # Simplistic: take the first one
             self.resource_to_fetch["target_stockpile_name"] = stockpile_to_fetch.name
 
         stockpile_pos = (stockpile_to_fetch.rect[0], stockpile_to_fetch.rect[1]) # Assuming rect[0],rect[1] is access point
@@ -639,38 +637,19 @@ class Character:
         if self.equipped_tool: self.add_memory(f"Unequipped {self.equipped_tool['name']}."); print(f"{self.name} unequipped {self.equipped_tool['name']}."); self.equipped_tool = None
 
     def find_task_location(self, task_name: str, world: 'World') -> Optional[Tuple[int,int]]:
-        task_def = JOB_TASK_DEFINITIONS.get(task_name)
+        task_def = JOB_TASK_DEFINITIONS.get(task_name);
         if not task_def: return None
-        res_prod = task_def.get("resource_produced")
-        tile_to_find = None
+        res_prod = task_def.get("resource_produced"); tile_to_find = None
         if res_prod == "Wood": tile_to_find = "Forest"
         elif res_prod == "Stone": tile_to_find = "Rocks"
         elif res_prod == "Iron Ore": tile_to_find = "Rocks"
-        # "Gather Herbs" currently has no specific tile, handled in its own execute method for now.
         else: return None
-
-        valid_locations = []
-        # This part can be slow on large maps. Future optimization: world could have pre-indexed lists of resource tiles.
         for r_idx in range(world.grid_size[0]):
             for c_idx in range(world.grid_size[1]):
-                if world.get_tile(r_idx, c_idx) == tile_to_find:
-                    is_valid = False
-                    # If the task requires a specific resource item (e.g., a specific tree from a list of trees)
-                    if res_prod in world.resources and (r_idx, c_idx) in world.resources.get(res_prod, []):
-                        is_valid = True
-                    # If the task just needs the tile type (e.g., any Forest tile)
-                    elif res_prod not in world.resources and not task_def.get("needs_specific_resource_item", True):
-                        is_valid = True
-
-                    if is_valid:
-                        valid_locations.append((r_idx, c_idx))
-
-        if not valid_locations:
-            return None
-
-        # Find the closest location from all valid ones
-        closest_loc = min(valid_locations, key=lambda loc: abs(self.x - loc[0]) + abs(self.y - loc[1]))
-        return closest_loc
+                if world.get_tile(r_idx,c_idx) == tile_to_find:
+                    if res_prod in world.resources and (r_idx,c_idx) in world.resources.get(res_prod,[]): return (r_idx,c_idx)
+                    elif res_prod not in world.resources and not task_def.get("needs_specific_resource_item", True) : return (r_idx,c_idx)
+        return None
     def gather_resource(self, resource_name: str, world: 'World'): pass
     def build(self, structure_type: str, world: 'World') -> bool: return False
 
@@ -1002,12 +981,8 @@ class Character:
         sp_to_fetch = world.get_stockpile_by_name(target_sp_name) if target_sp_name else None
         if not sp_to_fetch or sp_to_fetch.inventory.get(res_name, 0) == 0:
             suitable_sps = [sp for sp in world.get_stockpiles_for_resource(res_name) if sp.inventory.get(res_name, 0) > 0]
-            if not suitable_sps:
-                print(f"{self.name} needs {res_name} for WO, but none in stockpiles. Waiting.")
-                return
-            # Find the closest suitable stockpile
-            sp_to_fetch = min(suitable_sps, key=lambda sp: abs(self.x - sp.rect[0]) + abs(self.y - sp.rect[1]))
-            self.resource_to_fetch["target_stockpile_name"] = sp_to_fetch.name
+            if not suitable_sps: print(f"{self.name} needs {res_name}, but none in stockpiles. Waiting."); return
+            sp_to_fetch = suitable_sps[0]; self.resource_to_fetch["target_stockpile_name"] = sp_to_fetch.name
         spot = (sp_to_fetch.rect[0], sp_to_fetch.rect[1])
         if (self.x, self.y) == spot:
             max_can_carry = self.max_inventory_items - self.get_inventory_load()
@@ -1321,13 +1296,10 @@ class Character:
         qty = self.inventory.get(res,0)
         sps = [s_obj for s_obj in world.get_stockpiles_for_resource(res) if s_obj.has_space_for(res,1)]
         if not sps:
-            self.add_memory(f"Need to haul {res}, but no stockpiles have space. Wandering.")
             self.current_goal = Goal(GoalType.WANDER, assignee_id=self.name, originator_id=self.name)
             return
 
-        # Find the closest stockpile from the suitable list
-        sp_chosen = min(sps, key=lambda sp: abs(self.x - sp.rect[0]) + abs(self.y - sp.rect[1]))
-
+        sp_chosen = sps[0]
         new_params = current_params.copy()
         new_params["target_stockpile_name"] = sp_chosen.name
         new_params["quantity_to_haul"] = qty
@@ -1517,6 +1489,44 @@ class Character:
         if random.random() < 0.1:
              self.add_memory(f"CMO {self.name} reviews medical protocols and staff readiness.")
         return
+
+    def _execute_collect_revenue_from_domain(self, world: 'World'):
+        """
+        Allows a Noble to collect taxes from the settlement's wealth.
+        """
+        # Ensure character is a noble
+        if self.rank not in ["Noble Lord", "Baron", "Mayor"]: # Mayors can also collect revenue
+            self.add_memory("I am not a noble and cannot collect revenue.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        # Check if taxes have already been collected today
+        if not world.game_time or world.last_tax_collection_day >= world.game_time.current_day:
+            self.add_memory("Taxes have already been collected for the day.")
+            self.current_goal = self.get_default_goal() # Nothing to do, become idle
+            return
+
+        total_wealth = world.calculate_total_wealth()
+        if total_wealth <= 0:
+            self.add_memory("The settlement has no wealth to tax.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        tax_amount = int(total_wealth * config.TAX_RATE)
+
+        if tax_amount <= 0:
+            self.add_memory(f"The calculated tax revenue ({tax_amount}) is too low to collect.")
+            world.last_tax_collection_day = world.game_time.current_day # Mark as collected even if 0
+            self.current_goal = self.get_default_goal()
+            return
+
+        self.money += tax_amount
+        world.last_tax_collection_day = world.game_time.current_day
+        self.add_memory(f"I have collected {tax_amount} in taxes from the domain, based on a total wealth of {total_wealth}.")
+        self.update_mood_score(config.MOOD_CHANGE_GOT_PAID * 2, f"Collected {tax_amount} in taxes")
+
+        # Goal is complete for this cycle
+        self.current_goal = self.get_default_goal()
 
     def _execute_provide_medical_care(self, world: 'World'):
         if self.job != "Medic":
@@ -1849,65 +1859,6 @@ class Character:
         # Could add logic to return to a "Guardhouse" or report to Sheriff periodically.
         return
 
-    def _execute_oversee_domain(self, world: 'World'):
-        if self.rank not in ["Noble Lord", "Baron"]: # Assuming these are the landed nobles
-            self.current_goal = self.get_default_goal()
-            return
-
-        # Trait-based behavior modifications
-        if "Lazy" in self.traits and random.random() < 0.75:
-            self.add_memory("Felt too lazy to oversee my domain today. Stayed put.")
-            return # 75% chance to do nothing if lazy
-
-        # If no specific survey target, or reached target, or timer runs out, find a new one
-        survey_target = self.current_goal.parameters.get("survey_target")
-        survey_timer = self.current_goal.parameters.get("survey_timer", 0)
-
-        if not survey_target or (self.x, self.y) == survey_target or survey_timer <= 0:
-            new_target_x = random.randint(0, world.grid_size[1] - 1)
-            new_target_y = random.randint(0, world.grid_size[0] - 1)
-            self.current_goal.parameters["survey_target"] = (new_target_x, new_target_y)
-            self.current_goal.parameters["survey_timer"] = random.randint(15, 30) # Ticks to spend on this target
-            self.add_memory(f"Decided to survey the area around ({new_target_x}, {new_target_y}).")
-            survey_target = (new_target_x, new_target_y)
-
-        # Move towards the survey target
-        if (self.x, self.y) != survey_target:
-            self.move_towards(survey_target[0], survey_target[1], world)
-            self.current_goal.parameters["survey_timer"] -= 1
-
-        # --- Trait-based proactive actions while surveying ---
-        if random.random() < 0.15: # 15% chance each tick to perform a special action
-            if ("Strict" in self.traits or "Demanding" in self.personality) and "Kind" not in self.traits:
-                # Find a nearby worker to inspect
-                nearby_workers = [c for c in world.get_nearby_characters(self, 5) if c.job not in ["Noble", "Mayor"] and c.current_goal.type not in [GoalType.IDLE, GoalType.WANDER]]
-                if nearby_workers:
-                    worker_to_inspect = random.choice(nearby_workers)
-                    self.add_memory(f"Decided to inspect the work of {worker_to_inspect.name}.")
-                    # Simplified: 50/50 chance to praise or criticize (argue)
-                    if random.random() < 0.5:
-                        self.current_goal = Goal(GoalType.PRAISE_CHARACTER, assignee_id=self.name, originator_id=self.name, parameters={"target_char_name": worker_to_inspect.name})
-                    else:
-                        self.current_goal = Goal(GoalType.ARGUE, assignee_id=self.name, originator_id=self.name, parameters={"target_char_name": worker_to_inspect.name, "reason": "work_inspection"})
-                    return # New goal set
-
-            elif "Kind" in self.traits or "Compassionate" in self.traits:
-                # Find a nearby character in distress
-                distressed_chars = [c for c in world.get_nearby_characters(self, 5) if c.is_sick or c.is_injured or c.mood in ["Sad", "Stressed"]]
-                if distressed_chars:
-                    char_to_comfort = random.choice(distressed_chars)
-                    self.add_memory(f"Noticed {char_to_comfort.name} seems to be in distress. I will offer them comfort.")
-                    self.current_goal = Goal(GoalType.OFFER_COMFORT, assignee_id=self.name, originator_id=self.name, parameters={"target_char_name": char_to_comfort.name})
-                    return # New goal set
-
-        # --- Trait-based mood influence ---
-        if "Greedy" in self.traits:
-            total_resource_value = world.ledger.get_total_value_of_all_resources()
-            if total_resource_value > 500: # Arbitrary high value
-                self.update_mood_score(2, "Pleased with the wealth of the domain.")
-            elif total_resource_value < 100: # Arbitrary low value
-                self.update_mood_score(-2, "Displeased with the poverty of the domain.")
-
     def _execute_seek_medical_attention(self, world: 'World'):
         self.add_memory("Feeling unwell, seeking medical attention.")
 
@@ -1992,6 +1943,13 @@ class Character:
         if moves:
             choice = random.choice(moves)
             self.move(choice[0], choice[1], world)
+
+    # This is the redundant job_default_goal. The primary one is around line 480.
+    # def job_default_goal(self) -> str: # Ensure this exists for the minimal decide_action
+    #     if self.job == "Builder":
+    #         return "Perform Builder Duties"
+    #     # Add other job defaults here if necessary for other tests, but builder is key now
+    #     return "Idle"
 
     def decide_action(self, world: 'World'):
         if not world.game_time:
@@ -2184,11 +2142,11 @@ class Character:
         elif self.current_goal.type == GoalType.MANAGE_SUBORDINATES: self._execute_manage_subordinates(world)
         elif self.current_goal.type == GoalType.MAINTAIN_LEDGER: self._execute_maintain_ledger(world)
         elif self.current_goal.type == GoalType.OVERSEE_SETTLEMENT: self._execute_oversee_settlement(world)
+        elif self.current_goal.type == GoalType.COLLECT_REVENUE_FROM_DOMAIN: self._execute_collect_revenue_from_domain(world)
         elif self.current_goal.type == GoalType.OVERSEE_MEDICAL_OPERATIONS: self._execute_oversee_medical_operations(world)
         elif self.current_goal.type == GoalType.PROVIDE_MEDICAL_CARE: self._execute_provide_medical_care(world)
         elif self.current_goal.type == GoalType.MAINTAIN_PEACE_IN_SETTLEMENT: self._execute_maintain_peace(world)
         elif self.current_goal.type == GoalType.PATROL_AREA: self._execute_patrol_area(world)
-        elif self.current_goal.type == GoalType.OVERSEE_DOMAIN: self._execute_oversee_domain(world)
         elif self.current_goal.type == GoalType.GIVE_SPEECH: self._execute_give_speech(world)
         elif self.current_goal.type == GoalType.SEEK_MEDICAL_ATTENTION: self._execute_seek_medical_attention(world)
 
@@ -2918,22 +2876,6 @@ class Character:
         if "Ruthless" in self.traits: manager_mood_change += 8 # Ruthless managers might feel less bad or even good
         elif "Compassionate" in self.traits: manager_mood_change -= 5 # Compassionate managers feel worse
         self.update_mood_score(manager_mood_change, f"Fired {subordinate.name}")
-
-        # --- Reassign Subordinates ---
-        # The person firing the manager now becomes the supervisor of the fired manager's subordinates.
-        if subordinate.subordinates_names:
-            orphaned_subordinates = list(subordinate.subordinates_names) # Create a copy to iterate over
-            self.add_memory(f"As I am firing {subordinate.name}, I will now manage their team: {', '.join(orphaned_subordinates)}.")
-
-            for orphan_name in orphaned_subordinates:
-                orphan_char = world.get_character_by_name(orphan_name)
-                if orphan_char:
-                    orphan_char.set_supervisor(self.name)
-                    self.add_subordinate(orphan_char.name) # Add to new supervisor's list
-                    orphan_char.add_memory(f"My manager {subordinate.name} was fired. My new manager is {self.name}.")
-
-            # Clear the fired manager's list of subordinates
-            subordinate.subordinates_names = []
 
         # Remove from supervisor's list
         if subordinate.name in self.subordinates_names:

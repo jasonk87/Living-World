@@ -2,14 +2,14 @@
 BLUEPRINTS = {
     "Wooden Chair": {
         "required_resources": {"Wood": 5},
-        "job_skill_needed": "Crafting",
+        "job_skill_needed": "Carpentry",
         "type": "Furniture",
         "description": "A simple wooden chair for basic comfort.",
         "craft_time_per_unit": 5
     },
     "Stone Axe": {
         "required_resources": {"Stone": 2, "Wood": 1}, # Cost to make a Stone Axe
-        "job_skill_needed": "Crafting", # Skill to make the axe
+        "job_skill_needed": "Stonemasonry", # Skill to make the axe
         "type": "Tool",
         "tool_type": "Axe",       # What category of tool it is
         "max_durability": 50,     # How many primary uses it has
@@ -18,7 +18,7 @@ BLUEPRINTS = {
     },
     "Stone Pickaxe": {
         "required_resources": {"Stone": 3, "Wood": 1}, # Cost to make a Stone Pickaxe
-        "job_skill_needed": "Crafting",
+        "job_skill_needed": "Stonemasonry",
         "type": "Tool",
         "tool_type": "Pickaxe",   # What category of tool it is
         "max_durability": 60,
@@ -27,14 +27,14 @@ BLUEPRINTS = {
     },
     "Wooden Bed": {
         "required_resources": {"Wood": 15},
-        "job_skill_needed": "Crafting",
+        "job_skill_needed": "Carpentry",
         "type": "Furniture",
         "description": "A basic wooden bed for improved rest.",
         "craft_time_per_unit": 20
     },
     "Iron Pickaxe": { # Example of a more advanced item
         "required_resources": {"Iron Ingot": 3, "Wood": 1}, # Assuming "Iron Ingot" is a processed resource
-        "job_skill_needed": "Crafting",
+        "job_skill_needed": "Blacksmithing",
         "type": "Tool",
         "tool_type": "Pickaxe",
         "max_durability": 150,
@@ -48,7 +48,7 @@ BLUEPRINTS = {
     },
     "Bandages": {
         "required_resources": {"Herbs": 2},
-        "job_skill_needed": "Crafting",
+        "job_skill_needed": "Medicine", # New skill for crafting/using medical items
         "type": "MedicalSupply", # A more specific type for medical items
         "description": "Simple bandages for treating injuries.",
         "craft_time_per_unit": 3
@@ -65,11 +65,11 @@ BLUEPRINTS = {
 # This helps decouple the action (e.g., "Chop Wood") from the specific tool item (e.g., "Stone Axe").
 JOB_TASK_DEFINITIONS = {
     "Chop Wood": {
-        "required_tool_type": "Axe",
-        "skill_used": "Woodcutting",
-        "resource_produced": "Wood",
-        "base_yield": 1,
-        "base_time_per_yield": 3
+        "required_tool_type": "Axe", # Category of tool needed
+        "skill_used": "Woodcutting",   # Skill that performs/improves this task
+        "resource_produced": "Wood",   # Primary resource yielded by this task
+        "base_yield": 1,               # How much is produced per successful action/tick of work
+        "base_time_per_yield": 3      # Ticks of work for one unit of base_yield (can be modified by skill/tool)
     },
     "Mine Stone": {
         "required_tool_type": "Pickaxe",
@@ -105,7 +105,7 @@ JOB_TASK_DEFINITIONS = {
     },
     "Gather Herbs": {
         "required_tool_type": None, # Could require a "Gathering Pouch" or similar later
-        "skill_used": "Medicine",   # New skill for finding and gathering herbs
+        "skill_used": "Herbalism",   # New skill for finding and gathering herbs
         "resource_produced": "Herbs",
         "base_yield": 1,
         "base_time_per_yield": 4    # Ticks to gather one unit of herbs
@@ -134,14 +134,14 @@ JOB_TASK_DEFINITIONS = {
     },
     "Maintain Peace in Settlement": { # For Sheriff
         "required_tool_type": None, # Could be "Badge" or "Weapon" later
-        "skill_used": "Leadership",   # New skill for law enforcement, order, and investigation
+        "skill_used": "Security",   # New skill for law enforcement, order, and investigation
         "resource_produced": None,
         "base_yield": 0,
         "base_time_per_yield": 0 # Continuous oversight/presence task
     },
     "Patrol Area": { # For Deputy
         "required_tool_type": None,
-        "skill_used": "Leadership",
+        "skill_used": "Security",
         "resource_produced": None,
         "base_yield": 0,
         "base_time_per_yield": 0 # Represents active patrolling
@@ -162,7 +162,7 @@ JOB_TASK_DEFINITIONS = {
     },
     "Greet Character": {
         "required_tool_type": None,
-        "skill_used": None, # Or None, or a new "Social" skill
+        "skill_used": "Social", # Or None, or a new "Social" skill
         "resource_produced": None,
         "base_yield": 0,
         "base_time_per_yield": 0 # Interaction, not yield-based
@@ -170,7 +170,7 @@ JOB_TASK_DEFINITIONS = {
     "Introduce Self to Stranger": {
         "description": "Character introduces themselves to an unknown character.",
         "required_tool_type": None,
-        "skill_used": None,
+        "skill_used": "Social",
         "resource_produced": None,
         "base_yield": 0,
         "base_time_per_yield": 0 # Short interaction, similar to greeting
@@ -178,7 +178,7 @@ JOB_TASK_DEFINITIONS = {
     "Small Talk": {
         "description": "Character engages in a brief, casual conversation with a known acquaintance.",
         "required_tool_type": None,
-        "skill_used": None,
+        "skill_used": "Social",
         "resource_produced": None,
         "base_yield": 0,
         "base_time_per_yield": 0 # Represents a short social exchange
@@ -186,7 +186,7 @@ JOB_TASK_DEFINITIONS = {
     "Share Positive News": {
         "description": "Character shares a piece of positive news or light gossip with an acquaintance.",
         "required_tool_type": None,
-        "skill_used": None,
+        "skill_used": "Social",
         "resource_produced": None,
         "base_yield": 0,
         "base_time_per_yield": 0 # Short social interaction
@@ -194,7 +194,7 @@ JOB_TASK_DEFINITIONS = {
     "Offer Comfort": {
         "description": "Character offers comfort or sympathy to someone in a negative state (e.g., sick, injured).",
         "required_tool_type": None,
-        "skill_used": None, # Could also be influenced by an "Empathy" skill/trait
+        "skill_used": "Social", # Could also be influenced by an "Empathy" skill/trait
         "resource_produced": None,
         "base_yield": 0,
         "base_time_per_yield": 0 # Short interaction
@@ -202,7 +202,7 @@ JOB_TASK_DEFINITIONS = {
     "Ask for Help": {
         "description": "Character asks another for help with a task, a resource, or a tool.",
         "required_tool_type": None,
-        "skill_used": None,
+        "skill_used": "Social",
         "resource_produced": None, # Indirectly might lead to resource acquisition or task progress
         "base_yield": 0,
         "base_time_per_yield": 0 # Interaction time
@@ -210,7 +210,7 @@ JOB_TASK_DEFINITIONS = {
     "Offer Help": {
         "description": "Character proactively offers help or a resource to someone they perceive as needing it.",
         "required_tool_type": None,
-        "skill_used": None, # Also influenced by traits like "Kind", "Generous"
+        "skill_used": "Social", # Also influenced by traits like "Kind", "Generous"
         "resource_produced": None, # Can result in resource transfer or task assistance
         "base_yield": 0,
         "base_time_per_yield": 0 # Interaction time
@@ -218,7 +218,7 @@ JOB_TASK_DEFINITIONS = {
     "Argue": {
         "description": "Characters engage in a heated disagreement.",
         "required_tool_type": None,
-        "skill_used": None, # Or perhaps a 'Temperament' related skill/check
+        "skill_used": "Social", # Or perhaps a 'Temperament' related skill/check
         "resource_produced": None, # Results in relationship/opinion changes
         "base_yield": 0,
         "base_time_per_yield": 0 # Short, impactful interaction
@@ -528,19 +528,6 @@ ROLE_DETAILS = {
 # For now, the ROLE_DETAILS includes a "job_default_goal" field for easy reference to Character.py
 
 # --- Economy Data ---
-RESOURCE_VALUES = {
-    "Wood": 1,
-    "Stone": 2,
-    "Iron Ore": 5,
-    "Herbs": 3,
-    "Bandages": 7, # Value of 2 herbs (3*2) + 1 for labor
-    "Food": 4,
-    # Tools and furniture can also have values if they are tradeable
-    "Stone Axe": 12,
-    "Stone Pickaxe": 18,
-    "Wooden Chair": 8,
-}
-
 JOB_SALARIES = {
     "Perform Woodcutter Duties": 5,
     "Perform Stonemason Duties": 5,

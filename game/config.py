@@ -28,6 +28,7 @@ MEDICAL_SUPPLY_LOW_THRESHOLD = 5 # Example: CMO concerned if Herbs/Bandages drop
 
 # Governance Configs
 ELECTION_CYCLE_DAYS = 30 # How often mayoral elections are held
+TAX_RATE = 0.02 # 2% tax rate on total settlement wealth for nobles
 
 # Social Interaction
 REACTIVE_SOCIAL_BASE_CHANCE = 0.05 # Base chance for reactive social interactions like offering comfort
