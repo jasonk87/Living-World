@@ -1,3 +1,4 @@
+import random
 # game/world.py
 from typing import TYPE_CHECKING, List, Optional, Tuple, Dict, Any # Added Any
 from .stockpile import Stockpile
@@ -8,7 +9,7 @@ from .building import Building
 from .data import STRUCTURE_BLUEPRINTS, MARKET_PRICES # For get_tile fallback if needed, and add_building
 # from .furniture import Furniture # Keep commented if main.py doesn't use it for this test
 from .rumor import Rumor # Added for rumor system
-from .edict import Edict
+from .edict import Edict, EdictStatus
 from . import config
 
 if TYPE_CHECKING:
@@ -43,6 +44,11 @@ class World:
         self.market_location: Tuple[int, int] = (5, 5) # Central market location
         self.last_tax_collection_day: int = -1
         self.edicts: List[Edict] = []
+
+        # Election state
+        self.is_election_active: bool = False
+        self.candidates: List[str] = []
+        self.ballots: Dict[str, str] = {}
 
     def update_rumors_daily(self):
         """Decays strength of all rumors and removes very weak ones."""
@@ -288,27 +294,23 @@ class World:
         if not self.game_time:
             return
 
-        # Iterate backwards for safe removal
-        for i in range(len(self.edicts) - 1, -1, -1):
-            edict = self.edicts[i]
-            if not edict.is_active:
+        for edict in self.edicts:
+            if edict.status != EdictStatus.ACTIVE:
                 continue
 
             if edict.start_day is None:
                 edict.start_day = self.game_time.current_day
 
             if self.game_time.current_day >= edict.start_day + edict.duration:
-                edict.is_active = False
+                edict.status = EdictStatus.EXPIRED
                 self.add_event_log_message(f"Edict expired: {edict.edict_type}.")
-
-        self.edicts = [e for e in self.edicts if e.is_active]
 
     def get_modified_tax_rate(self) -> float:
         """Calculates the tax rate after applying all active edict effects."""
         base_rate = config.TAX_RATE
         modifier = 0.0
         for edict in self.edicts:
-            if edict.is_active:
+            if edict.status == EdictStatus.ACTIVE:
                 modifier += edict.effects.get("tax_rate_modifier", 0.0)
         return base_rate + modifier
 
@@ -335,100 +337,102 @@ class World:
         pass # Placeholder
 
     def handle_election(self):
-        if not self.game_time or not hasattr(self.game_time, 'days_until_election'):
-            # Should not happen if timer logic is correctly in Time class
-            self.add_event_log_message("Election handling called but game_time or election timer is not properly set up.")
+        from .goal import Goal, GoalType # Local import to avoid circular dependency
+        if not self.game_time:
             return
 
-        self.add_event_log_message(f"--- ELECTION DAY (Day {self.game_time.current_day}) ---")
+        if self.is_election_active:
+            # --- Voting Phase ---
+            self.add_event_log_message("Election Day: The polls are now open!")
+            for char in self.characters:
+                char._cast_vote(self)
 
-        # Identify candidates: e.g., Nobles or high Leadership
-        candidates: List['Character'] = []
-        for char in self.characters:
-            # Example criteria: Noble Lord rank OR Leadership skill > 3
-            # Exclude current mayor from being a "new" candidate if we want to ensure change, or include for re-election.
-            # For now, simple criteria:
-            is_noble_lord = hasattr(char, 'rank') and char.rank == "Noble Lord"
-            leadership_skill = 0
-            if hasattr(char, 'skills') and char.skills and "Leadership" in char.skills and isinstance(char.skills["Leadership"], dict):
-                leadership_skill = char.skills["Leadership"].get("level",0)
+            # --- Tally Votes and Conclude Election ---
+            self.add_event_log_message("Election Day: The polls are now closed. Tallying votes...")
 
-            if is_noble_lord or leadership_skill >= 3: # Min leadership 3 for candidacy
-                if char.job != "Mayor": # Don't add current mayor to candidate list this way, handle re-election separately if needed
-                    candidates.append(char)
+            vote_counts = {candidate: 0 for candidate in self.candidates}
+            for voter_name, voted_for in self.ballots.items():
+                if voted_for in vote_counts:
+                    vote_counts[voted_for] += 1
 
-        current_mayor: Optional['Character'] = None
-        for char in self.characters:
-            if char.job == "Mayor":
-                current_mayor = char
-                if current_mayor not in candidates: # Allow current mayor to be a candidate
-                    # Add them if they meet criteria (e.g. still a Noble Lord, or if their leadership is high enough)
-                    # For simplicity, if they are mayor, they can run again.
-                    # More complex logic could check if they are eligible for re-election.
-                    pass # current_mayor will be handled below
+            self.add_event_log_message(f"Election Results: {vote_counts}")
 
-        if not candidates and not current_mayor:
-            self.add_event_log_message("No eligible candidates found for Mayor. Election postponed.")
-            self.game_time.days_until_election = config.ELECTION_CYCLE_DAYS // 2 # Postpone for a shorter period
-            return
+            if not vote_counts:
+                self.add_event_log_message("No votes were cast. The election is inconclusive.")
+                winner = None
+            else:
+                max_votes = -1
+                winners = []
+                for candidate, count in vote_counts.items():
+                    if count > max_votes:
+                        max_votes = count
+                        winners = [candidate]
+                    elif count == max_votes:
+                        winners.append(candidate)
 
-        # Add current mayor to candidate list if they exist, to allow for re-election possibility
-        # or if they are the only option.
-        eligible_candidates_for_vote = candidates[:] # copy
-        if current_mayor and current_mayor not in eligible_candidates_for_vote:
-             # Re-evaluate if current mayor should always be a candidate or based on criteria
-             is_noble_lord = hasattr(current_mayor, 'rank') and current_mayor.rank == "Noble Lord"
-             leadership_skill = 0
-             if hasattr(current_mayor, 'skills') and current_mayor.skills and "Leadership" in current_mayor.skills and isinstance(current_mayor.skills["Leadership"], dict):
-                leadership_skill = current_mayor.skills["Leadership"].get("level",0)
-             if is_noble_lord or leadership_skill >=3:
-                eligible_candidates_for_vote.append(current_mayor)
+                winner_name = random.choice(winners) if winners else None
+                winner = self.get_character_by_name(winner_name)
 
+            if winner:
+                self.add_event_log_message(f"{winner.name} has been elected as the new Mayor with {max_votes} votes!")
 
-        if not eligible_candidates_for_vote: # Still no one after considering current mayor
-            self.add_event_log_message("No eligible candidates (including current Mayor) for election. Term extended.")
-            if current_mayor:
-                 self.add_event_log_message(f"{current_mayor.name} continues as Mayor by default.")
+                # Depose old mayor
+                current_mayor = next((c for c in self.characters if c.job == "Mayor"), None)
+                if current_mayor and current_mayor.name != winner.name:
+                    self.add_event_log_message(f"Former Mayor {current_mayor.name} steps down.")
+                    current_mayor.job = "Noble"
+                    current_mayor.rank = "Noble"
+                    current_mayor.update_mood_score(-30, "Lost the election.")
+                    current_mayor.update_reputation(-10, "Lost the election.")
+
+                # Promote new mayor
+                winner.job = "Mayor"
+                winner.rank = "Mayor"
+                winner.update_mood_score(40, "Won the election!")
+                winner.update_reputation(20, "Won the election.")
+
+            else:
+                self.add_event_log_message("The election resulted in no clear winner. The previous administration will continue.")
+
+            # Reset election state
+            self.is_election_active = False
+            self.candidates = []
+            self.ballots = {}
             self.game_time.days_until_election = config.ELECTION_CYCLE_DAYS
-            return
 
-        # Winner selection: For now, highest Leadership. Tie-break randomly.
-        eligible_candidates_for_vote.sort(key=lambda c: c.skills.get("Leadership", {}).get("level", 0), reverse=True)
+        else:
+            # --- Start a New Election ---
+            self.is_election_active = True
+            self.add_event_log_message("--- An Election for Mayor has Begun! ---")
 
-        max_leadership = eligible_candidates_for_vote[0].skills.get("Leadership", {}).get("level", 0)
-        top_candidates = [c for c in eligible_candidates_for_vote if c.skills.get("Leadership", {}).get("level", 0) == max_leadership]
+            # Identify candidates
+            potential_candidates = []
+            for char in self.characters:
+                if "Ambitious" in char.traits and char.reputation_score > 20:
+                    potential_candidates.append(char)
 
-        winner = random.choice(top_candidates)
+            # Also consider the current mayor for re-election
+            current_mayor = next((c for c in self.characters if c.job == "Mayor"), None)
+            if current_mayor and current_mayor not in potential_candidates:
+                potential_candidates.append(current_mayor)
 
-        self.add_event_log_message(f"Candidates were: {[c.name for c in eligible_candidates_for_vote]}.")
-        self.add_event_log_message(f"{winner.name} has been elected as the new Mayor with Leadership {winner.skills.get('Leadership', {}).get('level', 0)}!")
+            if len(potential_candidates) < 2:
+                self.add_event_log_message("Not enough candidates for a competitive election. Postponing.")
+                self.is_election_active = False
+                self.game_time.days_until_election = config.ELECTION_CYCLE_DAYS // 2
+                return
 
-        if current_mayor and current_mayor.name != winner.name:
-            self.add_event_log_message(f"Former Mayor {current_mayor.name} steps down.")
-            current_mayor.job = "Noble" # Or "Commoner" or "Unemployed" depending on desired outcome
-            current_mayor.current_goal = current_mayor.job_default_goal()
-            # Clear subordinates if they were managing people directly as Mayor (not typical with current setup)
-            # current_mayor.subordinates_names.clear()
-            if current_mayor.name in winner.subordinates_names: # Should not happen
-                 winner.remove_subordinate(current_mayor.name)
+            self.candidates = [c.name for c in potential_candidates]
+            self.add_event_log_message(f"The candidates are: {', '.join(self.candidates)}")
 
+            # Assign campaigning goal to candidates
+            for char in potential_candidates:
+                char.current_goal = Goal(GoalType.CAMPAIGN_FOR_ELECTION, assignee_id=char.name)
+                char.add_memory("I am running for Mayor! I must campaign to win.")
 
-        winner.job = "Mayor"
-        winner.rank = "Noble Lord" # Ensure rank is appropriate
-        winner.current_goal = winner.job_default_goal() # Should be "Oversee Settlement"
-        winner.appointed_by = None # Elected, not appointed by another individual in this context
-
-        # Clear winner's previous supervisor/appointer if they had one from a lesser role
-        if winner.supervisor_name:
-            old_supervisor = self.get_character_by_name(winner.supervisor_name)
-            if old_supervisor and winner.name in old_supervisor.subordinates_names:
-                old_supervisor.remove_subordinate(winner.name)
-            winner.supervisor_name = None
-        if winner.appointed_by : winner.appointed_by = None
-
-
-        # Reset election timer
-        self.game_time.days_until_election = config.ELECTION_CYCLE_DAYS
+            # Election day is now. In a more complex model, this would set a timer for campaigning.
+            # For now, we immediately proceed to voting on the next tick.
+            self.game_time.days_until_election = 1 # Election day is tomorrow
 
     def add_rumor(self, rumor: Rumor):
         """Adds a new rumor to the world, ensuring it's not a duplicate subject/key too recently."""

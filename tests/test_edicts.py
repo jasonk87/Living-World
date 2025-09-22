@@ -5,6 +5,7 @@ from game.world import World
 from game.time import Time
 from game.goal import Goal, GoalType
 from game.stockpile import Stockpile
+from game.edict import EdictStatus
 from game import config
 
 class TestEdicts(unittest.TestCase):
@@ -95,7 +96,7 @@ class TestEdicts(unittest.TestCase):
         for _ in range((duration -1) * self.time.ticks_per_day):
             self.time.tick()
         self.world.update_edicts() # Check for expiration
-        self.assertTrue(tax_hike_edict.is_active)
+        self.assertEqual(tax_hike_edict.status, EdictStatus.ACTIVE)
         self.assertEqual(len(self.world.edicts), 1)
 
         # Advance time to expiration
@@ -103,7 +104,8 @@ class TestEdicts(unittest.TestCase):
             self.time.tick()
         self.world.update_edicts() # Check for expiration
 
-        self.assertEqual(len(self.world.edicts), 0) # Edict should be removed from active list
+        self.assertEqual(tax_hike_edict.status, EdictStatus.EXPIRED)
+        self.assertEqual(len(self.world.edicts), 1) # Edict should still be in the list, just expired
 
         # Verify effect is no longer active
         final_tax_rate = self.world.get_modified_tax_rate()

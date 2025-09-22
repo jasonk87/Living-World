@@ -79,6 +79,7 @@ class GoalType(Enum):
     COLLECT_REVENUE_FROM_DOMAIN = auto() # Landed Nobles
     ISSUE_DOMAIN_EDICT = auto() # Landed Nobles
     REVIEW_PENDING_EDICTS = auto() # Mayor reviewing edicts from subordinates
+    CAMPAIGN_FOR_ELECTION = auto() # For mayoral candidates
     ATTEND_COURT_SOCIAL_EVENT = auto() # All Nobles
     ATTEMPT_TO_INFLUENCE_NOBLE = auto() # All Nobles
     HOST_SOCIAL_GATHERING = auto() # All Nobles

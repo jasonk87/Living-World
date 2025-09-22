@@ -1664,6 +1664,74 @@ class Character:
         # Move to the next goal
         self.current_goal = self.get_default_goal()
 
+    def _execute_campaign_for_election(self, world: 'World'):
+        """
+        Executes the campaign goal for a character running for office.
+        """
+        self.add_memory("I am campaigning for the election.")
+
+        # Decide on a campaign action
+        action_chance = random.random()
+
+        if action_chance < 0.2: # 20% chance to give a speech
+            self.add_memory("I think a rousing speech will win some votes.")
+            self.current_goal = Goal(GoalType.GIVE_SPEECH, assignee_id=self.name, originator_id=self.name)
+            return
+
+        elif action_chance < 0.7: # 50% chance to try and improve relationships
+            self.add_memory("I should mingle with the populace to get their support.")
+            # Find a nearby character to interact with
+            nearby_chars = world.get_nearby_characters(self, radius=5)
+            if nearby_chars:
+                target_char = random.choice(nearby_chars)
+                # Choose a positive social interaction
+                social_goal_type = random.choice([GoalType.GREET_CHARACTER, GoalType.SMALL_TALK])
+                self.current_goal = Goal(social_goal_type, assignee_id=self.name, originator_id=self.name, parameters={"target_char_name": target_char.name})
+                return
+
+        # Default action is to wander and look important
+        self.add_memory("I am wandering the settlement to increase my visibility.")
+        self._execute_wander(world)
+
+    def _cast_vote(self, world: 'World'):
+        """
+        Casts a vote for a candidate in the current election.
+        """
+        if not world.is_election_active or not world.candidates:
+            return
+
+        candidate_scores: Dict[str, float] = {name: 0.0 for name in world.candidates}
+
+        for candidate_name in world.candidates:
+            candidate = world.get_character_by_name(candidate_name)
+            if not candidate:
+                continue
+
+            # Relationship influence
+            relationship_score = self.get_relationship_score(candidate_name)
+            candidate_scores[candidate_name] += relationship_score * 0.5
+
+            # Reputation influence
+            candidate_scores[candidate_name] += candidate.reputation_score * 0.3
+
+            # Trait-based influence
+            if "Rebellious" in self.traits:
+                if candidate.job == "Mayor": # Vote against the incumbent
+                    candidate_scores[candidate_name] -= 50
+
+            if "Traditionalist" in self.traits:
+                if candidate.job == "Mayor": # Vote for the incumbent
+                    candidate_scores[candidate_name] += 30
+
+        if not candidate_scores:
+            return # No valid candidates to score
+
+        # Choose the candidate with the highest score
+        best_candidate = max(candidate_scores, key=candidate_scores.get)
+
+        world.ballots[self.name] = best_candidate
+        self.add_memory(f"I have cast my vote for {best_candidate} for Mayor.")
+
     def _execute_oversee_domain(self, world: 'World'):
         """
         Allows a Noble to oversee their domain, with behavior based on traits.
@@ -2326,6 +2394,7 @@ class Character:
         elif self.current_goal.type == GoalType.COLLECT_REVENUE_FROM_DOMAIN: self._execute_collect_revenue_from_domain(world)
         elif self.current_goal.type == GoalType.ISSUE_DOMAIN_EDICT: self._execute_issue_domain_edict(world)
         elif self.current_goal.type == GoalType.REVIEW_PENDING_EDICTS: self._execute_review_pending_edicts(world)
+        elif self.current_goal.type == GoalType.CAMPAIGN_FOR_ELECTION: self._execute_campaign_for_election(world)
         elif self.current_goal.type == GoalType.OVERSEE_MEDICAL_OPERATIONS: self._execute_oversee_medical_operations(world)
         elif self.current_goal.type == GoalType.PROVIDE_MEDICAL_CARE: self._execute_provide_medical_care(world)
         elif self.current_goal.type == GoalType.MAINTAIN_PEACE_IN_SETTLEMENT: self._execute_maintain_peace(world)
