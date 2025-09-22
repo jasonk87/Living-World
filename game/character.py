@@ -1528,6 +1528,37 @@ class Character:
         # Goal is complete for this cycle
         self.current_goal = self.get_default_goal()
 
+    def _execute_oversee_domain(self, world: 'World'):
+        """
+        Allows a Noble to oversee their domain, with behavior based on traits.
+        This goal is a high-level goal that will delegate to a more specific goal.
+        """
+        if self.rank not in ["Noble Lord", "Baron"]:
+            self.add_memory("I am not a landed noble and cannot oversee a domain.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        # Trait-based behavior
+        if "Diligent" in self.traits:
+            self.add_memory("As a diligent noble, I will patrol my domain to check on things.")
+            self.current_goal = Goal(GoalType.PATROL_AREA, assignee_id=self.name, originator_id=self.name)
+        elif "Greedy" in self.traits:
+            self.add_memory("As a greedy noble, I will assess the wealth of my domain.")
+            # This will trigger the collection of taxes if available.
+            self.current_goal = Goal(GoalType.COLLECT_REVENUE_FROM_DOMAIN, assignee_id=self.name, originator_id=self.name)
+        elif "Sociable" in self.traits:
+            self.add_memory("As a sociable noble, I will wander through the common areas to gauge the mood of the populace.")
+            self.current_goal = Goal(GoalType.WANDER, assignee_id=self.name, originator_id=self.name, parameters={"reason": "socializing"})
+        elif "Lazy" in self.traits:
+            self.add_memory("As a lazy noble, I will find a comfortable spot and remain idle.")
+            self.current_goal = Goal(GoalType.IDLE, assignee_id=self.name, originator_id=self.name)
+        else:
+            # Default behavior for nobles without specific traits
+            self.add_memory("I will wander my domain, observing the goings-on.")
+            self.current_goal = Goal(GoalType.WANDER, assignee_id=self.name, originator_id=self.name)
+
+        # The goal is now set for the next tick.
+
     def _execute_provide_medical_care(self, world: 'World'):
         if self.job != "Medic":
             self.current_goal = self.get_default_goal()
@@ -1834,11 +1865,7 @@ class Character:
         return
 
     def _execute_patrol_area(self, world: 'World'): # For Deputy
-        if self.job != "Deputy":
-            self.current_goal = self.get_default_goal()
-            return
-
-        self.add_memory(f"Deputy {self.name} is patrolling their assigned area.")
+        self.add_memory("I am patrolling my assigned area.")
 
         # Simple patrolling behavior: move randomly or towards predefined points.
         # For now, just a random move.
@@ -2142,6 +2169,7 @@ class Character:
         elif self.current_goal.type == GoalType.MANAGE_SUBORDINATES: self._execute_manage_subordinates(world)
         elif self.current_goal.type == GoalType.MAINTAIN_LEDGER: self._execute_maintain_ledger(world)
         elif self.current_goal.type == GoalType.OVERSEE_SETTLEMENT: self._execute_oversee_settlement(world)
+        elif self.current_goal.type == GoalType.OVERSEE_DOMAIN: self._execute_oversee_domain(world)
         elif self.current_goal.type == GoalType.COLLECT_REVENUE_FROM_DOMAIN: self._execute_collect_revenue_from_domain(world)
         elif self.current_goal.type == GoalType.OVERSEE_MEDICAL_OPERATIONS: self._execute_oversee_medical_operations(world)
         elif self.current_goal.type == GoalType.PROVIDE_MEDICAL_CARE: self._execute_provide_medical_care(world)

@@ -68,5 +68,43 @@ class TestNobleGoals(unittest.TestCase):
         self.assertEqual(self.noble.money, money_after_first_collection) # Money should not change
         self.assertTrue(any("Taxes have already been collected for the day." in m for m in self.noble.memory))
 
+    def test_oversee_domain_diligent_noble(self):
+        self.noble.traits = ["Diligent"]
+        self.noble.current_goal = Goal(GoalType.OVERSEE_DOMAIN, assignee_id=self.noble.name)
+        self.noble.decide_action(self.world)
+        self.assertEqual(self.noble.current_goal.type, GoalType.PATROL_AREA)
+        self.assertTrue(any("diligent noble, I will patrol" in m for m in self.noble.memory))
+
+    def test_oversee_domain_greedy_noble(self):
+        self.noble.traits = ["Greedy"]
+        self.noble.current_goal = Goal(GoalType.OVERSEE_DOMAIN, assignee_id=self.noble.name)
+        self.noble.decide_action(self.world)
+        self.assertEqual(self.noble.current_goal.type, GoalType.COLLECT_REVENUE_FROM_DOMAIN)
+        self.assertTrue(any("greedy noble, I will assess the wealth" in m for m in self.noble.memory))
+
+    def test_oversee_domain_sociable_noble(self):
+        self.noble.traits = ["Sociable"]
+        self.noble.current_goal = Goal(GoalType.OVERSEE_DOMAIN, assignee_id=self.noble.name)
+        self.noble.decide_action(self.world)
+        self.assertEqual(self.noble.current_goal.type, GoalType.WANDER)
+        self.assertEqual(self.noble.current_goal.parameters.get("reason"), "socializing")
+        self.assertTrue(any("sociable noble, I will wander" in m for m in self.noble.memory))
+
+    def test_oversee_domain_lazy_noble(self):
+        self.noble.traits = ["Lazy"]
+        self.noble.current_goal = Goal(GoalType.OVERSEE_DOMAIN, assignee_id=self.noble.name)
+        self.noble.decide_action(self.world)
+        self.assertEqual(self.noble.current_goal.type, GoalType.IDLE)
+        self.assertTrue(any("lazy noble, I will find a comfortable spot" in m for m in self.noble.memory))
+
+    def test_oversee_domain_default_noble(self):
+        self.noble.traits = ["Average"] # A neutral trait
+        self.noble.current_goal = Goal(GoalType.OVERSEE_DOMAIN, assignee_id=self.noble.name)
+        self.noble.decide_action(self.world)
+        self.assertEqual(self.noble.current_goal.type, GoalType.WANDER)
+        self.assertNotIn("reason", self.noble.current_goal.parameters) # Should not have a specific reason
+        self.assertTrue(any("wander my domain, observing" in m for m in self.noble.memory))
+
+
 if __name__ == '__main__':
     unittest.main()
