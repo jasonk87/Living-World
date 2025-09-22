@@ -8,6 +8,8 @@ from .building import Building
 from .data import STRUCTURE_BLUEPRINTS, MARKET_PRICES # For get_tile fallback if needed, and add_building
 # from .furniture import Furniture # Keep commented if main.py doesn't use it for this test
 from .rumor import Rumor # Added for rumor system
+from .edict import Edict
+from . import config
 
 if TYPE_CHECKING:
     from .character import Character
@@ -40,6 +42,7 @@ class World:
         self.market_prices: Dict[str, int] = MARKET_PRICES
         self.market_location: Tuple[int, int] = (5, 5) # Central market location
         self.last_tax_collection_day: int = -1
+        self.edicts: List[Edict] = []
 
     def update_rumors_daily(self):
         """Decays strength of all rumors and removes very weak ones."""
@@ -271,6 +274,44 @@ class World:
             if char.name == name:
                 return char
         return None
+
+    def add_edict(self, edict: Edict):
+        """Adds a new edict to the world."""
+        if not self.game_time:
+            print("Warning: Cannot add edict, game_time not set in world.")
+            return
+        self.edicts.append(edict)
+        self.add_event_log_message(f"New Edict enacted: {edict.edict_type}. Duration: {edict.duration} days.")
+
+    def update_edicts(self):
+        """Processes active edicts, applying their effects and removing expired ones."""
+        if not self.game_time:
+            return
+
+        # Iterate backwards for safe removal
+        for i in range(len(self.edicts) - 1, -1, -1):
+            edict = self.edicts[i]
+            if not edict.is_active:
+                continue
+
+            if edict.start_day is None:
+                edict.start_day = self.game_time.current_day
+
+            if self.game_time.current_day >= edict.start_day + edict.duration:
+                edict.is_active = False
+                self.add_event_log_message(f"Edict expired: {edict.edict_type}.")
+
+        self.edicts = [e for e in self.edicts if e.is_active]
+
+
+    def get_modified_tax_rate(self) -> float:
+        """Calculates the tax rate after applying all active edict effects."""
+        base_rate = config.TAX_RATE
+        modifier = 0.0
+        for edict in self.edicts:
+            if edict.is_active:
+                modifier += edict.effects.get("tax_rate_modifier", 0.0)
+        return base_rate + modifier
 
     def calculate_total_wealth(self) -> int:
         """

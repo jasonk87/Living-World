@@ -548,3 +548,32 @@ MARKET_PRICES = {
     "Stone": 3, # Price to buy 1 unit of stone
     "Food": 4, # Price to buy 1 unit of food
 }
+
+# --- Edicts Data ---
+EDICTS = {
+    "Tax_Hike": {
+        "description": "Increases tax rate for a short period.",
+        "duration": 10, # in days
+        "effects": {"tax_rate_modifier": 0.05}
+    },
+    "Tax_Relief": {
+        "description": "Decreases tax rate to improve citizen happiness.",
+        "duration": 15,
+        "effects": {"tax_rate_modifier": -0.02, "global_mood_modifier": 5}
+    },
+    "Increased_Production": {
+        "description": "Mandates longer working hours to boost production.",
+        "duration": 7,
+        "effects": {"production_speed_modifier": 0.1, "global_mood_modifier": -5}
+    },
+    "Conscription": {
+        "description": "Drafts citizens into the guard, increasing security.",
+        "duration": 20,
+        "effects": {"security_level_modifier": 10, "global_mood_modifier": -10}
+    },
+    "Festival_Day": {
+        "description": "Declares a day of festival, boosting morale.",
+        "duration": 1,
+        "effects": {"global_mood_modifier": 15, "production_speed_modifier": -0.5}
+    }
+}

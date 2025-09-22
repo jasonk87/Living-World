@@ -4,10 +4,11 @@ import random
 from .llm_integration import generate_dialogue # Kept as it's used
 # from .stockpile import Stockpile # Not directly used by Character methods
 # from .work_order import WorkOrder # Not directly used by Character methods
-from .data import BLUEPRINTS, JOB_TASK_DEFINITIONS, STRUCTURE_BLUEPRINTS, JOB_SALARIES
+from .data import BLUEPRINTS, JOB_TASK_DEFINITIONS, STRUCTURE_BLUEPRINTS, JOB_SALARIES, EDICTS
 from . import config
 from .goal import Goal, GoalType, GoalStatus, DEFAULT_IDLE_GOAL, create_goal_from_job
 from .rumor import Rumor # Added for rumor generation
+from .edict import Edict
 
 if TYPE_CHECKING:
     from .world import World
@@ -77,6 +78,7 @@ class Character:
         self.assigned_tasks: List[Dict] = [] # TODO: Re-evaluate if this is needed with Goal objects
         self.performance_rating: str = "Not Evaluated"
         self.last_performance_review_day: Optional[int] = None
+        self.last_edict_day: Optional[int] = None
         self.warning_count: int = 0
         self.resource_to_fetch: Optional[Dict] = None # Params for Fetch Resource goals
         self.workshop_location: Optional[Tuple[int,int]] = None # Params for Craft Order goal
@@ -520,6 +522,7 @@ class Character:
             "supervisor_name": self.supervisor_name,
             "subordinates_names": self.subordinates_names,
             "performance_rating": self.performance_rating,
+            "last_edict_day": self.last_edict_day,
             "warning_count": self.warning_count,
             "known_characters": self.known_characters,
             "relationships": self.relationships,
@@ -1528,6 +1531,72 @@ class Character:
         # Goal is complete for this cycle
         self.current_goal = self.get_default_goal()
 
+    def _execute_issue_domain_edict(self, world: 'World'):
+        """
+        Allows a Noble to issue a domain-wide edict.
+        """
+        if self.rank not in ["Noble Lord", "Baron", "Mayor"]:
+            self.add_memory("I am not of a rank to issue edicts.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        if world.game_time is None:
+            return # Should not happen
+
+        # Check edict cooldown
+        if self.last_edict_day is not None and (world.game_time.current_day - self.last_edict_day) < config.EDICT_COOLDOWN_DAYS:
+            self.add_memory("It is too soon to issue another edict.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        # Trait-based edict selection
+        edict_weights = {edict_name: 1.0 for edict_name in EDICTS.keys()}
+
+        if "Greedy" in self.traits:
+            edict_weights["Tax_Hike"] = edict_weights.get("Tax_Hike", 1.0) * 3.0
+        if "Kind" in self.traits or "Compassionate" in self.traits:
+            edict_weights["Tax_Relief"] = edict_weights.get("Tax_Relief", 1.0) * 3.0
+            edict_weights["Festival_Day"] = edict_weights.get("Festival_Day", 1.0) * 2.0
+        if "Diligent" in self.traits:
+            edict_weights["Increased_Production"] = edict_weights.get("Increased_Production", 1.0) * 3.0
+        if "Strict" in self.traits or "Hot-headed" in self.traits:
+            edict_weights["Conscription"] = edict_weights.get("Conscription", 1.0) * 2.0
+
+        # Prevent issuing an edict that is already active
+        active_edict_types = [e.edict_type for e in world.edicts]
+        for active_edict in active_edict_types:
+            if active_edict in edict_weights:
+                del edict_weights[active_edict]
+
+        if not edict_weights:
+            self.add_memory("Considered issuing an edict, but all options are already active or unsuitable.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        # Weighted random choice
+        choices = list(edict_weights.keys())
+        weights = list(edict_weights.values())
+        chosen_edict_name = random.choices(choices, weights=weights, k=1)[0]
+
+        edict_data = EDICTS[chosen_edict_name]
+
+        new_edict = Edict(
+            edict_type=chosen_edict_name,
+            issued_by=self.name,
+            start_day=world.game_time.current_day,
+            duration=edict_data["duration"],
+            effects=edict_data["effects"].copy()
+        )
+
+        world.add_edict(new_edict)
+        self.last_edict_day = world.game_time.current_day
+
+        self.add_memory(f"I have issued the '{chosen_edict_name}' edict for the domain.")
+        world.add_event_log_message(f"{self.rank} {self.name} has issued the '{chosen_edict_name}' edict.")
+
+        # Goal is complete for this cycle
+        self.current_goal = self.get_default_goal()
+
     def _execute_oversee_domain(self, world: 'World'):
         """
         Allows a Noble to oversee their domain, with behavior based on traits.
@@ -1536,6 +1605,12 @@ class Character:
         if self.rank not in ["Noble Lord", "Baron"]:
             self.add_memory("I am not a landed noble and cannot oversee a domain.")
             self.current_goal = self.get_default_goal()
+            return
+
+        # Add a chance to issue an edict
+        if random.random() < 0.1: # 10% chance
+            self.add_memory("I am considering issuing a new edict for my domain.")
+            self.current_goal = Goal(GoalType.ISSUE_DOMAIN_EDICT, assignee_id=self.name, originator_id=self.name)
             return
 
         # Trait-based behavior
@@ -2171,6 +2246,7 @@ class Character:
         elif self.current_goal.type == GoalType.OVERSEE_SETTLEMENT: self._execute_oversee_settlement(world)
         elif self.current_goal.type == GoalType.OVERSEE_DOMAIN: self._execute_oversee_domain(world)
         elif self.current_goal.type == GoalType.COLLECT_REVENUE_FROM_DOMAIN: self._execute_collect_revenue_from_domain(world)
+        elif self.current_goal.type == GoalType.ISSUE_DOMAIN_EDICT: self._execute_issue_domain_edict(world)
         elif self.current_goal.type == GoalType.OVERSEE_MEDICAL_OPERATIONS: self._execute_oversee_medical_operations(world)
         elif self.current_goal.type == GoalType.PROVIDE_MEDICAL_CARE: self._execute_provide_medical_care(world)
         elif self.current_goal.type == GoalType.MAINTAIN_PEACE_IN_SETTLEMENT: self._execute_maintain_peace(world)

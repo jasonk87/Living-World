@@ -19,6 +19,10 @@ class Time:
                 self.days_until_election -= 1
         return new_day_started
 
+    def advance_time(self, ticks: int):
+        for _ in range(ticks):
+            self.tick()
+
     def get_time_of_day(self) -> str:
         # Simple representation for now
         return f"Day {self.current_day}, Tick {self.current_tick}/{self.ticks_per_day}"
