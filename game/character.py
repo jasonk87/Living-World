@@ -669,9 +669,9 @@ class Character:
         if self.job == "Medic": return "Provide Medical Care"
         if self.job == "Sheriff": return "Maintain Peace in Settlement"
         if self.job == "Deputy": return "Patrol Area"
-        if self.rank in ["Noble Lord", "Baron"] and not self.subordinates_names:
+        if self.rank in ["Noble Lord", "Baron", "Baroness", "Viscount", "Count", "Marquis", "Duke"] and not self.subordinates_names:
             return "Oversee Domain"
-        elif self.rank in ["Noble Lord", "Baron"]:
+        elif self.rank in ["Noble Lord", "Baron", "Baroness", "Viscount", "Count", "Marquis", "Duke"]:
             return "Manage Subordinates"
         return "Idle" # Corresponds to GoalType.IDLE
 

@@ -281,7 +281,12 @@ ROLE_HIERARCHY = {
     "Chief Medical Officer": "Mayor",
     "Sheriff": "Mayor",
     "Noble Lord": "Mayor",  # For settlement-level concerns, even if landed.
+    "Duke": "Mayor",
+    "Marquis": "Mayor",
+    "Count": "Mayor",
+    "Viscount": "Mayor",
     "Baron": "Mayor",       # Similar to Noble Lord, potentially higher standing.
+    "Baroness": "Mayor",
 
     # Report to Manager
     "Master Craftsman": "Manager",
@@ -305,7 +310,7 @@ ROLE_HIERARCHY = {
 
 # Defines which jobs or ranks are considered part of the "nobility"
 # This can be used for social interactions, access to certain areas, or game mechanics.
-NOBLE_RANKS_OR_JOBS = ["Mayor", "Noble Lord", "Baron"]
+NOBLE_RANKS_OR_JOBS = ["Mayor", "Noble Lord", "Duke", "Marquis", "Count", "Viscount", "Baron", "Baroness"]
 
 # Defines key official positions that the Mayor (or equivalent top leader) can appoint.
 MAYORAL_APPOINTMENTS = ["Manager", "Militia Commander", "Chief Medical Officer", "Sheriff"]
@@ -431,6 +436,41 @@ ROLE_DETAILS = {
         "job_default_goal": "Oversee Domain" # (if landed), or "MaintainInfluence" (if courtier) - needs refinement in Character.job_default_goal
     },
     "Baron": { # Largely same as Noble Lord, could have higher base influence or larger domain by convention
+        "description": "A noble of significant standing, often with land and titles.",
+        "reports_to": "Mayor",
+        "responsibilities": ["Similar to Noble Lord, potentially with greater scope or expectation."],
+        "capabilities": ["Similar to Noble Lord, potentially with greater impact or access."],
+        "job_default_goal": "Oversee Domain"
+    },
+    "Baroness": { # Largely same as Noble Lord, could have higher base influence or larger domain by convention
+        "description": "A noble of significant standing, often with land and titles.",
+        "reports_to": "Mayor",
+        "responsibilities": ["Similar to Noble Lord, potentially with greater scope or expectation."],
+        "capabilities": ["Similar to Noble Lord, potentially with greater impact or access."],
+        "job_default_goal": "Oversee Domain"
+    },
+    "Viscount": { # Largely same as Noble Lord, could have higher base influence or larger domain by convention
+        "description": "A noble of significant standing, often with land and titles.",
+        "reports_to": "Mayor",
+        "responsibilities": ["Similar to Noble Lord, potentially with greater scope or expectation."],
+        "capabilities": ["Similar to Noble Lord, potentially with greater impact or access."],
+        "job_default_goal": "Oversee Domain"
+    },
+    "Count": { # Largely same as Noble Lord, could have higher base influence or larger domain by convention
+        "description": "A noble of significant standing, often with land and titles.",
+        "reports_to": "Mayor",
+        "responsibilities": ["Similar to Noble Lord, potentially with greater scope or expectation."],
+        "capabilities": ["Similar to Noble Lord, potentially with greater impact or access."],
+        "job_default_goal": "Oversee Domain"
+    },
+    "Marquis": { # Largely same as Noble Lord, could have higher base influence or larger domain by convention
+        "description": "A noble of significant standing, often with land and titles.",
+        "reports_to": "Mayor",
+        "responsibilities": ["Similar to Noble Lord, potentially with greater scope or expectation."],
+        "capabilities": ["Similar to Noble Lord, potentially with greater impact or access."],
+        "job_default_goal": "Oversee Domain"
+    },
+    "Duke": { # Largely same as Noble Lord, could have higher base influence or larger domain by convention
         "description": "A noble of significant standing, often with land and titles.",
         "reports_to": "Mayor",
         "responsibilities": ["Similar to Noble Lord, potentially with greater scope or expectation."],
@@ -594,4 +634,9 @@ ROLE_EDICTS = {
     "Militia Commander": ["Conscription", "Militia_Training_Drill"],
     "Noble Lord": ["Tax_Hike", "Increased_Production"],
     "Baron": ["Tax_Hike", "Increased_Production"],
+    "Baroness": ["Tax_Hike", "Increased_Production"],
+    "Viscount": ["Tax_Hike", "Increased_Production"],
+    "Count": ["Tax_Hike", "Increased_Production"],
+    "Marquis": ["Tax_Hike", "Increased_Production"],
+    "Duke": ["Tax_Hike", "Increased_Production"],
 }
