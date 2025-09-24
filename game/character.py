@@ -8,8 +8,6 @@ from .data import BLUEPRINTS, JOB_TASK_DEFINITIONS, STRUCTURE_BLUEPRINTS, JOB_SA
 from . import config
 from .goal import Goal, GoalType, GoalStatus, DEFAULT_IDLE_GOAL, create_goal_from_job
 from .rumor import Rumor # Added for rumor generation
-from .edict import Edict, EdictStatus
-from .data import EDICTS, ROLE_EDICTS
 
 if TYPE_CHECKING:
     from .world import World
@@ -26,7 +24,9 @@ class Character:
                  max_inventory_items: int = 10,
                  rank: str = "Worker",
                  money: int = 10,
-                 family_members: Optional[List[str]] = None): # New family_members parameter
+                 family_members: Optional[List[str]] = None,
+                 liege: Optional[str] = None,
+                 vassals: Optional[List[str]] = None):
         self.name = name; self.personality = personality; self.traits = traits;
         self.money: int = money
         self.family_members: List[str] = family_members if family_members else []
@@ -76,10 +76,11 @@ class Character:
         self.materials_gathered_for_wo: bool = False; self.items_crafted_for_wo: bool = False
 
         self.rank: str = rank
+        self.liege: Optional[str] = liege
+        self.vassals: List[str] = vassals if vassals is not None else []
         self.assigned_tasks: List[Dict] = [] # TODO: Re-evaluate if this is needed with Goal objects
         self.performance_rating: str = "Not Evaluated"
         self.last_performance_review_day: Optional[int] = None
-        self.last_edict_day: Optional[int] = None
         self.warning_count: int = 0
         self.resource_to_fetch: Optional[Dict] = None # Params for Fetch Resource goals
         self.workshop_location: Optional[Tuple[int,int]] = None # Params for Craft Order goal
@@ -516,6 +517,8 @@ class Character:
             "money": self.money,
             "current_goal": self.current_goal.to_dict() if self.current_goal else None,
             "rank": self.rank,
+            "liege": self.liege,
+            "vassals": self.vassals,
             "is_sick": self.is_sick,
             "sickness_severity": self.sickness_severity,
             "is_injured": self.is_injured,
@@ -523,7 +526,6 @@ class Character:
             "supervisor_name": self.supervisor_name,
             "subordinates_names": self.subordinates_names,
             "performance_rating": self.performance_rating,
-            "last_edict_day": self.last_edict_day,
             "warning_count": self.warning_count,
             "known_characters": self.known_characters,
             "relationships": self.relationships,
@@ -669,6 +671,8 @@ class Character:
         if self.job == "Medic": return "Provide Medical Care"
         if self.job == "Sheriff": return "Maintain Peace in Settlement"
         if self.job == "Deputy": return "Patrol Area"
+        if self.job == "Reeve": return "Manage Estate"
+        if self.job == "Bailiff": return "Assist Reeve"
         if self.rank in ["Noble Lord", "Baron"] and not self.subordinates_names:
             return "Oversee Domain"
         elif self.rank in ["Noble Lord", "Baron"]:
@@ -1494,281 +1498,6 @@ class Character:
              self.add_memory(f"CMO {self.name} reviews medical protocols and staff readiness.")
         return
 
-    def _execute_collect_revenue_from_domain(self, world: 'World'):
-        """
-        Allows a Noble to collect taxes from the settlement's wealth.
-        """
-        # Ensure character is a noble
-        if self.rank not in ["Noble Lord", "Baron", "Mayor"]: # Mayors can also collect revenue
-            self.add_memory("I am not a noble and cannot collect revenue.")
-            self.current_goal = self.get_default_goal()
-            return
-
-        # Check if taxes have already been collected today
-        if not world.game_time or world.last_tax_collection_day >= world.game_time.current_day:
-            self.add_memory("Taxes have already been collected for the day.")
-            self.current_goal = self.get_default_goal() # Nothing to do, become idle
-            return
-
-        total_wealth = world.calculate_total_wealth()
-        if total_wealth <= 0:
-            self.add_memory("The settlement has no wealth to tax.")
-            self.current_goal = self.get_default_goal()
-            return
-
-        tax_amount = int(total_wealth * world.get_modified_tax_rate())
-
-        if tax_amount <= 0:
-            self.add_memory(f"The calculated tax revenue ({tax_amount}) is too low to collect.")
-            world.last_tax_collection_day = world.game_time.current_day # Mark as collected even if 0
-            self.current_goal = self.get_default_goal()
-            return
-
-        self.money += tax_amount
-        world.last_tax_collection_day = world.game_time.current_day
-        self.add_memory(f"I have collected {tax_amount} in taxes from the domain, based on a total wealth of {total_wealth}.")
-        self.update_mood_score(config.MOOD_CHANGE_GOT_PAID * 2, f"Collected {tax_amount} in taxes")
-
-        # Goal is complete for this cycle
-        self.current_goal = self.get_default_goal()
-
-    def _execute_issue_domain_edict(self, world: 'World'):
-        """
-        Allows a Noble to issue a domain-wide edict.
-        """
-        if world.game_time is None:
-            return # Should not happen
-
-        # Check edict cooldown
-        if self.last_edict_day is not None and (world.game_time.current_day - self.last_edict_day) < config.EDICT_COOLDOWN_DAYS:
-            self.add_memory("It is too soon to issue another edict.")
-            self.current_goal = self.get_default_goal()
-            return
-
-        # Role-based edict filtering
-        allowed_edicts = ROLE_EDICTS.get(self.job, [])
-        if not allowed_edicts:
-            self.add_memory("My role does not permit me to issue any edicts.")
-            self.current_goal = self.get_default_goal()
-            return
-
-        # Trait-based edict selection from the allowed list
-        edict_weights = {edict_name: 1.0 for edict_name in allowed_edicts}
-
-        if "Greedy" in self.traits:
-            edict_weights["Tax_Hike"] = edict_weights.get("Tax_Hike", 1.0) * 3.0
-        if "Kind" in self.traits or "Compassionate" in self.traits:
-            edict_weights["Tax_Relief"] = edict_weights.get("Tax_Relief", 1.0) * 3.0
-            edict_weights["Festival_Day"] = edict_weights.get("Festival_Day", 1.0) * 2.0
-        if "Diligent" in self.traits:
-            edict_weights["Increased_Production"] = edict_weights.get("Increased_Production", 1.0) * 3.0
-        if "Strict" in self.traits or "Hot-headed" in self.traits:
-            edict_weights["Conscription"] = edict_weights.get("Conscription", 1.0) * 2.0
-
-        # Prevent issuing an edict that is already active
-        active_edict_types = [e.edict_type for e in world.edicts]
-        for active_edict in active_edict_types:
-            if active_edict in edict_weights:
-                del edict_weights[active_edict]
-
-        if not edict_weights:
-            self.add_memory("Considered issuing an edict, but all options are already active or unsuitable.")
-            self.current_goal = self.get_default_goal()
-            return
-
-        # Weighted random choice
-        choices = list(edict_weights.keys())
-        weights = list(edict_weights.values())
-        chosen_edict_name = random.choices(choices, weights=weights, k=1)[0]
-
-        edict_data = EDICTS[chosen_edict_name]
-
-        # Determine initial edict status based on role
-        initial_status = EdictStatus.ACTIVE if self.job == "Mayor" else EdictStatus.PENDING
-
-        new_edict = Edict(
-            edict_type=chosen_edict_name,
-            issued_by=self.name,
-            start_day=world.game_time.current_day,
-            duration=edict_data["duration"],
-            effects=edict_data["effects"].copy(),
-            status=initial_status
-        )
-
-        world.add_edict(new_edict)
-        self.last_edict_day = world.game_time.current_day
-
-        self.add_memory(f"I have issued the '{chosen_edict_name}' edict for the domain.")
-        world.add_event_log_message(f"{self.rank} {self.name} has issued the '{chosen_edict_name}' edict.")
-
-        # Goal is complete for this cycle
-        self.current_goal = self.get_default_goal()
-
-    def _execute_review_pending_edicts(self, world: 'World'):
-        """
-        Allows a Mayor to review and approve/reject edicts issued by subordinates.
-        """
-        if self.job != "Mayor":
-            self.add_memory("I am not the Mayor and cannot review edicts.")
-            self.current_goal = self.get_default_goal()
-            return
-
-        pending_edicts = [e for e in world.edicts if e.status == EdictStatus.PENDING]
-
-        if not pending_edicts:
-            self.add_memory("There are no pending edicts to review.")
-            self.current_goal = self.get_default_goal()
-            return
-
-        # Review one edict per cycle for now
-        edict_to_review = pending_edicts[0]
-        issuer = world.get_character_by_name(edict_to_review.issued_by)
-        if not issuer:
-            edict_to_review.status = EdictStatus.REJECTED # Or some other status for invalid issuer
-            self.add_memory(f"Rejected edict {edict_to_review.edict_type} because issuer {edict_to_review.issued_by} not found.")
-            return
-
-        # Decision logic based on Mayor's traits and relationship
-        approval_chance = 0.6 # Base chance
-        if "Kind" in self.traits: approval_chance += 0.2
-        if "Strict" in self.traits: approval_chance -= 0.2
-        if "Ruthless" in self.traits: approval_chance -= 0.3
-
-        relationship_score = self.get_relationship_score(issuer.name)
-        relationship_modifier = (relationship_score / 100.0) * 0.2 # Max +/- 20% influence
-        approval_chance += relationship_modifier
-
-        approval_chance = max(0.05, min(0.95, approval_chance))
-
-        if random.random() < approval_chance:
-            # Approve the edict
-            edict_to_review.status = EdictStatus.ACTIVE
-            self.add_memory(f"I have approved the '{edict_to_review.edict_type}' edict from {issuer.name}.")
-            world.add_event_log_message(f"Mayor {self.name} has approved the '{edict_to_review.edict_type}' edict from {issuer.name}.")
-
-            # Relationship boost
-            self.modify_relationship(issuer.name, 10, world, f"Approved their '{edict_to_review.edict_type}' edict.")
-            issuer.modify_relationship(self.name, 15, world, f"My '{edict_to_review.edict_type}' edict was approved by the Mayor.")
-            issuer.update_mood_score(config.MOOD_CHANGE_SUCCESSFUL_TASK_MAJOR, f"My edict '{edict_to_review.edict_type}' was approved.")
-        else:
-            # Reject the edict
-            edict_to_review.status = EdictStatus.REJECTED
-            self.add_memory(f"I have rejected the '{edict_to_review.edict_type}' edict from {issuer.name}.")
-            world.add_event_log_message(f"Mayor {self.name} has rejected the '{edict_to_review.edict_type}' edict from {issuer.name}.")
-
-            # Relationship penalty
-            self.modify_relationship(issuer.name, -15, world, f"Rejected their '{edict_to_review.edict_type}' edict.")
-            issuer.modify_relationship(self.name, -20, world, f"My '{edict_to_review.edict_type}' edict was rejected by the Mayor.")
-            issuer.update_mood_score(config.MOOD_CHANGE_RECEIVED_WARNING, f"My edict '{edict_to_review.edict_type}' was rejected.")
-
-        # Move to the next goal
-        self.current_goal = self.get_default_goal()
-
-    def _execute_campaign_for_election(self, world: 'World'):
-        """
-        Executes the campaign goal for a character running for office.
-        """
-        self.add_memory("I am campaigning for the election.")
-
-        # Decide on a campaign action
-        action_chance = random.random()
-
-        if action_chance < 0.2: # 20% chance to give a speech
-            self.add_memory("I think a rousing speech will win some votes.")
-            self.current_goal = Goal(GoalType.GIVE_SPEECH, assignee_id=self.name, originator_id=self.name)
-            return
-
-        elif action_chance < 0.7: # 50% chance to try and improve relationships
-            self.add_memory("I should mingle with the populace to get their support.")
-            # Find a nearby character to interact with
-            nearby_chars = world.get_nearby_characters(self, radius=5)
-            if nearby_chars:
-                target_char = random.choice(nearby_chars)
-                # Choose a positive social interaction
-                social_goal_type = random.choice([GoalType.GREET_CHARACTER, GoalType.SMALL_TALK])
-                self.current_goal = Goal(social_goal_type, assignee_id=self.name, originator_id=self.name, parameters={"target_char_name": target_char.name})
-                return
-
-        # Default action is to wander and look important
-        self.add_memory("I am wandering the settlement to increase my visibility.")
-        self._execute_wander(world)
-
-    def _cast_vote(self, world: 'World'):
-        """
-        Casts a vote for a candidate in the current election.
-        """
-        if not world.is_election_active or not world.candidates:
-            return
-
-        candidate_scores: Dict[str, float] = {name: 0.0 for name in world.candidates}
-
-        for candidate_name in world.candidates:
-            candidate = world.get_character_by_name(candidate_name)
-            if not candidate:
-                continue
-
-            # Relationship influence
-            relationship_score = self.get_relationship_score(candidate_name)
-            candidate_scores[candidate_name] += relationship_score * 0.5
-
-            # Reputation influence
-            candidate_scores[candidate_name] += candidate.reputation_score * 0.3
-
-            # Trait-based influence
-            if "Rebellious" in self.traits:
-                if candidate.job == "Mayor": # Vote against the incumbent
-                    candidate_scores[candidate_name] -= 50
-
-            if "Traditionalist" in self.traits:
-                if candidate.job == "Mayor": # Vote for the incumbent
-                    candidate_scores[candidate_name] += 30
-
-        if not candidate_scores:
-            return # No valid candidates to score
-
-        # Choose the candidate with the highest score
-        best_candidate = max(candidate_scores, key=candidate_scores.get)
-
-        world.ballots[self.name] = best_candidate
-        self.add_memory(f"I have cast my vote for {best_candidate} for Mayor.")
-
-    def _execute_oversee_domain(self, world: 'World'):
-        """
-        Allows a Noble to oversee their domain, with behavior based on traits.
-        This goal is a high-level goal that will delegate to a more specific goal.
-        """
-        if self.rank not in ["Noble Lord", "Baron"]:
-            self.add_memory("I am not a landed noble and cannot oversee a domain.")
-            self.current_goal = self.get_default_goal()
-            return
-
-        # Add a chance to issue an edict
-        if random.random() < 0.1: # 10% chance
-            self.add_memory("I am considering issuing a new edict for my domain.")
-            self.current_goal = Goal(GoalType.ISSUE_DOMAIN_EDICT, assignee_id=self.name, originator_id=self.name)
-            return
-
-        # Trait-based behavior
-        if "Diligent" in self.traits:
-            self.add_memory("As a diligent noble, I will patrol my domain to check on things.")
-            self.current_goal = Goal(GoalType.PATROL_AREA, assignee_id=self.name, originator_id=self.name)
-        elif "Greedy" in self.traits:
-            self.add_memory("As a greedy noble, I will assess the wealth of my domain.")
-            # This will trigger the collection of taxes if available.
-            self.current_goal = Goal(GoalType.COLLECT_REVENUE_FROM_DOMAIN, assignee_id=self.name, originator_id=self.name)
-        elif "Sociable" in self.traits:
-            self.add_memory("As a sociable noble, I will wander through the common areas to gauge the mood of the populace.")
-            self.current_goal = Goal(GoalType.WANDER, assignee_id=self.name, originator_id=self.name, parameters={"reason": "socializing"})
-        elif "Lazy" in self.traits:
-            self.add_memory("As a lazy noble, I will find a comfortable spot and remain idle.")
-            self.current_goal = Goal(GoalType.IDLE, assignee_id=self.name, originator_id=self.name)
-        else:
-            # Default behavior for nobles without specific traits
-            self.add_memory("I will wander my domain, observing the goings-on.")
-            self.current_goal = Goal(GoalType.WANDER, assignee_id=self.name, originator_id=self.name)
-
-        # The goal is now set for the next tick.
-
     def _execute_provide_medical_care(self, world: 'World'):
         if self.job != "Medic":
             self.current_goal = self.get_default_goal()
@@ -1905,13 +1634,6 @@ class Character:
         # Specific events or critical thresholds might trigger a change in their goal or actions later.
         # For this initial implementation, the Mayor doesn't change their own goal here.
         # They also do not move unless a future sub-task of overseeing requires it (e.g. "Inspect Project X")
-
-        # Check for pending edicts to review
-        if any(e.status == EdictStatus.PENDING for e in world.edicts):
-            if random.random() < 0.5: # 50% chance to review edicts if any are pending
-                self.add_memory("There are pending edicts that require my attention.")
-                self.current_goal = Goal(GoalType.REVIEW_PENDING_EDICTS, assignee_id=self.name, originator_id=self.name)
-                return
 
         # Periodically review appointments
         if random.random() < 0.1: # 10% chance each time Mayor oversees settlement
@@ -2149,6 +1871,125 @@ class Character:
             self.add_memory("Could not determine closest medic. Resting.")
             self.current_goal = self.get_default_goal()
         return
+
+    def _execute_report_to_liege(self, world: 'World'):
+        if not self.liege:
+            self.current_goal.set_failed(reason="Character has no liege.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        liege_char = world.get_character_by_name(self.liege)
+        if not liege_char:
+            self.add_memory(f"Could not find my liege, {self.liege}, to report to.")
+            self.current_goal.set_failed(reason=f"Liege '{self.liege}' not found in world.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        distance = abs(self.x - liege_char.x) + abs(self.y - liege_char.y)
+        if distance > 2:
+            self.add_memory(f"Traveling to report to my liege, {self.liege}.")
+            self.move_towards(liege_char.x, liege_char.y, world)
+            return
+
+        # At liege's location, deliver the report
+        self.add_memory(f"I have arrived and reported to my liege, {self.liege}.")
+        liege_char.add_memory(f"My vassal, {self.name}, has reported to me.")
+
+        # Simple relationship boost for fulfilling duty
+        self.modify_relationship(self.liege, 2, world, reason="Reported to them as a loyal vassal.")
+        liege_char.modify_relationship(self.name, 1, world, reason="They fulfilled their duty and reported to me.")
+
+        self.current_goal.set_completed()
+        self.current_goal = self.get_default_goal()
+
+    def _execute_manage_estate(self, world: 'World'):
+        self.add_memory("Managing the estate. (Placeholder)")
+        self.current_goal = self.get_default_goal()
+
+    def _execute_assist_reeve(self, world: 'World'):
+        self.add_memory("Assisting the reeve. (Placeholder)")
+        self.current_goal = self.get_default_goal()
+
+    def _execute_hold_high_court(self, world: 'World'):
+        if not self.vassals:
+            self.add_memory("I wish to hold high court, but I have no vassals to summon.")
+            self.current_goal.set_failed(reason="No vassals to summon.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        # Check if court is already in session (i.e., vassals are on their way or present)
+        if "vassals_summoned" not in self.current_goal.parameters:
+            self.add_memory("I am holding high court. I will summon my vassals.")
+            self.current_goal.parameters["vassals_summoned"] = []
+            for vassal_name in self.vassals:
+                vassal = world.get_character_by_name(vassal_name)
+                if vassal:
+                    # Assign a high-priority goal to attend court
+                    vassal.current_goal = Goal(GoalType.ATTEND_HIGH_COURT,
+                                              assignee_id=vassal.name,
+                                              originator_id=self.name,
+                                              priority=2, # High priority to override other tasks
+                                              parameters={"liege_name": self.name})
+                    self.current_goal.parameters["vassals_summoned"].append(vassal_name)
+            # After summoning, the liege waits.
+            self.add_memory("My vassals have been summoned. I shall await their arrival.")
+            return
+
+        # If vassals have been summoned, check if they have all arrived.
+        all_vassals_present = True
+        for vassal_name in self.current_goal.parameters["vassals_summoned"]:
+            vassal = world.get_character_by_name(vassal_name)
+            if not vassal:
+                continue # Vassal might have been removed from the world
+
+            distance = abs(self.x - vassal.x) + abs(self.y - vassal.y)
+            if distance > 2: # 2 is the interaction distance
+                all_vassals_present = False
+                break
+
+        if all_vassals_present:
+            self.add_memory("All my vassals are present. The high court is now in session.")
+            # The "court" itself is a placeholder action for now.
+            world.add_event_log_message(f"{self.name} holds high court with their vassals.")
+            # Relationship boosts for all involved.
+            for vassal_name in self.vassals:
+                vassal = world.get_character_by_name(vassal_name)
+                if vassal:
+                    self.modify_relationship(vassal_name, 3, world, reason="They attended my high court.")
+                    vassal.modify_relationship(self.name, 2, world, reason="I attended their high court as a loyal vassal.")
+
+            self.current_goal.set_completed()
+            self.current_goal = self.get_default_goal()
+        else:
+            self.add_memory("Waiting for all my vassals to arrive for high court.")
+            # The liege just waits, doing nothing else this tick.
+
+    def _execute_attend_high_court(self, world: 'World'):
+        liege_name = self.current_goal.parameters.get("liege_name")
+        if not liege_name:
+            self.current_goal.set_failed(reason="No liege specified to attend court.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        liege_char = world.get_character_by_name(liege_name)
+        if not liege_char:
+            self.add_memory(f"I was summoned to court by {liege_name}, but I cannot find them.")
+            self.current_goal.set_failed(reason=f"Liege '{liege_name}' not found.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        distance = abs(self.x - liege_char.x) + abs(self.y - liege_char.y)
+        if distance > 2:
+            self.add_memory(f"Traveling to attend the high court of my liege, {liege_name}.")
+            self.move_towards(liege_char.x, liege_char.y, world)
+            return
+
+        # Arrived at court
+        self.add_memory(f"I have arrived at the high court of my liege, {liege_name}.")
+        # The vassal's goal is complete upon arrival. They will wait here (by going idle)
+        # until the liege's goal completes.
+        self.current_goal.set_completed()
+        self.current_goal = self.get_default_goal() # Will likely idle here
 
     def _execute_give_speech(self, world: 'World'):
         if self.job != "Mayor": # Should be GoalType.GIVE_SPEECH
@@ -2390,17 +2231,17 @@ class Character:
         elif self.current_goal.type == GoalType.MANAGE_SUBORDINATES: self._execute_manage_subordinates(world)
         elif self.current_goal.type == GoalType.MAINTAIN_LEDGER: self._execute_maintain_ledger(world)
         elif self.current_goal.type == GoalType.OVERSEE_SETTLEMENT: self._execute_oversee_settlement(world)
-        elif self.current_goal.type == GoalType.OVERSEE_DOMAIN: self._execute_oversee_domain(world)
-        elif self.current_goal.type == GoalType.COLLECT_REVENUE_FROM_DOMAIN: self._execute_collect_revenue_from_domain(world)
-        elif self.current_goal.type == GoalType.ISSUE_DOMAIN_EDICT: self._execute_issue_domain_edict(world)
-        elif self.current_goal.type == GoalType.REVIEW_PENDING_EDICTS: self._execute_review_pending_edicts(world)
-        elif self.current_goal.type == GoalType.CAMPAIGN_FOR_ELECTION: self._execute_campaign_for_election(world)
         elif self.current_goal.type == GoalType.OVERSEE_MEDICAL_OPERATIONS: self._execute_oversee_medical_operations(world)
         elif self.current_goal.type == GoalType.PROVIDE_MEDICAL_CARE: self._execute_provide_medical_care(world)
         elif self.current_goal.type == GoalType.MAINTAIN_PEACE_IN_SETTLEMENT: self._execute_maintain_peace(world)
         elif self.current_goal.type == GoalType.PATROL_AREA: self._execute_patrol_area(world)
         elif self.current_goal.type == GoalType.GIVE_SPEECH: self._execute_give_speech(world)
         elif self.current_goal.type == GoalType.SEEK_MEDICAL_ATTENTION: self._execute_seek_medical_attention(world)
+        elif self.current_goal.type == GoalType.REPORT_TO_LIEGE: self._execute_report_to_liege(world)
+        elif self.current_goal.type == GoalType.MANAGE_ESTATE: self._execute_manage_estate(world)
+        elif self.current_goal.type == GoalType.ASSIST_REEVE: self._execute_assist_reeve(world)
+        elif self.current_goal.type == GoalType.HOLD_HIGH_COURT: self._execute_hold_high_court(world)
+        elif self.current_goal.type == GoalType.ATTEND_HIGH_COURT: self._execute_attend_high_court(world)
 
         # Social Goals
         elif self.current_goal.type == GoalType.GREET_CHARACTER: self._execute_greet_character(world)

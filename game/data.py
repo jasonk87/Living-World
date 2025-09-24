@@ -1,4 +1,3 @@
-# game/data.py
 BLUEPRINTS = {
     "Wooden Chair": {
         "required_resources": {"Wood": 5},
@@ -282,6 +281,8 @@ ROLE_HIERARCHY = {
     "Sheriff": "Mayor",
     "Noble Lord": "Mayor",  # For settlement-level concerns, even if landed.
     "Baron": "Mayor",       # Similar to Noble Lord, potentially higher standing.
+    "Duke": "Mayor",
+    "Duchess": "Mayor",
 
     # Report to Manager
     "Master Craftsman": "Manager",
@@ -301,11 +302,15 @@ ROLE_HIERARCHY = {
 
     # Report to Sheriff
     "Deputy": "Sheriff",
+
+    # Report to Baron/Baroness
+    "Reeve": "Baron",
+    "Bailiff": "Baron",
 }
 
 # Defines which jobs or ranks are considered part of the "nobility"
 # This can be used for social interactions, access to certain areas, or game mechanics.
-NOBLE_RANKS_OR_JOBS = ["Mayor", "Noble Lord", "Baron"]
+NOBLE_RANKS_OR_JOBS = ["Mayor", "Noble Lord", "Baron", "Baroness", "Duke", "Duchess"]
 
 # Defines key official positions that the Mayor (or equivalent top leader) can appoint.
 MAYORAL_APPOINTMENTS = ["Manager", "Militia Commander", "Chief Medical Officer", "Sheriff"]
@@ -437,6 +442,20 @@ ROLE_DETAILS = {
         "capabilities": ["Similar to Noble Lord, potentially with greater impact or access."],
         "job_default_goal": "Oversee Domain"
     },
+    "Duke": {
+        "description": "A high-ranking noble, ruler of a duchy, and liege to Barons.",
+        "reports_to": "Mayor", # For settlement-level coordination
+        "responsibilities": ["Overseeing their domain (duchy).", "Managing vassal Barons.", "Contributing to the realm's high council.", "Upholding justice and order within their lands."],
+        "capabilities": ["All capabilities of a Baron, but with greater scope.", "HoldHighCourt(case_details)", "BestowTitlesOrLands(character_name, title_details)", "CommandVassalForces(objective_details)"],
+        "job_default_goal": "Oversee Domain"
+    },
+    "Duchess": { # Assuming Duchess has same role and capabilities as Duke
+        "description": "A high-ranking noble, ruler of a duchy, and liege to Barons.",
+        "reports_to": "Mayor",
+        "responsibilities": ["Overseeing their domain (duchy).", "Managing vassal Barons.", "Contributing to the realm's high council.", "Upholding justice and order within their lands."],
+        "capabilities": ["All capabilities of a Baron, but with greater scope.", "HoldHighCourt(case_details)", "BestowTitlesOrLands(character_name, title_details)", "CommandVassalForces(objective_details)"],
+        "job_default_goal": "Oversee Domain"
+    },
     # --- Lower Tier Roles ---
     "Master Craftsman": {
         "description": "A highly skilled artisan supervising a specific type of workshop.",
@@ -512,7 +531,22 @@ ROLE_DETAILS = {
     "Builder": {"reports_to": "Manager", "job_default_goal": "Perform Builder Duties"},
     "Woodcutter": {"reports_to": "Manager", "job_default_goal": "Perform Woodcutter Duties"},
     "Stonemason": {"reports_to": "Manager", "job_default_goal": "Perform Stonemason Duties"},
-    "Miner": {"reports_to": "Manager", "job_default_goal": "Perform Miner Duties"} # Assuming a "Perform Miner Duties" goal
+    "Miner": {"reports_to": "Manager", "job_default_goal": "Perform Miner Duties"}, # Assuming a "Perform Miner Duties" goal
+
+    "Reeve": {
+        "description": "An official appointed by a noble to supervise their estate or manor.",
+        "reports_to": "Baron",
+        "responsibilities": ["Managing the day-to-day work on the estate.", "Overseeing peasants and laborers.", "Ensuring production quotas are met."],
+        "capabilities": ["AssignPeasantToTask(peasant_name, task_details)", "ReportEstateStatus(production_summary, issues)"],
+        "job_default_goal": "Manage Estate"
+    },
+    "Bailiff": {
+        "description": "An official who assists the Reeve and enforces the lord's will.",
+        "reports_to": "Baron", # Or could report to Reeve
+        "responsibilities": ["Assisting the Reeve.", "Collecting fines and rents.", "Maintaining order among the local peasants."],
+        "capabilities": ["CollectRent(peasant_name, amount)", "EnforceManorRule(rule_details, peasant_name)"],
+        "job_default_goal": "Assist Reeve"
+    }
 }
 
 # Update JOB_TASK_DEFINITIONS with default goals for new roles if they perform specific tasks
@@ -547,51 +581,4 @@ MARKET_PRICES = {
     "Wood": 2, # Price to buy 1 unit of wood
     "Stone": 3, # Price to buy 1 unit of stone
     "Food": 4, # Price to buy 1 unit of food
-}
-
-# --- Edicts Data ---
-EDICTS = {
-    "Tax_Hike": {
-        "description": "Increases tax rate for a short period.",
-        "duration": 10, # in days
-        "effects": {"tax_rate_modifier": 0.05}
-    },
-    "Tax_Relief": {
-        "description": "Decreases tax rate to improve citizen happiness.",
-        "duration": 15,
-        "effects": {"tax_rate_modifier": -0.02, "global_mood_modifier": 5}
-    },
-    "Increased_Production": {
-        "description": "Mandates longer working hours to boost production.",
-        "duration": 7,
-        "effects": {"production_speed_modifier": 0.1, "global_mood_modifier": -5}
-    },
-    "Conscription": {
-        "description": "Drafts citizens into the guard, increasing security.",
-        "duration": 20,
-        "effects": {"security_level_modifier": 10, "global_mood_modifier": -10}
-    },
-    "Festival_Day": {
-        "description": "Declares a day of festival, boosting morale.",
-        "duration": 1,
-        "effects": {"global_mood_modifier": 15, "production_speed_modifier": -0.5}
-    },
-    "Curfew": {
-        "description": "A curfew is enacted, increasing security but lowering morale.",
-        "duration": 10,
-        "effects": {"security_level_modifier": 5, "global_mood_modifier": -5}
-    },
-    "Militia_Training_Drill": {
-        "description": "Militia are ordered to conduct training drills, increasing security but lowering productivity.",
-        "duration": 5,
-        "effects": {"security_level_modifier": 7, "production_speed_modifier": -0.1}
-    }
-}
-
-ROLE_EDICTS = {
-    "Mayor": ["Tax_Hike", "Tax_Relief", "Festival_Day", "Increased_Production"],
-    "Sheriff": ["Conscription", "Curfew"],
-    "Militia Commander": ["Conscription", "Militia_Training_Drill"],
-    "Noble Lord": ["Tax_Hike", "Increased_Production"],
-    "Baron": ["Tax_Hike", "Increased_Production"],
 }

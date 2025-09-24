@@ -78,11 +78,14 @@ class GoalType(Enum):
     OVERSEE_DOMAIN = auto() # Landed Nobles
     COLLECT_REVENUE_FROM_DOMAIN = auto() # Landed Nobles
     ISSUE_DOMAIN_EDICT = auto() # Landed Nobles
-    REVIEW_PENDING_EDICTS = auto() # Mayor reviewing edicts from subordinates
-    CAMPAIGN_FOR_ELECTION = auto() # For mayoral candidates
+    REPORT_TO_LIEGE = auto() # Vassals
     ATTEND_COURT_SOCIAL_EVENT = auto() # All Nobles
     ATTEMPT_TO_INFLUENCE_NOBLE = auto() # All Nobles
     HOST_SOCIAL_GATHERING = auto() # All Nobles
+    MANAGE_ESTATE = auto() # Reeve
+    ASSIST_REEVE = auto() # Bailiff
+    HOLD_HIGH_COURT = auto() # Liege
+    ATTEND_HIGH_COURT = auto() # Vassal
 
     # Utility / Intermediate
     FETCH_TOOL = auto()

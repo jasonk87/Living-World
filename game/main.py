@@ -72,6 +72,43 @@ def initialize_game_world():
     initial_setup_messages.append(f"  Added: {elara.name} (Job: {elara.job}, Rank: {elara.rank}) at ({elara.x},{elara.y})")
 
 
+    # Add Duke and Baroness
+    duke_skills = {"Leadership": 8, "Security": 5}
+    duke = Character(name="Duke William", personality="Stern", traits=["Authoritative", "Just"],
+                     job="Noble", x=7, y=7, skills=duke_skills, rank="Duke",
+                     vassals=["Baroness Sofia"])
+    game_world.add_character(duke)
+    test_characters_list.append(duke)
+    initial_setup_messages.append(f"  Added: {duke.name} (Job: {duke.job}, Rank: {duke.rank}) at ({duke.x},{duke.y})")
+
+    baroness_skills = {"Leadership": 6, "Security": 4}
+    baroness = Character(name="Baroness Sofia", personality="Charming", traits=["Diplomatic", "Ambitious"],
+                         job="Noble", x=8, y=8, skills=baroness_skills, rank="Baroness",
+                         liege="Duke William")
+    game_world.add_character(baroness)
+    test_characters_list.append(baroness)
+    initial_setup_messages.append(f"  Added: {baroness.name} (Job: {baroness.job}, Rank: {baroness.rank}) at ({baroness.x},{baroness.y})")
+
+    # Add subordinates for the Baroness
+    reeve_skills = {"Leadership": 4}
+    reeve = Character(name="Reeve Thomas", personality="Pragmatic", traits=["Organized"],
+                      job="Reeve", x=9, y=9, skills=reeve_skills, rank="Reeve",
+                      supervisor_name="Baroness Sofia")
+    game_world.add_character(reeve)
+    baroness.subordinates_names.append(reeve.name)
+    test_characters_list.append(reeve)
+    initial_setup_messages.append(f"  Added: {reeve.name} (Job: {reeve.job}, Rank: {reeve.rank}) at ({reeve.x},{reeve.y})")
+
+    bailiff_skills = {"Security": 4}
+    bailiff = Character(name="Bailiff John", personality="Gruff", traits=["Tough"],
+                        job="Bailiff", x=1, y=9, skills=bailiff_skills, rank="Bailiff",
+                        supervisor_name="Baroness Sofia")
+    game_world.add_character(bailiff)
+    baroness.subordinates_names.append(bailiff.name)
+    test_characters_list.append(bailiff)
+    initial_setup_messages.append(f"  Added: {bailiff.name} (Job: {bailiff.job}, Rank: {bailiff.rank}) at ({bailiff.x},{bailiff.y})")
+
+
     # Initial Build Order (Optional, can be removed if Mayor initiates projects)
     # hut_bp_key = "wooden_hut" ... (rest of build order setup from original main_simulation_logic)
     # For now, let's assume the Mayor will initiate projects.
@@ -158,6 +195,21 @@ def tick_simulation():
                 char_daily_reset.needs['Safety'] = max(config.NEED_SCORE_MIN, char_daily_reset.needs.get('Safety', config.NEED_SAFETY_DEFAULT) - config.NEED_SAFETY_DECAY_DAILY)
                 char_daily_reset.needs['Belonging'] = max(config.NEED_SCORE_MIN, char_daily_reset.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) - config.NEED_BELONGING_DECAY_DAILY)
                 char_daily_reset.needs['Esteem'] = max(config.NEED_SCORE_MIN, char_daily_reset.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) - config.NEED_ESTEEM_DECAY_DAILY)
+
+                # Daily check for vassals to report to their liege
+                if char_daily_reset.liege and random.random() < 0.15: # ~15% chance per day
+                    # Avoid interrupting more important goals
+                    if char_daily_reset.current_goal.priority > 5: # Only if current goal is not high priority
+                        from game.goal import Goal, GoalType # Local import to be safe
+                        char_daily_reset.current_goal = Goal(GoalType.REPORT_TO_LIEGE, assignee_id=char_daily_reset.name, originator_id="SystemDuty")
+                        char_daily_reset.add_memory(f"It is my duty to report to my liege, {char_daily_reset.liege}.")
+
+                # Daily check for lieges to hold court
+                if char_daily_reset.rank in ["Duke", "Duchess"] and char_daily_reset.vassals and random.random() < 0.05:
+                    if char_daily_reset.current_goal.priority > 5: # Only if not doing something important
+                        from game.goal import Goal, GoalType # Local import to be safe
+                        char_daily_reset.current_goal = Goal(GoalType.HOLD_HIGH_COURT, assignee_id=char_daily_reset.name, originator_id="SystemDuty")
+                        char_daily_reset.add_memory("It is time to hold high court and see to the affairs of my vassals.")
 
                 # ... other needs updates
                 if char_daily_reset.current_goal in ["Wander", None, "Idle"] and \

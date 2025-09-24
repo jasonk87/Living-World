@@ -1,7 +1,6 @@
 document.addEventListener('DOMContentLoaded', () => {
     // --- Element Selectors ---
     const gameStatusHeader = document.getElementById('game-status-header');
-    const electionStatusDiv = document.getElementById('election-status');
     const gameMapDiv = document.getElementById('game-map');
     const entityDetailsDiv = document.getElementById('entity-details');
     const eventLogDiv = document.getElementById('event-log');
@@ -184,29 +183,6 @@ document.addEventListener('DOMContentLoaded', () => {
         pauseButton.textContent = gameState.is_paused ? "Resume" : "Pause";
     }
 
-    function updateElectionStatus(gameState) {
-        if (!electionStatusDiv || !gameState) return;
-
-        if (gameState.is_election_active) {
-            electionStatusDiv.innerHTML = `
-                <div class="election-active">
-                    <strong>An election is underway!</strong><br>
-                    Candidates: ${gameState.candidates.join(', ')}
-                </div>
-            `;
-            electionStatusDiv.style.display = 'block';
-        } else if (gameState.days_until_next_election >= 0) {
-            electionStatusDiv.innerHTML = `
-                <div class="election-countdown">
-                    Next election in: ${gameState.days_until_next_election} days
-                </div>
-            `;
-            electionStatusDiv.style.display = 'block';
-        } else {
-            electionStatusDiv.style.display = 'none';
-        }
-    }
-
     function renderCharacterList(characters) {
         const characterListDiv = document.getElementById('character-list');
         const characterDetailsPanel = document.getElementById('character-details-panel');
@@ -312,11 +288,9 @@ document.addEventListener('DOMContentLoaded', () => {
     async function updateUI() {
         const gameState = await fetchGameState();
         if (gameState) {
-            console.log(gameState);
             renderMap(gameState);
             updateEventLog(gameState.event_log);
             updateGameInfo(gameState);
-            updateElectionStatus(gameState);
             renderCharacterList(gameState.characters);
         }
     }
