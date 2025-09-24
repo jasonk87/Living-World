@@ -141,6 +141,13 @@ def tick_simulation():
             day_msg = f"*** NEW DAY: Day {game_time_obj.current_day}. Weather: {game_world.weather}, Season: {game_world.season} ***"
             print(day_msg); game_world.add_event_log_message(day_msg)
 
+            if hasattr(game_world, "daily_environment_tick"):
+                game_world.daily_environment_tick()
+            if hasattr(game_world, "manage_campaigns"):
+                game_world.manage_campaigns()
+            if hasattr(game_world, "manage_economy"):
+                game_world.manage_economy()
+
             if hasattr(game_time_obj, 'days_until_election') and game_time_obj.days_until_election <= 0:
                 if hasattr(game_world, 'handle_election'):
                     game_world.handle_election()

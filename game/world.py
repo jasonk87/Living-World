@@ -1,13 +1,17 @@
 # game/world.py
-from typing import TYPE_CHECKING, List, Optional, Tuple, Dict, Any # Added Any
+from __future__ import annotations
+
+import random
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+
 from .stockpile import Stockpile
 from .ledger import Ledger
 from .time import Time
 from .work_order import WorkOrder
 from .building import Building
-from .data import STRUCTURE_BLUEPRINTS, MARKET_PRICES # For get_tile fallback if needed, and add_building
-# from .furniture import Furniture # Keep commented if main.py doesn't use it for this test
-from .rumor import Rumor # Added for rumor system
+from .data import STRUCTURE_BLUEPRINTS, MARKET_PRICES
+from .rumor import Rumor
+from . import config
 
 if TYPE_CHECKING:
     from .character import Character
@@ -37,8 +41,23 @@ class World:
         self.active_world_effects: Dict[str, Any] = {}
         self.recent_notable_events: List[Dict[str, Any]] = [] # For rumor spreading
         self.rumors: List[Rumor] = [] # Added for rumor system
-        self.market_prices: Dict[str, int] = MARKET_PRICES
+        self.base_market_prices: Dict[str, int] = MARKET_PRICES.copy()
+        self.market_prices: Dict[str, int] = MARKET_PRICES.copy()
         self.market_location: Tuple[int, int] = (5, 5) # Central market location
+        self.resource_yield_multipliers: Dict[str, float] = {
+            "Wood": 1.0,
+            "Stone": 1.0,
+            "Herbs": 1.0,
+            "Food": 1.0,
+        }
+        self.market_price_multipliers: Dict[str, float] = {
+            item_name: 1.0 for item_name in self.base_market_prices.keys()
+        }
+        self.travel_speed_modifier: float = 1.0
+        self.campaign_promises: Dict[str, List[Dict[str, Any]]] = {}
+        self.active_campaign_cycle_start: Optional[int] = None
+        self.last_campaign_day: Optional[int] = None
+        self.resource_collection_directives: Dict[str, Dict[str, Any]] = {}
 
     def update_rumors_daily(self):
         """Decays strength of all rumors and removes very weak ones."""
@@ -162,7 +181,10 @@ class World:
         return list(self.resources.get(resource_name, []))
 
     def update_weather(self, new_weather: str):
-        if self.weather != new_weather: self.weather = new_weather
+        if self.weather != new_weather:
+            self.weather = new_weather
+            self.add_event_log_message(f"Weather shifts to {new_weather}.")
+            self._recalculate_environment_effects()
 
     def advance_season(self):
         self.season_index = (self.season_index + 1) % len(World.SEASONS)
@@ -172,6 +194,7 @@ class World:
         elif self.season == "Spring": self.update_weather("Rainy")
         elif self.season == "Summer": self.update_weather("Sunny")
         else: self.update_weather("Cloudy")
+        self._recalculate_environment_effects()
 
     def add_character(self, character: 'Character'):
         if character not in self.characters: self.characters.append(character)
@@ -372,6 +395,9 @@ class World:
 
         # Reset election timer
         self.game_time.days_until_election = config.ELECTION_CYCLE_DAYS
+        # Campaign bookkeeping
+        self.fulfill_campaign_promises(winner)
+        self.active_campaign_cycle_start = None
 
     def add_rumor(self, rumor: Rumor):
         """Adds a new rumor to the world, ensuring it's not a duplicate subject/key too recently."""
@@ -388,3 +414,394 @@ class World:
             if rumor.rumor_id == rumor_id:
                 return rumor
         return None
+
+    # --- Environment & Economy Utilities ---
+
+    def _recalculate_environment_effects(self):
+        """Rebuilds environmental modifiers from season, weather, and active policies."""
+        # Reset modifiers
+        for resource_name in list(self.resource_yield_multipliers.keys()):
+            self.resource_yield_multipliers[resource_name] = 1.0
+        self.travel_speed_modifier = 1.0
+        for item_name in list(self.market_price_multipliers.keys()):
+            self.market_price_multipliers[item_name] = 1.0
+
+        # Seasonal baselines
+        if self.season == "Winter":
+            self.resource_yield_multipliers["Wood"] *= 0.8
+            self.resource_yield_multipliers["Herbs"] *= 0.5
+            self.travel_speed_modifier *= 0.85
+            self.market_price_multipliers["Food"] *= 1.25
+        elif self.season == "Summer":
+            self.resource_yield_multipliers["Wood"] *= 1.1
+            self.resource_yield_multipliers["Herbs"] *= 1.2
+            self.market_price_multipliers["Food"] *= 0.9
+        elif self.season == "Autumn":
+            self.resource_yield_multipliers["Food"] *= 1.15
+
+        # Weather adjustments
+        if self.weather == "Rainy":
+            self.resource_yield_multipliers["Herbs"] *= 1.2
+            self.travel_speed_modifier *= 0.9
+        elif self.weather == "Snowy":
+            self.resource_yield_multipliers["Wood"] *= 0.9
+            self.resource_yield_multipliers["Stone"] *= 0.85
+            self.travel_speed_modifier *= 0.75
+            self.market_price_multipliers["Wood"] *= 1.1
+        elif self.weather == "Cloudy":
+            self.travel_speed_modifier *= 0.95
+        elif self.weather == "Sunny":
+            self.resource_yield_multipliers["Stone"] *= 1.05
+
+        # Apply active world effects (e.g., mayoral policies)
+        if self.active_world_effects:
+            for effect_key, effect_data in list(self.active_world_effects.items()):
+                resource_bonus = effect_data.get("resource_yield_bonus")
+                if resource_bonus:
+                    res_name = resource_bonus.get("resource")
+                    multiplier = resource_bonus.get("multiplier", 1.0)
+                    if res_name in self.resource_yield_multipliers:
+                        self.resource_yield_multipliers[res_name] *= multiplier
+                travel_bonus = effect_data.get("travel_speed_multiplier")
+                if travel_bonus:
+                    self.travel_speed_modifier *= travel_bonus
+                market_bonus = effect_data.get("market_price_adjustment")
+                if market_bonus:
+                    for item_name, multiplier in market_bonus.items():
+                        if item_name in self.market_price_multipliers:
+                            self.market_price_multipliers[item_name] *= multiplier
+
+        # Supply and demand nudges based on resource totals
+        pressures = self.identify_resource_pressures()
+        for pressure in pressures:
+            resource = pressure["resource"]
+            status = pressure["status"]
+            severity = pressure["severity"]
+            multiplier_delta = 0.05 * min(3, max(1, severity // 10))
+            if status == "shortage":
+                if resource in self.market_price_multipliers:
+                    self.market_price_multipliers[resource] *= (1.0 + multiplier_delta)
+            elif status == "surplus":
+                if resource in self.market_price_multipliers:
+                    self.market_price_multipliers[resource] *= max(0.5, 1.0 - multiplier_delta)
+
+        # Rebuild market price table from multipliers
+        for item_name, base_price in self.base_market_prices.items():
+            adjusted_price = int(round(base_price * self.market_price_multipliers.get(item_name, 1.0)))
+            self.market_prices[item_name] = max(1, adjusted_price)
+
+    def add_temporary_world_effect(self, effect_key: str, effect_data: Dict[str, Any]):
+        """Adds or replaces a temporary world-level effect and reapplies environment modifiers."""
+        self.active_world_effects[effect_key] = effect_data
+        self._recalculate_environment_effects()
+
+    def _cleanup_world_effects(self):
+        if not self.game_time:
+            return
+        removed_keys: List[str] = []
+        for effect_key, effect_data in list(self.active_world_effects.items()):
+            expires_day = effect_data.get("expires_day")
+            if expires_day is not None and expires_day < self.game_time.current_day:
+                removed_keys.append(effect_key)
+                del self.active_world_effects[effect_key]
+        if removed_keys:
+            self.add_event_log_message(f"World effects expired: {removed_keys}")
+            self._recalculate_environment_effects()
+
+    def get_resource_yield_multiplier(self, resource_name: str) -> float:
+        return self.resource_yield_multipliers.get(resource_name, 1.0)
+
+    def get_travel_speed_modifier(self) -> float:
+        return max(0.0, self.travel_speed_modifier)
+
+    def get_market_price(self, item_name: str) -> int:
+        return self.market_prices.get(item_name, self.base_market_prices.get(item_name, 0))
+
+    def get_total_resource_quantity(self, resource_name: str) -> int:
+        total = 0
+        for stockpile in self.stockpiles:
+            total += stockpile.inventory.get(resource_name, 0)
+        for character in self.characters:
+            total += character.inventory.get(resource_name, 0)
+        return total
+
+    def identify_resource_pressures(self) -> List[Dict[str, Any]]:
+        """Returns resource pressure descriptors sorted by severity."""
+        pressures: List[Dict[str, Any]] = []
+        resources_to_check = ["Wood", "Stone", "Herbs", "Food"]
+        for resource in resources_to_check:
+            quantity = self.get_total_resource_quantity(resource)
+            low_threshold = getattr(config, "MAYOR_RESOURCE_LOW_THRESHOLD", 20)
+            high_threshold = getattr(config, "MAYOR_RESOURCE_HIGH_THRESHOLD", 150)
+            if quantity < low_threshold:
+                severity = low_threshold - quantity
+                pressures.append({
+                    "resource": resource,
+                    "status": "shortage",
+                    "quantity": quantity,
+                    "threshold": low_threshold,
+                    "severity": severity,
+                })
+            elif quantity > high_threshold:
+                severity = quantity - high_threshold
+                pressures.append({
+                    "resource": resource,
+                    "status": "surplus",
+                    "quantity": quantity,
+                    "threshold": high_threshold,
+                    "severity": severity,
+                })
+        pressures.sort(key=lambda entry: entry.get("severity", 0), reverse=True)
+        return pressures
+
+    def set_resource_collection_directive(
+        self,
+        resource_name: str,
+        per_trip_quota: int,
+        duration_days: int,
+        reason: str,
+        originator: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        if not self.game_time:
+            raise ValueError("Cannot set resource directive without game time reference.")
+
+        directive = {
+            "resource": resource_name,
+            "per_trip_quota": max(1, per_trip_quota),
+            "set_day": self.game_time.current_day,
+            "expires_day": self.game_time.current_day + max(1, duration_days),
+            "reason": reason,
+            "originator": originator,
+            "last_reminded_day": None,
+        }
+        self.resource_collection_directives[resource_name] = directive
+        summary = f"Resource directive for {resource_name}: gather at least {directive['per_trip_quota']} per trip"
+        if originator:
+            summary += f" (ordered by {originator})"
+        self.add_event_log_message(summary)
+        self.add_notable_event(
+            "ResourceDirective",
+            {
+                "summary": summary,
+                "resource": resource_name,
+                "originator": originator,
+            },
+        )
+        return directive
+
+    def get_resource_directive(self, resource_name: str) -> Optional[Dict[str, Any]]:
+        directive = self.resource_collection_directives.get(resource_name)
+        if not directive or not self.game_time:
+            return directive
+        if directive["expires_day"] < self.game_time.current_day:
+            # Expired directive
+            del self.resource_collection_directives[resource_name]
+            return None
+        return directive
+
+    def expire_resource_directives(self):
+        if not self.game_time:
+            return
+        expired: List[str] = []
+        for resource_name, directive in list(self.resource_collection_directives.items()):
+            if directive["expires_day"] < self.game_time.current_day:
+                expired.append(resource_name)
+                del self.resource_collection_directives[resource_name]
+        if expired:
+            self.add_event_log_message(f"Resource directives concluded for: {expired}")
+
+    # --- Governance & Campaign Management ---
+
+    def _identify_mayoral_candidates(self) -> List['Character']:
+        candidates: List['Character'] = []
+        for char in self.characters:
+            leadership_skill = char.skills.get("Leadership", {}).get("level", 0) if hasattr(char, "skills") else 0
+            is_noble_lord = getattr(char, "rank", None) == "Noble Lord"
+            if char.job == "Mayor":
+                candidates.append(char)
+            elif is_noble_lord or leadership_skill >= 3:
+                candidates.append(char)
+        return candidates
+
+    def manage_campaigns(self):
+        if not self.game_time:
+            return
+        days_left = getattr(self.game_time, "days_until_election", None)
+        if days_left is None or days_left <= 0 or days_left > 5:
+            self.active_campaign_cycle_start = None
+            return
+
+        if self.active_campaign_cycle_start is None:
+            self.active_campaign_cycle_start = self.game_time.current_day
+            self.add_event_log_message("Election season heats up. Candidates begin campaigning.")
+
+        if self.last_campaign_day == self.game_time.current_day:
+            return
+        self.last_campaign_day = self.game_time.current_day
+
+        pressures = self.identify_resource_pressures()
+        candidates = self._identify_mayoral_candidates()
+        if not candidates:
+            return
+
+        for candidate in candidates:
+            promises_for_cycle = [
+                promise for promise in self.campaign_promises.get(candidate.name, [])
+                if promise.get("cycle_start_day") == self.active_campaign_cycle_start
+            ]
+            if promises_for_cycle:
+                continue
+
+            selected_issue: Optional[Dict[str, Any]] = pressures[0] if pressures else None
+            if selected_issue:
+                issue_resource = selected_issue["resource"]
+                if selected_issue["status"] == "shortage":
+                    promise_type = "resource_drive"
+                    summary = f"promises to boost {issue_resource} supplies"
+                else:
+                    promise_type = "trade_policy"
+                    summary = f"pledges to lower prices on {issue_resource}"
+            else:
+                issue_resource = None
+                promise_type = "community_event"
+                summary = "vows to host a community gathering to lift spirits"
+
+            promise = {
+                "candidate": candidate.name,
+                "type": promise_type,
+                "resource": issue_resource,
+                "status": "pledged",
+                "created_day": self.game_time.current_day,
+                "cycle_start_day": self.active_campaign_cycle_start,
+                "summary": summary,
+            }
+            self.campaign_promises.setdefault(candidate.name, []).append(promise)
+
+            candidate.add_memory(f"Campaign promise: {summary}.")
+            self.add_event_log_message(f"{candidate.name} {summary} ahead of the election.")
+            self.add_notable_event(
+                "CampaignPromise",
+                {
+                    "candidate": candidate.name,
+                    "summary": summary,
+                    "resource": issue_resource,
+                },
+            )
+
+    def fulfill_campaign_promises(self, mayor: 'Character'):
+        if not self.game_time:
+            return
+        promises = self.campaign_promises.get(mayor.name, [])
+        if not promises:
+            return
+
+        for promise in promises:
+            if promise.get("status") != "pledged":
+                continue
+            promise_type = promise.get("type")
+            resource = promise.get("resource")
+            if promise_type == "resource_drive" and resource:
+                shortage_info = next((p for p in self.identify_resource_pressures() if p["resource"] == resource and p["status"] == "shortage"), None)
+                severity = shortage_info["severity"] if shortage_info else 10
+                per_trip_quota = max(5, min(20, severity + 5))
+                duration_days = 7
+                directive = self.set_resource_collection_directive(
+                    resource,
+                    per_trip_quota,
+                    duration_days,
+                    reason=f"Campaign pledge by Mayor {mayor.name}",
+                    originator=mayor.name,
+                )
+                effect_key = f"mayor_policy_{resource}_{self.game_time.current_day}"
+                self.add_temporary_world_effect(
+                    effect_key,
+                    {
+                        "resource_yield_bonus": {
+                            "resource": resource,
+                            "multiplier": 1.15,
+                        },
+                        "expires_day": directive["expires_day"],
+                    },
+                )
+                self.add_event_log_message(
+                    f"Mayor {mayor.name} enacts a focused gathering effort for {resource}, boosting yields and directing workers."
+                )
+                promise["status"] = "enacted"
+                promise["fulfilled_day"] = self.game_time.current_day
+            elif promise_type == "trade_policy" and resource:
+                effect_key = f"market_relief_{resource}_{self.game_time.current_day}"
+                expires_day = self.game_time.current_day + 5
+                self.add_temporary_world_effect(
+                    effect_key,
+                    {
+                        "market_price_adjustment": {resource: 0.85},
+                        "expires_day": expires_day,
+                    },
+                )
+                self.add_event_log_message(
+                    f"Mayor {mayor.name} temporarily subsidises {resource}, easing prices for citizens."
+                )
+                promise["status"] = "enacted"
+                promise["fulfilled_day"] = self.game_time.current_day
+            elif promise_type == "community_event":
+                effect_key = f"community_morale_{self.game_time.current_day}"
+                expires_day = self.game_time.current_day + 3
+                self.add_temporary_world_effect(
+                    effect_key,
+                    {
+                        "travel_speed_multiplier": 1.05,
+                        "expires_day": expires_day,
+                    },
+                )
+                self.add_event_log_message(
+                    f"Mayor {mayor.name} hosts a festival to build community spirit."
+                )
+                promise["status"] = "enacted"
+                promise["fulfilled_day"] = self.game_time.current_day
+
+    def manage_economy(self):
+        if not self.game_time:
+            return
+        pressures = self.identify_resource_pressures()
+        for pressure in pressures:
+            if pressure["status"] != "shortage":
+                continue
+            resource = pressure["resource"]
+            if resource in self.resource_collection_directives:
+                continue
+            severity = pressure["severity"]
+            per_trip_quota = max(4, min(15, severity + 3))
+            duration_days = 5
+            self.set_resource_collection_directive(
+                resource,
+                per_trip_quota,
+                duration_days,
+                reason="Automated economic response to shortage",
+                originator="Economic Council",
+            )
+
+    def daily_environment_tick(self):
+        if not self.game_time:
+            return
+
+        # Advance season at configured interval
+        if (
+            self.game_time.current_day > 1
+            and (self.game_time.current_day - 1) % getattr(config, "DAYS_PER_SEASON", 10) == 0
+        ):
+            self.advance_season()
+
+        # Chance for weather change biased by season
+        weather_options = {
+            "Spring": ["Rainy", "Cloudy", "Sunny"],
+            "Summer": ["Sunny", "Sunny", "Cloudy"],
+            "Autumn": ["Cloudy", "Rainy", "Sunny"],
+            "Winter": ["Snowy", "Cloudy", "Snowy"],
+        }
+        current_choices = weather_options.get(self.season, [self.weather])
+        if random.random() < 0.35:
+            self.update_weather(random.choice(current_choices))
+
+        self._cleanup_world_effects()
+        self.expire_resource_directives()
+        self._recalculate_environment_effects()

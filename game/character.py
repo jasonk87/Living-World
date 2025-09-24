@@ -1,5 +1,5 @@
 # game/character.py
-from typing import TYPE_CHECKING, Optional, Dict, List, Tuple, Any
+from typing import TYPE_CHECKING, Optional, Dict, List, Tuple, Any, Set
 import random
 from .llm_integration import generate_dialogue # Kept as it's used
 # from .stockpile import Stockpile # Not directly used by Character methods
@@ -126,7 +126,7 @@ class Character:
         self.reputation_score: int = 0 # Initialize reputation
         self.known_rumor_ids: Set[str] = set() # For tracking rumors known by this character
 
-    def update_reputation(self, change: int, reason: Optional[str] = None):
+    def update_reputation(self, change: int, reason: Optional[str] = None, world: Optional['World'] = None):
         """Updates reputation score, clamps it, and logs the change."""
         old_score = self.reputation_score
         self.reputation_score += change
@@ -136,38 +136,46 @@ class Character:
             log_message = f"Reputation score changed by {change} to {self.reputation_score}. Reason: {reason}"
             self.add_memory(log_message)
             print(f"LOG: {self.name}'s {log_message}")
-
-            # Attempt to generate a rumor if the change is significant
-            # This requires access to the world object, which update_reputation doesn't have directly.
-            # This logic might be better placed in the methods that CALL update_reputation,
-            # or update_reputation needs a world parameter.
-            # For now, let's assume a world parameter is passed or this is refactored.
-            # This is a placeholder and will be addressed in the actual integration step.
-            # if world and abs(change) >= config.REPUTATION_FOR_RUMOR_THRESHOLD:
-            #     self._try_generate_rumor_from_reputation(change, reason, world)
+            if world and abs(change) >= config.REPUTATION_FOR_RUMOR_THRESHOLD:
+                self._try_generate_rumor_from_reputation(change, reason, world)
 
 
-    # def _try_generate_rumor_from_reputation(self, rep_change: int, reason: str, world: 'World'):
-    #     # This method would be called by update_reputation or the methods calling it.
-    #     # Simplified content key generation from reason
-    #     content_key_base = reason.lower().replace(" ", "_").split_by("(",1)[0].strip() # basic parse
-    #     is_positive = rep_change > 0
-    #     content_key = f"{content_key_base}_{'positive' if is_positive else 'negative'}"
+    def _try_generate_rumor_from_reputation(self, rep_change: int, reason: str, world: 'World'):
+        if not world.game_time:
+            return
 
-    #     initial_strength = config.RUMOR_INITIAL_STRENGTH_SMALL_EVENT
-    #     if abs(rep_change) > (config.REPUTATION_FOR_RUMOR_THRESHOLD * 2): # More significant change
-    #         initial_strength = config.RUMOR_INITIAL_STRENGTH_SIGNIFICANT_EVENT
+        normalized_reason = reason.lower().replace(" ", "_")
+        normalized_reason = normalized_reason.split("(")[0].strip()
+        if not normalized_reason:
+            normalized_reason = "reputation_shift"
 
-    #     rumor = Rumor(
-    #         subject_char_id=self.name,
-    #         content_key=content_key,
-    #         initial_strength=initial_strength,
-    #         creation_day=world.game_time.current_day,
-    #         is_positive=is_positive,
-    #         original_source_char_id=self.name # Or could be another involved party if available
-    #     )
-    #     world.add_rumor(rumor)
-    #     self.add_memory(f"A rumor might be starting about me: {content_key}")
+        is_positive = rep_change > 0
+        sentiment_suffix = "positive" if is_positive else "negative"
+        content_key = f"{normalized_reason}_{sentiment_suffix}"
+
+        initial_strength = config.RUMOR_INITIAL_STRENGTH_SMALL_EVENT
+        if abs(rep_change) >= config.REPUTATION_FOR_RUMOR_THRESHOLD * 2:
+            initial_strength = config.RUMOR_INITIAL_STRENGTH_SIGNIFICANT_EVENT
+
+        rumor = Rumor(
+            subject_char_id=self.name,
+            content_key=content_key,
+            initial_strength=initial_strength,
+            creation_day=world.game_time.current_day,
+            is_positive=is_positive,
+            original_source_char_id=self.name,
+        )
+        world.add_rumor(rumor)
+        self.known_rumor_ids.add(rumor.rumor_id)
+        world.add_notable_event(
+            "ReputationRumor",
+            {
+                "summary": f"Rumor about {self.name}'s reputation change ({sentiment_suffix}).",
+                "subject": self.name,
+                "sentiment": sentiment_suffix,
+            },
+        )
+        self.add_memory(f"Word may spread ({rumor.rumor_id[:4]}) about me: {content_key}.")
 
 
     def _determine_mood_level(self) -> str:
@@ -608,18 +616,51 @@ class Character:
             # print(f"DEBUG {self.name}: move_towards target ({target_x},{target_y}) reached.")
             return
 
+        speed_modifier = 1.0
+        if hasattr(world, "get_travel_speed_modifier"):
+            speed_modifier = world.get_travel_speed_modifier()
+
+        if speed_modifier < 1.0 and random.random() > speed_modifier:
+            if random.random() < 0.15:
+                weather_desc = getattr(world, "weather", "difficult").lower()
+                self.add_memory(f"Travel slowed by {weather_desc} conditions.")
+            return
+
         # print(f"DEBUG {self.name}: move_towards ({target_x},{target_y}). Current: ({self.x},{self.y}). Trying ({norm_dx},{norm_dy}) first.")
         if self.move(norm_dx, norm_dy, world):
             # print(f"DEBUG {self.name}: move_towards success via diagonal/direct ({norm_dx},{norm_dy}). New pos: ({self.x},{self.y})")
+            if speed_modifier > 1.0:
+                bonus_chance = min(speed_modifier - 1.0, 1.0)
+                if random.random() < bonus_chance:
+                    bonus_dx = target_x - self.x
+                    bonus_dy = target_y - self.y
+                    bonus_norm_dx = 0
+                    bonus_norm_dy = 0
+                    if bonus_dx > 0: bonus_norm_dx = 1
+                    elif bonus_dx < 0: bonus_norm_dx = -1
+                    if bonus_dy > 0: bonus_norm_dy = 1
+                    elif bonus_dy < 0: bonus_norm_dy = -1
+                    if bonus_norm_dx != 0 or bonus_norm_dy != 0:
+                        self.move(bonus_norm_dx, bonus_norm_dy, world)
             return
 
         if norm_dx != 0 and norm_dy != 0: # If diagonal failed, try cardinal
             # print(f"DEBUG {self.name}: move_towards diagonal failed. Trying cardinal x ({norm_dx},0).")
             if self.move(norm_dx, 0, world):
+                if speed_modifier > 1.0 and random.random() < min(speed_modifier - 1.0, 1.0):
+                    bonus_dx = target_x - self.x
+                    if bonus_dx != 0:
+                        bonus_norm_dx = 1 if bonus_dx > 0 else -1
+                        self.move(bonus_norm_dx, 0, world)
                 # print(f"DEBUG {self.name}: move_towards success via cardinal x ({norm_dx},0). New pos: ({self.x},{self.y})")
                 return
             # print(f"DEBUG {self.name}: move_towards cardinal x failed. Trying cardinal y (0,{norm_dy}).")
             if self.move(0, norm_dy, world):
+                if speed_modifier > 1.0 and random.random() < min(speed_modifier - 1.0, 1.0):
+                    bonus_dy = target_y - self.y
+                    if bonus_dy != 0:
+                        bonus_norm_dy = 1 if bonus_dy > 0 else -1
+                        self.move(0, bonus_norm_dy, world)
                 # print(f"DEBUG {self.name}: move_towards success via cardinal y (0,{norm_dy}). New pos: ({self.x},{self.y})")
                 return
         elif norm_dx != 0 : # Only dx was non-zero, and self.move(norm_dx,0) must have failed if we are here
@@ -709,9 +750,11 @@ class Character:
             # NEW: Check market if no tool is available
             # Find a tool of the required type from the market prices
             tool_to_buy = None
-            for item_name, price in world.market_prices.items():
+            market_items = getattr(world, "market_prices", {})
+            for item_name in market_items.keys():
+                price = world.get_market_price(item_name) if hasattr(world, "get_market_price") else market_items.get(item_name)
                 if item_name in BLUEPRINTS and BLUEPRINTS[item_name].get("tool_type") == self.tool_to_fetch_type:
-                    if self.money >= price:
+                    if price is not None and self.money >= price:
                         tool_to_buy = item_name
                         break
 
@@ -819,6 +862,20 @@ class Character:
                 if random.random() < 0.20: # 20% chance for +1 bonus
                     final_yield_amount += 1
                     self.add_memory(f"Put my strength into '{task_name}' and got a bit extra {res_prod}.")
+
+            if res_prod:
+                env_multiplier = 1.0
+                if hasattr(world, "get_resource_yield_multiplier"):
+                    env_multiplier = world.get_resource_yield_multiplier(res_prod)
+                if env_multiplier != 1.0:
+                    adjusted_amount = int(round(final_yield_amount * env_multiplier))
+                    if final_yield_amount > 0 and adjusted_amount == 0 and env_multiplier > 0:
+                        adjusted_amount = 1
+                    final_yield_amount = max(0, adjusted_amount)
+                    weather_desc = getattr(world, "weather", "steady")
+                    self.add_memory(
+                        f"Environmental conditions ({weather_desc}, {world.season}) adjusted {res_prod} yield x{env_multiplier:.2f}."
+                    )
 
             can_add_to_inv = self.max_inventory_items - self.get_inventory_load()
             actual_yield_taken = min(final_yield_amount, can_add_to_inv)
@@ -1384,6 +1441,15 @@ class Character:
         # Default job quota, could be overridden by goal parameters if a specific amount is requested
         job_quota = self.current_goal.parameters.get("quota", self.needs.get("Wood",5) if self.job == "Woodcutter" else float('inf'))
 
+        directive = world.get_resource_directive("Wood") if hasattr(world, "get_resource_directive") else None
+        if directive:
+            job_quota = max(job_quota, directive.get("per_trip_quota", job_quota))
+            if world.game_time and directive.get("last_reminded_day") != world.game_time.current_day:
+                directive["last_reminded_day"] = world.game_time.current_day
+                self.add_memory(
+                    f"Following directive to bring back at least {directive['per_trip_quota']} Wood (set by {directive.get('originator', 'leadership')})."
+                )
+
         if self.get_inventory_load()>=self.max_inventory_items or inv_wood >= job_quota :
             # self.current_goal = "Perform Woodcutter Duties" # old
             self.current_goal = create_goal_from_job("Perform Woodcutter Duties", self.name) or self.get_default_goal()
@@ -1403,6 +1469,15 @@ class Character:
 
         inv_stone = self.inventory.get("Stone",0)
         job_quota = self.current_goal.parameters.get("quota", self.needs.get("Stone",5) if self.job == "Stonemason" else float('inf'))
+
+        directive = world.get_resource_directive("Stone") if hasattr(world, "get_resource_directive") else None
+        if directive:
+            job_quota = max(job_quota, directive.get("per_trip_quota", job_quota))
+            if world.game_time and directive.get("last_reminded_day") != world.game_time.current_day:
+                directive["last_reminded_day"] = world.game_time.current_day
+                self.add_memory(
+                    f"Settlement directive urges gathering {directive['per_trip_quota']} Stone before returning."
+                )
 
         if self.get_inventory_load()>=self.max_inventory_items or inv_stone >= job_quota:
             # self.current_goal = "Perform Stonemason Duties" # old
@@ -1454,7 +1529,17 @@ class Character:
 
         # Check if inventory is full or if a personal quota is met (if any)
         # For now, just gather until inventory is full.
-        if self.get_inventory_load() >= self.max_inventory_items:
+        directive = world.get_resource_directive("Herbs") if hasattr(world, "get_resource_directive") else None
+        per_trip_quota = directive.get("per_trip_quota") if directive else None
+        if directive and world.game_time and directive.get("last_reminded_day") != world.game_time.current_day:
+            directive["last_reminded_day"] = world.game_time.current_day
+            self.add_memory(
+                f"Clinic request: return with at least {per_trip_quota} Herbs to support medicine."
+            )
+
+        if self.get_inventory_load() >= self.max_inventory_items or (
+            per_trip_quota is not None and self.inventory.get("Herbs", 0) >= per_trip_quota
+        ):
             self.add_memory("Inventory full of herbs.")
             # Decide what to do next, e.g., haul herbs or return to duties.
             # For a Medic/CMO, this might be returning to the clinic or seeking patients.
@@ -1997,6 +2082,19 @@ class Character:
             return
 
         speech_topic = "the general state of the settlement and future prospects"
+        campaign_promises = getattr(world, "campaign_promises", {}).get(self.name, [])
+        if campaign_promises:
+            relevant_promises = [p for p in campaign_promises if p.get("status") in ("pledged", "enacted")]
+            if relevant_promises:
+                chosen_promise = random.choice(relevant_promises)
+                resource_focus = chosen_promise.get("resource")
+                if resource_focus:
+                    if chosen_promise.get("status") == "pledged":
+                        speech_topic = f"my pledge to strengthen our {resource_focus} supplies"
+                    else:
+                        speech_topic = f"progress delivering stronger {resource_focus} stores"
+                elif chosen_promise.get("type") == "community_event":
+                    speech_topic = "keeping community spirit high"
         # Basic LLM integration placeholder
         generated_speech_snippet = ""
         if config.USE_LLM:
@@ -2989,7 +3087,7 @@ class Character:
         subordinate.add_memory(f"Being fired crushed my esteem. Esteem: {subordinate.needs['Esteem']}")
 
         rep_change_reason = f"Was fired from job as {original_job} by {self.name}"
-        subordinate.update_reputation(config.REPUTATION_CHANGE_FIRED, rep_change_reason)
+        subordinate.update_reputation(config.REPUTATION_CHANGE_FIRED, rep_change_reason, world=world)
         if abs(config.REPUTATION_CHANGE_FIRED) >= config.REPUTATION_FOR_RUMOR_THRESHOLD and world.game_time:
             rumor_content_key = "was_fired_negative"
             # Firing is often a more significant event
@@ -3371,7 +3469,7 @@ class Character:
             target_char.add_memory(f"Accepting {self.name}'s apology made me feel more connected. Belonging: {target_char.needs['Belonging']}")
 
             rep_change_reason = f"Successfully apologized to {target_name}"
-            self.update_reputation(config.REPUTATION_CHANGE_APOLOGY_ACCEPTED, rep_change_reason)
+            self.update_reputation(config.REPUTATION_CHANGE_APOLOGY_ACCEPTED, rep_change_reason, world=world)
             if abs(config.REPUTATION_CHANGE_APOLOGY_ACCEPTED) >= config.REPUTATION_FOR_RUMOR_THRESHOLD and world.game_time:
                 rumor_content_key = "apology_accepted_positive"
                 rumor_strength = config.RUMOR_INITIAL_STRENGTH_SMALL_EVENT
@@ -3571,7 +3669,7 @@ class Character:
             return
 
         item_name = self.current_goal.parameters["item_name"]
-        price = world.market_prices.get(item_name)
+        price = world.get_market_price(item_name) if hasattr(world, "get_market_price") else world.market_prices.get(item_name)
 
         if price is None:
             self.add_memory(f"Wanted to buy {item_name}, but it's not sold at the market.")
@@ -3858,7 +3956,7 @@ class Character:
             target_char.update_mood_score(config.MOOD_CHANGE_POSITIVE_SOCIAL, f"Helped {self.name}")
 
             rep_change_reason = f"Helped {self.name} with {item_name_needed or help_type}"
-            target_char.update_reputation(config.REPUTATION_CHANGE_HELPED_OTHER, rep_change_reason)
+            target_char.update_reputation(config.REPUTATION_CHANGE_HELPED_OTHER, rep_change_reason, world=world)
             if abs(config.REPUTATION_CHANGE_HELPED_OTHER) >= config.REPUTATION_FOR_RUMOR_THRESHOLD and world.game_time:
                 rumor_content_key = "helped_someone_positive" # Generic key
                 rumor_strength = config.RUMOR_INITIAL_STRENGTH_SMALL_EVENT
