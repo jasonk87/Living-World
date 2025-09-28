@@ -79,6 +79,16 @@
                     <p id="hud-election-value">—</p>
                     <span>Days remaining</span>
                 </article>
+                <article class="hud-card">
+                    <h3>Treasury</h3>
+                    <p id="hud-treasury-value">—</p>
+                    <span>Coins on hand</span>
+                </article>
+                <article class="hud-card">
+                    <h3>Daily Rations</h3>
+                    <p id="hud-rations-value">—</p>
+                    <span>Consumed • shortfall</span>
+                </article>
             </section>
             <article class="glass-card">
                 <header class="card-header">
@@ -89,6 +99,38 @@
                 </header>
                 <div id="event-feed" class="compact-event-feed">
                     <p class="empty">No events logged yet.</p>
+                </div>
+            </article>
+            <article class="glass-card economy-card">
+                <header class="card-header">
+                    <div>
+                        <h2>Economy Watch</h2>
+                        <p>Track markets, shortages, and security.</p>
+                    </div>
+                </header>
+                <div class="economy-summary">
+                    <section>
+                        <h3>Market Prices</h3>
+                        <ul id="economy-market-list" class="mini-list">
+                            <li class="empty">No market data.</li>
+                        </ul>
+                    </section>
+                    <section>
+                        <h3>Resource Pressures</h3>
+                        <ul id="economy-pressure-list" class="mini-list">
+                            <li class="empty">No active pressures.</li>
+                        </ul>
+                    </section>
+                    <section>
+                        <h3>Wage Arrears</h3>
+                        <ul id="economy-wage-list" class="mini-list">
+                            <li class="empty">No outstanding wages.</li>
+                        </ul>
+                    </section>
+                    <section>
+                        <h3>Security Brief</h3>
+                        <p id="economy-crime-note" class="mini-note">No incidents reported.</p>
+                    </section>
                 </div>
             </article>
         </section>

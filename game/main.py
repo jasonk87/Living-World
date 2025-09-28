@@ -147,6 +147,8 @@ def tick_simulation():
                 game_world.manage_campaigns()
             if hasattr(game_world, "manage_economy"):
                 game_world.manage_economy()
+            if hasattr(game_world, "process_daily_economy"):
+                game_world.process_daily_economy()
 
             if hasattr(game_time_obj, 'days_until_election') and game_time_obj.days_until_election <= 0:
                 if hasattr(game_world, 'handle_election'):
@@ -339,7 +341,13 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "event_log": event_log_repr,
                     "is_paused": game_paused,
                     "days_until_election": getattr(game_time_obj, 'days_until_election', -1),
-                    "current_speed_multiplier": SIMULATION_SPEED_MULTIPLIER
+                    "current_speed_multiplier": SIMULATION_SPEED_MULTIPLIER,
+                    "treasury": getattr(game_world, 'treasury_coins', 0),
+                    "daily_economy_report": getattr(game_world, 'last_daily_economic_report', {}),
+                    "pending_wages": getattr(game_world, 'pending_wages', []),
+                    "market_prices": getattr(game_world, 'market_prices', {}),
+                    "resource_pressures": game_world.identify_resource_pressures() if hasattr(game_world, 'identify_resource_pressures') else [],
+                    "crime_reports": getattr(game_world, 'crime_reports', []),
                 }
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')

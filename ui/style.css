@@ -445,6 +445,55 @@ button:focus-visible {
     color: var(--text-muted);
 }
 
+.economy-card {
+    margin-top: 1.1rem;
+}
+
+.economy-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 1rem;
+}
+
+.economy-summary h3 {
+    font-size: 0.95rem;
+    margin-bottom: 0.4rem;
+}
+
+.mini-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    font-size: 0.9rem;
+}
+
+.mini-list li {
+    background: rgba(12, 18, 32, 0.6);
+    border-radius: 10px;
+    padding: 0.5rem 0.65rem;
+    border: 1px solid rgba(93, 224, 255, 0.1);
+}
+
+.mini-list li strong {
+    color: var(--text-color);
+}
+
+.mini-list li.empty {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    padding-left: 0;
+}
+
+.mini-note {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    line-height: 1.4;
+}
+
 /* --- Character roster --- */
 .character-search input {
     width: 100%;

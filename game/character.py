@@ -476,7 +476,7 @@ class Character:
                     self.update_mood_score(config.MOOD_CHANGE_SUCCESSFUL_TASK_MAJOR, f"Completed building {target_building.display_name}")
                     self.needs['Esteem'] = min(config.NEED_SCORE_MAX, self.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) + 10) # Completing a whole building is a major esteem boost
                     self.add_memory(f"Completing the building {target_building.display_name} greatly boosted my esteem. Esteem: {self.needs['Esteem']}")
-                    self._receive_payment(JOB_SALARIES.get("Execute Build Order", 25), f"completing {target_building.display_name}")
+                    self._receive_payment(JOB_SALARIES.get("Execute Build Order", 25), f"completing {target_building.display_name}", world)
                     self._reset_building_state()
                     self.current_goal = self.get_default_goal() # Changed from create_goal_from_job
                     return
@@ -557,13 +557,23 @@ class Character:
     def get_inventory_load(self) -> int: return sum(self.inventory.values())
     def add_memory(self, e: str): self.memory.append(e); self.memory=self.memory[-20:]
 
-    def _receive_payment(self, amount: int, reason: str):
-        """Increases character's money and adds a memory."""
+    def _receive_payment(self, amount: int, reason: str, world: Optional['World'] = None):
+        """Handles wages, routing through the world's treasury when available."""
         if amount <= 0:
             return
-        self.money += amount
-        self.add_memory(f"Received {amount} coins for {reason}.")
-        self.update_mood_score(config.MOOD_CHANGE_GOT_PAID, f"Got paid for {reason}")
+
+        paid_amount, owed_amount = amount, 0
+        if world:
+            paid_amount, owed_amount = world.process_payment(self, amount, reason)
+        else:
+            self.money += amount
+
+        if paid_amount > 0:
+            self.add_memory(f"Received {paid_amount} coins for {reason}.")
+            self.update_mood_score(config.MOOD_CHANGE_GOT_PAID, f"Got paid for {reason}")
+        if owed_amount > 0:
+            self.add_memory(f"Still owed {owed_amount} coins for {reason}.")
+            self.update_mood_score(getattr(config, "MOOD_CHANGE_PAYMENT_DELAY", -5), "Wages delayed")
 
     def interact(self, o: 'OtherCharacter', w: 'World'): pass
 
@@ -1027,16 +1037,16 @@ class Character:
                 self.current_goal = Goal(GoalType.INITIATE_HAULING, assignee_id=self.name, originator_id=self.name, parameters=haul_params)
                 return
             else: # All items crafted AND all items hauled (inventory of this item is 0)
-                 order.status = "Completed"
-                 self.add_memory(f"Completed and Stocked all items for WO {order.order_id} ({item_name}).")
-                 print(f"{self.name} COMPLETED/STOCKED WO {order.order_id} ({item_name}).")
-                 self.update_mood_score(config.MOOD_CHANGE_SUCCESSFUL_TASK_MAJOR, f"Fully completed WO {order.order_id}")
-                 self.needs['Esteem'] = min(config.NEED_SCORE_MAX, self.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) + 8) # Fully completing a WO is a major esteem boost
-                 self.add_memory(f"Fully completing and stocking WO {order.order_id} gave a major boost to my esteem. Esteem: {self.needs['Esteem']}")
-                 self._receive_payment(JOB_SALARIES.get("Execute Craft Order", 10), f"completing WO for {item_name}")
-                 self._reset_crafting_state()
-                 self.current_goal = self.get_default_goal()
-                 return
+                order.status = "Completed"
+                self.add_memory(f"Completed and Stocked all items for WO {order.order_id} ({item_name}).")
+                print(f"{self.name} COMPLETED/STOCKED WO {order.order_id} ({item_name}).")
+                self.update_mood_score(config.MOOD_CHANGE_SUCCESSFUL_TASK_MAJOR, f"Fully completed WO {order.order_id}")
+                self.needs['Esteem'] = min(config.NEED_SCORE_MAX, self.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) + 8) # Fully completing a WO is a major esteem boost
+                self.add_memory(f"Fully completing and stocking WO {order.order_id} gave a major boost to my esteem. Esteem: {self.needs['Esteem']}")
+                self._receive_payment(JOB_SALARIES.get("Execute Craft Order", 10), f"completing WO for {item_name}", world)
+                self._reset_crafting_state()
+                self.current_goal = self.get_default_goal()
+                return
 
     def _execute_fetch_resource_for_wo(self, world:'World', blueprint:Dict):
         if not self.resource_to_fetch: return
@@ -1092,7 +1102,7 @@ class Character:
                 new_order = WorkOrder(order_type="CraftItem", details=order_details, creation_day=world.game_time.current_day, priority=2)
                 world.add_work_order(new_order); self.order_cooldown[item_name] = world.game_time.current_day
                 self.add_memory(f"Generated WO for {qty_to_order} {item_name}."); print(f"{self.name} (MC) generated WO for {qty_to_order} {item_name}(s).")
-                self._receive_payment(JOB_SALARIES.get("Assess Production Needs", 10), f"creating WO for {item_name}")
+                self._receive_payment(JOB_SALARIES.get("Assess Production Needs", 10), f"creating WO for {item_name}", world)
                 item_processed_this_tick = True; self._mc_item_check_idx = (current_idx + 1) % len(target_item_names); break
         if not item_processed_this_tick:
             self.current_goal = self.get_default_goal()
@@ -1227,10 +1237,10 @@ class Character:
         elif stale_concerns: print(f"{self.name} (Manager) notes stale data for {order_to_process.order_id}, proceeding with caution.")
         if can_approve:
             order_to_process.status = "Approved"; order_to_process.approved_by = self.name; order_to_process.approval_day = world.game_time.current_day; self.add_memory(f"Approved WO {order_to_process.order_id}"); print(f"{self.name} (Manager) APPROVED {order_to_process.order_id[:8]}.")
-            self._receive_payment(JOB_SALARIES.get("Manage Subordinates", 3), f"reviewing WO {order_to_process.order_id[:4]}")
+            self._receive_payment(JOB_SALARIES.get("Manage Subordinates", 3), f"reviewing WO {order_to_process.order_id[:4]}", world)
         else:
             order_to_process.status = "Denied"; order_to_process.denied_by = self.name; order_to_process.denial_reason = f"Insuff: {', '.join(missing_notes) or 'stale data'}"; self.add_memory(f"Denied WO {order_to_process.order_id}"); print(f"{self.name} (Manager) DENIED {order_to_process.order_id[:8]}. Reason: {order_to_process.denial_reason}")
-            self._receive_payment(JOB_SALARIES.get("Manage Subordinates", 3), f"reviewing WO {order_to_process.order_id[:4]}")
+            self._receive_payment(JOB_SALARIES.get("Manage Subordinates", 3), f"reviewing WO {order_to_process.order_id[:4]}", world)
     def _execute_maintain_ledger(self, world: 'World'):
         if self.job != "Bookkeeper":
             self.current_goal = self.get_default_goal()
@@ -1288,7 +1298,7 @@ class Character:
 
             world.ledger.update_stockpile_record(target_stockpile_name, recorded_inventory, world.game_time.current_day)
             self.add_memory(f"Counted {target_stockpile_name}"); print(f"{self.name} (Bookkeeper) finished counting {target_stockpile_name}. Ledger updated with: {recorded_inventory}. Day: {world.game_time.current_day}.")
-            self._receive_payment(JOB_SALARIES.get("Maintain Ledger", 4), f"counting {target_stockpile_name}")
+            self._receive_payment(JOB_SALARIES.get("Maintain Ledger", 4), f"counting {target_stockpile_name}", world)
             self.current_goal = create_goal_from_job("Maintain Ledger", self.name) or self.get_default_goal()
             self.decide_action(world)
             return
@@ -1417,9 +1427,9 @@ class Character:
 
             # Pay for hauling if it's a primary job duty
             if self.job == "Woodcutter" and res == "Wood":
-                self._receive_payment(JOB_SALARIES.get("Perform Woodcutter Duties", 5), f"hauling {res}")
+                self._receive_payment(JOB_SALARIES.get("Perform Woodcutter Duties", 5), f"hauling {res}", world)
             elif self.job == "Stonemason" and res == "Stone":
-                self._receive_payment(JOB_SALARIES.get("Perform Stonemason Duties", 5), f"hauling {res}")
+                self._receive_payment(JOB_SALARIES.get("Perform Stonemason Duties", 5), f"hauling {res}", world)
 
             self.current_goal = self.get_default_goal()
         else:
@@ -1668,7 +1678,7 @@ class Character:
 
         if treatment_successful_this_tick:
             self._grant_skill_experience("Medicine", 1.5, world) # More XP for successful application
-            self._receive_payment(JOB_SALARIES.get("Provide Medical Care", 8), f"treating {target_patient.name}")
+            self._receive_payment(JOB_SALARIES.get("Provide Medical Care", 8), f"treating {target_patient.name}", world)
         else:
             self._grant_skill_experience("Medicine", 0.2, world) # Minor XP for attempt
 

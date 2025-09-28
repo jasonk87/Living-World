@@ -20,6 +20,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const hudSeasonValue = document.getElementById('hud-season-value');
     const hudWeatherValue = document.getElementById('hud-weather-value');
     const hudElectionValue = document.getElementById('hud-election-value');
+    const hudTreasuryValue = document.getElementById('hud-treasury-value');
+    const hudRationsValue = document.getElementById('hud-rations-value');
+    const economyMarketList = document.getElementById('economy-market-list');
+    const economyPressureList = document.getElementById('economy-pressure-list');
+    const economyWageList = document.getElementById('economy-wage-list');
+    const economyCrimeNote = document.getElementById('economy-crime-note');
     const characterSearchInput = document.getElementById('character-search');
     const infoPanel = document.getElementById('info-panel');
 
@@ -59,6 +65,86 @@ document.addEventListener('DOMContentLoaded', () => {
             const entityDetails = document.getElementById('entity-details');
             if (entityDetails && !entityDetails.innerHTML.trim()) {
                 entityDetails.innerHTML = '<p>Click on the map to inspect citizens or structures.</p>';
+            }
+        }
+    }
+
+    function updateEconomyIntel(gameState) {
+        if (!gameState) return;
+        const report = gameState.daily_economy_report || {};
+
+        if (hudTreasuryValue) {
+            const treasury = typeof gameState.treasury === 'number' ? gameState.treasury : null;
+            hudTreasuryValue.textContent = treasury !== null ? `${treasury}c` : '—';
+        }
+
+        if (hudRationsValue) {
+            const consumed = typeof report.food_consumed === 'number' ? report.food_consumed : '—';
+            const deficit = typeof report.food_deficit === 'number' ? report.food_deficit : 0;
+            const deficitText = deficit > 0 ? ` • Short ${deficit}` : '';
+            hudRationsValue.textContent = `${consumed}${deficitText}`;
+        }
+
+        if (economyMarketList) {
+            const prices = Object.entries(gameState.market_prices || {});
+            if (!prices.length) {
+                economyMarketList.innerHTML = '<li class="empty">No market data.</li>';
+            } else {
+                prices.sort((a, b) => b[1] - a[1]);
+                const topEntries = prices.slice(0, 5);
+                economyMarketList.innerHTML = topEntries
+                    .map(([item, price]) => `<li><strong>${item}</strong>: ${price}c</li>`)
+                    .join('');
+            }
+        }
+
+        if (economyPressureList) {
+            const pressures = Array.isArray(gameState.resource_pressures) ? gameState.resource_pressures : [];
+            if (!pressures.length) {
+                economyPressureList.innerHTML = '<li class="empty">No active pressures.</li>';
+            } else {
+                economyPressureList.innerHTML = pressures
+                    .slice(0, 5)
+                    .map(pressure => {
+                        const status = pressure.status === 'shortage' ? 'Shortage' : 'Surplus';
+                        return `<li><strong>${pressure.resource}</strong>: ${status} (Δ ${pressure.severity})</li>`;
+                    })
+                    .join('');
+            }
+        }
+
+        if (economyWageList) {
+            const arrears = Array.isArray(gameState.pending_wages) ? gameState.pending_wages : [];
+            if (!arrears.length) {
+                economyWageList.innerHTML = '<li class="empty">No outstanding wages.</li>';
+            } else {
+                economyWageList.innerHTML = arrears
+                    .slice(0, 5)
+                    .map(entry => {
+                        const amount = typeof entry.amount_due === 'number' ? entry.amount_due : 0;
+                        const reason = entry.reason || 'duties';
+                        const day = typeof entry.day_incurred === 'number' && entry.day_incurred >= 0
+                            ? ` (Day ${entry.day_incurred})`
+                            : '';
+                        return `<li><strong>${entry.character}</strong>: ${amount}c for ${reason}${day}</li>`;
+                    })
+                    .join('');
+            }
+        }
+
+        if (economyCrimeNote) {
+            const reportCrimes = Array.isArray(report.crime_events) ? report.crime_events : [];
+            let latestCrime = reportCrimes.slice(-1)[0];
+            if (!latestCrime && Array.isArray(gameState.crime_reports) && gameState.crime_reports.length) {
+                latestCrime = gameState.crime_reports.slice(-1)[0];
+            }
+            if (latestCrime && latestCrime.description) {
+                const dayLabel = typeof latestCrime.day === 'number' && latestCrime.day >= 0
+                    ? `Day ${latestCrime.day}: `
+                    : '';
+                economyCrimeNote.textContent = `${dayLabel}${latestCrime.description}`;
+            } else {
+                economyCrimeNote.textContent = 'No incidents reported.';
             }
         }
     }
@@ -823,6 +909,7 @@ document.addEventListener('DOMContentLoaded', () => {
             updateGameInfo(gameState);
             updateEventFeed(gameState.event_log);
             updateWorldSummary(gameState);
+            updateEconomyIntel(gameState);
             renderCharacterList(gameState.characters);
             if (followedCharacterName) {
                 loadCharacterDetails(followedCharacterName, { worldPanel: false, characterPanel: true, showLoading: false });

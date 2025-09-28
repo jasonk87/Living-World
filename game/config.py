@@ -10,6 +10,22 @@ TICKS_PER_DAY = 10
 DAYS_PER_SEASON = 10 # Example, can be adjusted
 MAX_SIMULATION_DAYS = 20 # Max days the simulation runs for in headless/test mode.
 
+# Economy & Survival Balancing
+STARTING_TREASURY_COINS = 350
+DAILY_BASE_TAX_INCOME = 18
+DAILY_FOOD_CONSUMPTION_PER_CITIZEN = 1
+STARVATION_HUNGER_PENALTY = 15
+MOOD_CHANGE_STARVING = -12
+MOOD_CHANGE_PAYMENT_DELAY = -6
+THEFT_BASE_CHANCE = 0.04
+THEFT_DESPERATION_SCALE = 0.35
+THEFT_HUNGER_THRESHOLD = 35
+THEFT_LOW_FUNDS_THRESHOLD = 4
+THEFT_MAX_QUANTITY = 3
+THEFT_DETECTION_BASE = 0.35
+MOOD_CHANGE_CAUGHT_STEALING = -18
+MOOD_CHANGE_STOLE_SUCCESS = 3
+
 # Other game settings (can be added later)
 STALE_THRESHOLD_DAYS = 2 # Days after which ledger data is considered stale for manager decisions
 MANAGEMENT_REVIEW_INTERVAL_DAYS = 5 # How often managers review subordinates

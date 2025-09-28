@@ -9,7 +9,7 @@ from .ledger import Ledger
 from .time import Time
 from .work_order import WorkOrder
 from .building import Building
-from .data import STRUCTURE_BLUEPRINTS, MARKET_PRICES
+from .data import STRUCTURE_BLUEPRINTS, MARKET_PRICES, BLUEPRINTS
 from .rumor import Rumor
 from . import config
 
@@ -58,6 +58,12 @@ class World:
         self.active_campaign_cycle_start: Optional[int] = None
         self.last_campaign_day: Optional[int] = None
         self.resource_collection_directives: Dict[str, Dict[str, Any]] = {}
+        self.treasury_coins: int = getattr(config, "STARTING_TREASURY_COINS", 0)
+        self.pending_wages: List[Dict[str, Any]] = []
+        self.todays_wages_paid: int = 0
+        self.todays_wages_owed: int = 0
+        self.last_daily_economic_report: Dict[str, Any] = {}
+        self.crime_reports: List[Dict[str, Any]] = []
 
     def update_rumors_daily(self):
         """Decays strength of all rumors and removes very weak ones."""
@@ -525,6 +531,49 @@ class World:
             total += character.inventory.get(resource_name, 0)
         return total
 
+    def _withdraw_from_stockpiles(self, resource_name: str, quantity: int) -> int:
+        if quantity <= 0:
+            return 0
+        amount_taken = 0
+        remaining = quantity
+        sorted_stockpiles = sorted(
+            self.stockpiles,
+            key=lambda sp: sp.inventory.get(resource_name, 0),
+            reverse=True,
+        )
+        for stockpile in sorted_stockpiles:
+            available = stockpile.inventory.get(resource_name, 0)
+            if available <= 0:
+                continue
+            take = min(available, remaining)
+            success, removed = stockpile.remove_item(resource_name, take)
+            if not success or removed <= 0:
+                continue
+            amount_taken += removed
+            remaining -= removed
+            if self.game_time:
+                self.ledger.update_stockpile_record(stockpile.name, stockpile.inventory, self.game_time.current_day)
+            if remaining <= 0:
+                break
+        return amount_taken
+
+    def _consume_resource_for_character(self, character: 'Character', resource_name: str, quantity: int) -> int:
+        if quantity <= 0:
+            return 0
+        consumed = 0
+        available = character.inventory.get(resource_name, 0)
+        if available > 0:
+            take = min(quantity, available)
+            character.inventory[resource_name] = available - take
+            if character.inventory[resource_name] <= 0:
+                del character.inventory[resource_name]
+            consumed += take
+        if consumed < quantity:
+            pulled = self._withdraw_from_stockpiles(resource_name, quantity - consumed)
+            if pulled > 0:
+                consumed += pulled
+        return consumed
+
     def identify_resource_pressures(self) -> List[Dict[str, Any]]:
         """Returns resource pressure descriptors sorted by severity."""
         pressures: List[Dict[str, Any]] = []
@@ -609,6 +658,239 @@ class World:
                 del self.resource_collection_directives[resource_name]
         if expired:
             self.add_event_log_message(f"Resource directives concluded for: {expired}")
+
+    def _apply_daily_food_consumption(self, report: Dict[str, Any]):
+        per_capita = getattr(config, "DAILY_FOOD_CONSUMPTION_PER_CITIZEN", 0)
+        hunger_recovery = BLUEPRINTS.get("Food", {}).get("hunger_satisfaction", 40)
+        total_consumed = 0
+        total_deficit = 0
+        if per_capita <= 0:
+            report["food_consumed"] = total_consumed
+            report["food_deficit"] = total_deficit
+            return
+
+        for character in self.characters:
+            required = per_capita
+            consumed = self._consume_resource_for_character(character, "Food", required)
+            if consumed > 0:
+                total_consumed += consumed
+                current_hunger = character.needs.get("Hunger", 50)
+                hunger_gain = hunger_recovery * consumed
+                character.needs["Hunger"] = min(config.NEED_SCORE_MAX, current_hunger + hunger_gain)
+                ration_text = "ration" if consumed == 1 else "rations"
+                character.add_memory(f"Shared the daily meal ({consumed} {ration_text}).")
+                character.update_mood_score(config.MOOD_CHANGE_NEED_FULFILLED, "Ate communal meal")
+            if consumed < required:
+                shortage = required - consumed
+                total_deficit += shortage
+                current_hunger = character.needs.get("Hunger", 50)
+                character.needs["Hunger"] = max(
+                    config.NEED_SCORE_MIN,
+                    current_hunger - getattr(config, "STARVATION_HUNGER_PENALTY", 10),
+                )
+                character.update_mood_score(getattr(config, "MOOD_CHANGE_STARVING", -12), "Missed daily ration")
+                character.add_memory("Went hungry today—stores are running low.")
+        report["food_consumed"] = total_consumed
+        report["food_deficit"] = total_deficit
+
+    def _get_security_modifier(self) -> float:
+        modifier = 1.0
+        if any(char.job == "Sheriff" for char in self.characters):
+            modifier *= 0.6
+        if any(char.job == "Deputy" for char in self.characters):
+            modifier *= 0.75
+        return modifier
+
+    def _select_theft_target(self) -> Optional[Tuple[str, Stockpile]]:
+        candidates: List[Tuple[str, Stockpile, float]] = []
+        for stockpile in self.stockpiles:
+            for resource_name, quantity in stockpile.inventory.items():
+                if quantity <= 0:
+                    continue
+                desirability = float(quantity)
+                if resource_name == "Food":
+                    desirability *= 2.0
+                candidates.append((resource_name, stockpile, desirability))
+        if not candidates:
+            return None
+        total_weight = sum(weight for _, _, weight in candidates)
+        if total_weight <= 0:
+            return None
+        pick = random.uniform(0, total_weight)
+        cumulative = 0.0
+        for resource_name, stockpile, weight in candidates:
+            cumulative += weight
+            if pick <= cumulative:
+                return resource_name, stockpile
+        return candidates[-1][0], candidates[-1][1]
+
+    def _resolve_theft_attempts(self, report: Dict[str, Any]):
+        base_chance = getattr(config, "THEFT_BASE_CHANCE", 0.0)
+        theft_events: List[Dict[str, Any]] = []
+        if base_chance <= 0 or not self.stockpiles:
+            report["crime_events"] = theft_events
+            return
+
+        security_modifier = self._get_security_modifier()
+        hunger_threshold = getattr(config, "THEFT_HUNGER_THRESHOLD", 35)
+        desperation_scale = getattr(config, "THEFT_DESPERATION_SCALE", 0.3)
+        low_funds_threshold = getattr(config, "THEFT_LOW_FUNDS_THRESHOLD", 5)
+        max_quantity = getattr(config, "THEFT_MAX_QUANTITY", 2)
+        detection_base = getattr(config, "THEFT_DETECTION_BASE", 0.25)
+
+        for character in self.characters:
+            hunger = character.needs.get("Hunger", 50)
+            desperation = 0.0
+            if hunger < hunger_threshold:
+                desperation += (hunger_threshold - hunger) / max(1, hunger_threshold)
+            if character.money < low_funds_threshold:
+                desperation += 0.5
+            if desperation <= 0:
+                continue
+
+            chance = (base_chance + desperation * desperation_scale) * security_modifier
+            if random.random() >= chance:
+                continue
+
+            theft_target = self._select_theft_target()
+            if not theft_target:
+                continue
+            resource_name, stockpile = theft_target
+            available_qty = stockpile.inventory.get(resource_name, 0)
+            if available_qty <= 0:
+                continue
+            steal_qty = min(max_quantity, available_qty)
+            success, removed = stockpile.remove_item(resource_name, steal_qty)
+            if not success or removed <= 0:
+                continue
+
+            character.inventory[resource_name] = character.inventory.get(resource_name, 0) + removed
+            description = f"{character.name} stole {removed} {resource_name} from {stockpile.name}"
+
+            detection_chance = detection_base / max(0.25, security_modifier)
+            if random.random() < detection_chance:
+                description += " but was caught"
+                character.add_memory("Was caught stealing from the stockpile.")
+                character.update_reputation(-3, "Caught stealing supplies", self)
+                character.update_mood_score(getattr(config, "MOOD_CHANGE_CAUGHT_STEALING", -15), "Caught stealing supplies")
+            else:
+                character.add_memory(f"Stole {removed} {resource_name} from {stockpile.name} under cover of night.")
+                character.update_mood_score(getattr(config, "MOOD_CHANGE_STOLE_SUCCESS", 2), "Stole supplies without notice")
+
+            theft_events.append({
+                "character": character.name,
+                "resource": resource_name,
+                "amount": removed,
+                "description": description,
+            })
+            if self.game_time:
+                self.ledger.update_stockpile_record(stockpile.name, stockpile.inventory, self.game_time.current_day)
+
+        if theft_events:
+            day_value = self.game_time.current_day if self.game_time else -1
+            for event in theft_events:
+                self.crime_reports.append({"day": day_value, **event})
+            self.crime_reports = self.crime_reports[-12:]
+        report["crime_events"] = theft_events
+
+    def _settle_wage_backlog(self) -> int:
+        if not self.pending_wages or self.treasury_coins <= 0:
+            return 0
+        paid_total = 0
+        remaining_debts: List[Dict[str, Any]] = []
+        for debt in self.pending_wages:
+            amount_due = debt.get("amount_due", 0)
+            if amount_due <= 0:
+                continue
+            character = self.get_character_by_name(debt.get("character", ""))
+            if not character:
+                continue
+            payment = min(amount_due, self.treasury_coins)
+            if payment <= 0:
+                remaining_debts.append(debt)
+                continue
+            self.treasury_coins -= payment
+            character.money += payment
+            paid_total += payment
+            amount_due -= payment
+            character.add_memory(f"Received {payment} coin{'s' if payment != 1 else ''} in back pay for {debt.get('reason', 'work')}.")
+            character.update_mood_score(config.MOOD_CHANGE_GOT_PAID, "Received back pay")
+            if amount_due > 0:
+                debt["amount_due"] = amount_due
+                remaining_debts.append(debt)
+            else:
+                self.add_event_log_message(f"Cleared wage arrears for {character.name}'s {debt.get('reason', 'duties')}.")
+        self.pending_wages = remaining_debts
+        self.todays_wages_paid += paid_total
+        return paid_total
+
+    def process_payment(self, character: 'Character', amount: int, reason: str) -> Tuple[int, int]:
+        if amount <= 0:
+            return 0, 0
+        paid = min(amount, self.treasury_coins)
+        if paid > 0:
+            self.treasury_coins -= paid
+            character.money += paid
+            self.todays_wages_paid += paid
+        owed = amount - paid
+        if owed > 0:
+            self.todays_wages_owed += owed
+            debt_record = {
+                "character": character.name,
+                "amount_due": owed,
+                "reason": reason,
+                "day_incurred": self.game_time.current_day if self.game_time else -1,
+            }
+            self.pending_wages.append(debt_record)
+            self.add_event_log_message(
+                f"Treasury short {owed} coins for {character.name}'s {reason}. Added to wage arrears."
+            )
+        return paid, owed
+
+    def process_daily_economy(self):
+        if not self.game_time:
+            return
+
+        previous_wages_paid = self.todays_wages_paid
+        previous_wages_owed = self.todays_wages_owed
+        self.todays_wages_paid = 0
+        self.todays_wages_owed = 0
+
+        report: Dict[str, Any] = {
+            "day": self.game_time.current_day,
+            "tax_collected": 0,
+            "food_consumed": 0,
+            "food_deficit": 0,
+            "wages_paid": previous_wages_paid,
+            "wages_owed": previous_wages_owed,
+            "arrears": sum(debt.get("amount_due", 0) for debt in self.pending_wages),
+            "arrears_paid": 0,
+            "crime_events": [],
+            "treasury": self.treasury_coins,
+        }
+
+        tax_income = getattr(config, "DAILY_BASE_TAX_INCOME", 0)
+        if tax_income:
+            self.treasury_coins += tax_income
+            report["tax_collected"] = tax_income
+
+        report["arrears_paid"] = self._settle_wage_backlog()
+        report["treasury"] = self.treasury_coins
+        report["arrears"] = sum(debt.get("amount_due", 0) for debt in self.pending_wages)
+
+        self._apply_daily_food_consumption(report)
+        self._resolve_theft_attempts(report)
+
+        summary = (
+            f"Economic summary — Treasury {self.treasury_coins}c "
+            f"(tax +{report['tax_collected']}c, wages paid {report['wages_paid']}c, arrears settled {report['arrears_paid']}c). "
+            f"Outstanding arrears {report['arrears']}c, food deficit {report['food_deficit']} rations."
+        )
+        self.add_event_log_message(summary)
+        for crime_event in report.get("crime_events", []):
+            self.add_event_log_message(f"Security report: {crime_event['description']}.")
+
+        self.last_daily_economic_report = report
 
     # --- Governance & Campaign Management ---
 
