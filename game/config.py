@@ -36,12 +36,12 @@ FIRING_WARNING_THRESHOLD = 3 # Number of warnings before firing is likely
 BASE_EXP_TO_NEXT_LEVEL = 50.0
 EXP_LEVEL_SCALING_FACTOR = 1.5
 
-# Mayor Specific Configs (Initial placeholders)
-MAYOR_RESOURCE_LOW_THRESHOLD = 20  # Example: Mayor concerned if key resource drops below this
-MAYOR_RESOURCE_HIGH_THRESHOLD = 150 # Example: Mayor notes abundance if key resource is above this
+# Mayor Oversight Thresholds
+MAYOR_RESOURCE_LOW_THRESHOLD = 20  # Mayor becomes concerned if key resources drop below this
+MAYOR_RESOURCE_HIGH_THRESHOLD = 150 # Mayor recognizes an abundance when stores exceed this
 
-# Medical System Configs (Initial Placeholders)
-MEDICAL_SUPPLY_LOW_THRESHOLD = 5 # Example: CMO concerned if Herbs/Bandages drop below this
+# Medical System Thresholds
+MEDICAL_SUPPLY_LOW_THRESHOLD = 5 # Chief Medical Officer acts when medical supplies fall below this
 
 # Governance Configs
 ELECTION_CYCLE_DAYS = 30 # How often mayoral elections are held

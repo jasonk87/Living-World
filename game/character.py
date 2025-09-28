@@ -78,7 +78,7 @@ class Character:
         self.rank: str = rank
         self.liege: Optional[str] = liege
         self.vassals: List[str] = vassals if vassals is not None else []
-        self.assigned_tasks: List[Dict] = [] # TODO: Re-evaluate if this is needed with Goal objects
+        self.assigned_tasks: List[Dict] = [] # Historical record of manager-assigned tasks for performance reviews
         self.performance_rating: str = "Not Evaluated"
         self.last_performance_review_day: Optional[int] = None
         self.warning_count: int = 0
@@ -93,6 +93,9 @@ class Character:
         self._mc_item_check_idx: int = 0
         self.active_crime_assignment: Optional[str] = None
         self.crime_investigation_focus: Optional[Dict[str, Any]] = None
+        self.last_estate_review_day: Optional[int] = None
+        self.active_estate_orders: List[Dict[str, Any]] = []
+        self.last_high_court_day: Optional[int] = None
 
         self.is_sick: bool = False
         self.sickness_severity: int = 0
@@ -696,25 +699,101 @@ class Character:
         if self.equipped_tool: self.add_memory(f"Unequipped {self.equipped_tool['name']}."); print(f"{self.name} unequipped {self.equipped_tool['name']}."); self.equipped_tool = None
 
     def find_task_location(self, task_name: str, world: 'World') -> Optional[Tuple[int,int]]:
-        task_def = JOB_TASK_DEFINITIONS.get(task_name);
-        if not task_def: return None
-        res_prod = task_def.get("resource_produced"); tile_to_find = None
-        if res_prod == "Wood": tile_to_find = "Forest"
-        elif res_prod == "Stone": tile_to_find = "Rocks"
-        elif res_prod == "Iron Ore": tile_to_find = "Rocks"
-        else: return None
+        task_def = JOB_TASK_DEFINITIONS.get(task_name)
+        if not task_def:
+            return None
+
+        resource_name = task_def.get("resource_produced")
+        if resource_name:
+            resource_nodes = world.get_resources(resource_name)
+            if resource_nodes:
+                # Prefer the closest known node to reduce travel churn
+                sorted_nodes = sorted(
+                    resource_nodes,
+                    key=lambda loc: abs(loc[0] - self.x) + abs(loc[1] - self.y),
+                )
+                for node in sorted_nodes:
+                    if world.get_tile(*node) != "OutOfBounds":
+                        return node
+
+        tile_preferences = {
+            "Wood": ["Forest"],
+            "Stone": ["Rocks", "Mountain"],
+            "Iron Ore": ["Rocks", "Mountain"],
+            "Herbs": ["Forest", "Meadow", "Grass"],
+            "Food": ["Fields", "Meadow", "Grass"],
+        }
+        tiles_to_scan = tile_preferences.get(resource_name, [])
+        if not tiles_to_scan:
+            return None
+
+        closest_match: Optional[Tuple[int, int]] = None
+        closest_distance = float("inf")
         for r_idx in range(world.grid_size[0]):
             for c_idx in range(world.grid_size[1]):
-                if world.get_tile(r_idx,c_idx) == tile_to_find:
-                    if res_prod in world.resources and (r_idx,c_idx) in world.resources.get(res_prod,[]): return (r_idx,c_idx)
-                    elif res_prod not in world.resources and not task_def.get("needs_specific_resource_item", True) : return (r_idx,c_idx)
-        return None
+                tile = world.get_tile(r_idx, c_idx)
+                if tile not in tiles_to_scan:
+                    continue
+                distance = abs(r_idx - self.x) + abs(c_idx - self.y)
+                if distance < closest_distance:
+                    closest_distance = distance
+                    closest_match = (r_idx, c_idx)
+        return closest_match
+
+    def _deposit_resource_to_nearest_stockpile(
+        self, resource_name: str, world: 'World', amount: Optional[int] = None
+    ) -> bool:
+        available = self.inventory.get(resource_name, 0)
+        if available <= 0:
+            return True
+
+        stockpiles = world.get_stockpiles_for_resource(resource_name)
+        if not stockpiles:
+            self.add_memory(f"No stockpile is configured to accept {resource_name} right now.")
+            return True
+
+        def closest_distance(sp):
+            return min(abs(pt[0] - self.x) + abs(pt[1] - self.y) for pt in sp.access_points)
+
+        target_stockpile = min(stockpiles, key=closest_distance)
+        access_point = min(
+            target_stockpile.access_points,
+            key=lambda loc: abs(loc[0] - self.x) + abs(loc[1] - self.y),
+        )
+
+        if (self.x, self.y) != access_point:
+            self.move_towards(access_point[0], access_point[1], world)
+            return False
+
+        deposit_amount = available if amount is None else min(amount, available)
+        success, added = target_stockpile.add_item(resource_name, deposit_amount)
+        if not success or added <= 0:
+            self.add_memory(f"{target_stockpile.name} has no space for additional {resource_name}.")
+            return True
+
+        remaining = available - added
+        if remaining > 0:
+            self.inventory[resource_name] = remaining
+        else:
+            self.inventory.pop(resource_name, None)
+
+        world.add_event_log_message(
+            f"{self.name} stores {added} {resource_name} in {target_stockpile.name}."
+        )
+        if world.game_time:
+            world.ledger.update_stockpile_record(
+                target_stockpile.name, target_stockpile.inventory, world.game_time.current_day
+            )
+        return True
     def gather_resource(self, resource_name: str, world: 'World'): pass
     def build(self, structure_type: str, world: 'World') -> bool: return False
 
     def job_default_goal_type_str(self) -> str: # Returns a string representing the goal type or job title
         if self.job == "Woodcutter": return "Perform Woodcutter Duties"
         if self.job == "Stonemason": return "Perform Stonemason Duties"
+        if self.job == "Farmer": return "Perform Farmer Duties"
+        if self.job == "Hunter": return "Perform Hunter Duties"
+        if self.job == "Fletcher": return "Perform Fletcher Duties"
         if self.job == "Master Craftsman": return "Assess Production Needs"
         if self.job == "Manager": return "Manage Subordinates"
         if self.job == "Bookkeeper": return "Maintain Ledger"
@@ -724,6 +803,8 @@ class Character:
         if self.job == "Medic": return "Provide Medical Care"
         if self.job == "Sheriff": return "Maintain Peace in Settlement"
         if self.job == "Deputy": return "Patrol Area"
+        if self.job == "Scout": return "Patrol Area"
+        if self.job == "Militia Soldier": return "Patrol Area"
         if self.job == "Reeve": return "Manage Estate"
         if self.job == "Bailiff": return "Assist Reeve"
         if self.rank in ["Noble Lord", "Baron"] and not self.subordinates_names:
@@ -1356,6 +1437,138 @@ class Character:
             self.decide_action(world) # Process new goal
         # If no next_goal_type, means current logic is fine, or it's already Idle/Wander - or if the above didn't set a new goal, it implies current one continues or becomes default via decide_action
 
+    def _execute_perform_farmer_duties(self, world: 'World'):
+        if self.job != "Farmer":
+            self.current_goal = self.get_default_goal()
+            return
+
+        params = self.current_goal.parameters
+        params.setdefault("phase", "gather")
+        deliver_threshold = max(3, min(self.max_inventory_items, 6))
+
+        if params.get("phase") == "deliver" or self.inventory.get("Food", 0) >= deliver_threshold:
+            params["phase"] = "deliver"
+            if self._deposit_resource_to_nearest_stockpile("Food", world):
+                params["phase"] = "gather"
+                self.current_goal = self.get_default_goal()
+            return
+
+        field_location = self.find_task_location("Tend Fields", world)
+        if not field_location:
+            self.add_memory("No open fields to tend today; shifting to other duties.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        if (self.x, self.y) != field_location:
+            self.move_towards(field_location[0], field_location[1], world)
+            return
+
+        if not self._execute_generic_task(world, "Tend Fields"):
+            return
+
+        if self.inventory.get("Food", 0) >= deliver_threshold:
+            params["phase"] = "deliver"
+
+    def _execute_perform_hunter_duties(self, world: 'World'):
+        if self.job != "Hunter":
+            self.current_goal = self.get_default_goal()
+            return
+
+        params = self.current_goal.parameters
+        params.setdefault("phase", "stalk")
+        deliver_threshold = max(2, min(self.max_inventory_items, 5))
+
+        if params.get("phase") == "deliver" or self.inventory.get("Food", 0) >= deliver_threshold:
+            params["phase"] = "deliver"
+            if self._deposit_resource_to_nearest_stockpile("Food", world):
+                params["phase"] = "stalk"
+                self.current_goal = self.get_default_goal()
+            return
+
+        hunt_location = self.find_task_location("Hunt Game", world)
+        if not hunt_location:
+            self.add_memory("Couldn't find promising hunting grounds today.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        if (self.x, self.y) != hunt_location:
+            self.move_towards(hunt_location[0], hunt_location[1], world)
+            return
+
+        if not self._execute_generic_task(world, "Hunt Game"):
+            return
+
+        if self.inventory.get("Food", 0) >= deliver_threshold:
+            params["phase"] = "deliver"
+
+    def _execute_perform_fletcher_duties(self, world: 'World'):
+        if self.job != "Fletcher":
+            self.current_goal = self.get_default_goal()
+            return
+
+        params = self.current_goal.parameters
+        params.setdefault("phase", "craft")
+        bundle_threshold = max(2, min(self.max_inventory_items, 4))
+
+        if params.get("phase") == "deliver" or self.inventory.get("Arrow Bundle", 0) >= bundle_threshold:
+            params["phase"] = "deliver"
+            if self._deposit_resource_to_nearest_stockpile("Arrow Bundle", world):
+                params["phase"] = "craft"
+                self.current_goal = self.get_default_goal()
+            return
+
+        if self.inventory.get("Wood", 0) < 2:
+            stockpiles = world.get_stockpiles_for_resource("Wood")
+            if not stockpiles:
+                self.add_memory("No wood available for fletching.")
+                self.current_goal = self.get_default_goal()
+                return
+            target_stockpile = min(
+                stockpiles,
+                key=lambda sp: min(abs(pt[0] - self.x) + abs(pt[1] - self.y) for pt in sp.access_points),
+            )
+            access_point = min(
+                target_stockpile.access_points,
+                key=lambda loc: abs(loc[0] - self.x) + abs(loc[1] - self.y),
+            )
+            if (self.x, self.y) != access_point:
+                self.move_towards(access_point[0], access_point[1], world)
+                return
+            success, removed = target_stockpile.remove_item("Wood", 3)
+            if not success or removed <= 0:
+                self.add_memory(f"{target_stockpile.name} had no wood for fletching today.")
+                return
+            self.inventory["Wood"] = self.inventory.get("Wood", 0) + removed
+            if world.game_time:
+                world.ledger.update_stockpile_record(
+                    target_stockpile.name, target_stockpile.inventory, world.game_time.current_day
+                )
+            world.add_event_log_message(
+                f"{self.name} withdrew {removed} Wood from {target_stockpile.name} for arrow crafting."
+            )
+            return
+
+        starting_arrows = self.inventory.get("Arrow Bundle", 0)
+        if not self._execute_generic_task(world, "Fletch Arrows"):
+            return
+        produced = self.inventory.get("Arrow Bundle", 0) - starting_arrows
+        if produced > 0:
+            wood_used = produced * 2
+            current_wood = self.inventory.get("Wood", 0)
+            if current_wood >= wood_used:
+                current_wood -= wood_used
+                if current_wood > 0:
+                    self.inventory["Wood"] = current_wood
+                else:
+                    self.inventory.pop("Wood", None)
+            else:
+                self.inventory.pop("Wood", None)
+            self.add_memory(f"Crafted {produced} arrow bundles for the militia.")
+            self.update_mood_score(config.MOOD_CHANGE_SUCCESSFUL_TASK_MINOR, "Finished an arrow batch")
+
+        if self.inventory.get("Arrow Bundle", 0) >= bundle_threshold:
+            params["phase"] = "deliver"
+
     def _execute_initiate_hauling(self, world: 'World'):
         # Parameters should be in self.current_goal.parameters
         if not self.current_goal or not self.current_goal.parameters:
@@ -1497,50 +1710,20 @@ class Character:
 
 
     def _execute_gather_herbs(self, world: 'World'): # Assumes current_goal is GATHER_RESOURCE for Herbs
-        # For now, assume herbs can be found in "Forest" tiles, similar to wood.
-        # This would need adjustment if a specific "Meadow" tile or herb resource node is implemented.
-        # The find_task_location would also need to be updated to support "Herbs" if it's tied to a specific tile.
-        # For this initial pass, we'll directly use "Gather Herbs" task if a location can be found.
-
-        # Temporary: find_task_location doesn't support "Herbs" yet.
-        # We'll assume a generic "Forest" location for gathering if the task is "Gather Herbs".
-        # This part needs refinement based on how herb locations are defined in the world.
-        task_loc = self.find_task_location("Gather Herbs", world) # This will currently fail as "Gather Herbs" doesn't map to a known tile in find_task_location
-
-        # Fallback: If find_task_location doesn't work for herbs yet, try finding any Forest tile.
-        # This is a placeholder until find_task_location is updated or herb sources are better defined.
-        if not task_loc:
-            self.add_memory("No specific herb location found, trying generic Forest.")
-            # Simplified search for any Forest tile for now
-            found_forest_tile = None
-            for r_idx in range(world.grid_size[0]):
-                for c_idx in range(world.grid_size[1]):
-                    if world.get_tile(r_idx, c_idx) == "Forest":
-                        # Check if this forest tile actually has herbs - future enhancement
-                        # For now, any forest tile is a potential spot.
-                        found_forest_tile = (r_idx, c_idx)
-                        break
-                if found_forest_tile:
-                    break
-            task_loc = found_forest_tile
+        task_loc = self.find_task_location("Gather Herbs", world)
 
         if not task_loc:
-            self.add_memory(f"Cannot find a location to gather herbs (e.g., Forest).")
-            self.current_goal = self.get_default_goal() # Or back to a job default goal
+            self.add_memory("I couldn't find any herb patches in the surrounding woods.")
+            self.current_goal = self.get_default_goal()
             return
 
         if (self.x, self.y) != task_loc:
             self.move_towards(task_loc[0], task_loc[1], world)
             return
 
-        # Execute the generic task for gathering
         if not self._execute_generic_task(world, "Gather Herbs"):
-            # This could mean a tool is needed (if defined for "Gather Herbs" later)
-            # or some other precondition failed.
             return
 
-        # Check if inventory is full or if a personal quota is met (if any)
-        # For now, just gather until inventory is full.
         directive = world.get_resource_directive("Herbs") if hasattr(world, "get_resource_directive") else None
         per_trip_quota = directive.get("per_trip_quota") if directive else None
         if directive and world.game_time and directive.get("last_reminded_day") != world.game_time.current_day:
@@ -2155,12 +2338,202 @@ class Character:
         self.current_goal = self.get_default_goal()
 
     def _execute_manage_estate(self, world: 'World'):
-        self.add_memory("Managing the estate. (Placeholder)")
+        if self.job != "Reeve":
+            self.current_goal = self.get_default_goal()
+            return
+
+        if not world.game_time:
+            self.add_memory("I need the calendar to judge estate duties properly.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        today = world.game_time.current_day
+        if self.last_estate_review_day == today:
+            self.add_memory("Estate review already completed today; returning to other duties.")
+            self.current_goal.set_completed()
+            self.current_goal = self.get_default_goal()
+            return
+
+        focus_resources = self.current_goal.parameters.get("focus_resources", ["Food", "Wood", "Stone", "Herbs"])
+        low_threshold = getattr(config, "MAYOR_RESOURCE_LOW_THRESHOLD", 20)
+        high_threshold = getattr(config, "MAYOR_RESOURCE_HIGH_THRESHOLD", 150)
+
+        summary_chunks: List[str] = []
+        directives_issued: List[str] = []
+        surplus_tasks: List[Dict[str, Any]] = []
+
+        for resource in focus_resources:
+            total_qty = world.get_total_resource_quantity(resource)
+            summary_chunks.append(f"{resource}:{total_qty}")
+            if total_qty < low_threshold:
+                existing = world.resource_collection_directives.get(resource)
+                if not existing or existing.get("expires_day", -1) <= today:
+                    directive = world.set_resource_collection_directive(
+                        resource,
+                        max(3, low_threshold - total_qty),
+                        duration_days=3,
+                        reason=f"Estate shortage flagged by {self.name}",
+                        originator=self.name,
+                    )
+                    directives_issued.append(f"Gather {directive['per_trip_quota']} {resource}")
+                else:
+                    directives_issued.append(f"Existing directive for {resource} remains in force")
+            elif total_qty > high_threshold:
+                severity = total_qty - high_threshold
+                quantity_to_collect = max(1, min(10, severity // 2))
+                surplus_tasks.append(
+                    {
+                        "resource": resource,
+                        "quantity": quantity_to_collect,
+                        "reason": f"Collect tithe from {resource} surplus",
+                    }
+                )
+
+        bailiff_names = [name for name in self.subordinates_names if name]
+        bailiffs = [world.get_character_by_name(name) for name in bailiff_names]
+        bailiffs = [b for b in bailiffs if b and b.job == "Bailiff"]
+
+        delegated = 0
+        if surplus_tasks and bailiffs:
+            for task in surplus_tasks:
+                if not bailiffs:
+                    break
+                bailiff = bailiffs.pop(0)
+                bailiff_goal = Goal(
+                    GoalType.ASSIST_REEVE,
+                    assignee_id=bailiff.name,
+                    originator_id=self.name,
+                    priority=3,
+                    parameters={"estate_task": task.copy()},
+                )
+                bailiff.current_goal = bailiff_goal
+                bailiff.add_memory(
+                    f"{self.name} ordered me to collect {task['quantity']} {task['resource']} for estate tithe."
+                )
+                delegated += 1
+
+        summary_text = ", ".join(summary_chunks) if summary_chunks else "no tracked resources"
+        directive_text = "; ".join(directives_issued) if directives_issued else "no directives needed"
+        world.add_event_log_message(
+            f"{self.name} reviews the estate (resources: {summary_text}; directives: {directive_text};"
+            f" bailiff tasks: {delegated})."
+        )
+        self.add_memory(
+            f"Estate managed. Resources checked ({summary_text}). Directives noted: {directive_text}."
+        )
+        self.last_estate_review_day = today
+        self.active_estate_orders = surplus_tasks
+        self.current_goal.set_completed()
         self.current_goal = self.get_default_goal()
 
     def _execute_assist_reeve(self, world: 'World'):
-        self.add_memory("Assisting the reeve. (Placeholder)")
-        self.current_goal = self.get_default_goal()
+        if self.job != "Bailiff":
+            self.current_goal = self.get_default_goal()
+            return
+
+        estate_task = self.current_goal.parameters.get("estate_task")
+        if not estate_task:
+            self.add_memory("No estate task provided; returning to patrol duties.")
+            self.current_goal.set_completed()
+            self.current_goal = self.get_default_goal()
+            return
+
+        resource_name = estate_task.get("resource")
+        quantity_target = max(1, int(estate_task.get("quantity", 1)))
+        carried = self.inventory.get(resource_name, 0)
+
+        if carried >= quantity_target:
+            supervisor = world.get_character_by_name(self.supervisor_name) if self.supervisor_name else None
+            if supervisor:
+                if abs(self.x - supervisor.x) + abs(self.y - supervisor.y) > 1:
+                    self.move_towards(supervisor.x, supervisor.y, world)
+                    return
+                self.inventory[resource_name] -= quantity_target
+                if self.inventory[resource_name] <= 0:
+                    del self.inventory[resource_name]
+                unit_price = world.get_market_price(resource_name)
+                revenue = unit_price * quantity_target
+                world.treasury_coins += revenue
+                supervisor.add_memory(
+                    f"{self.name} delivered {quantity_target} {resource_name} for the estate tithe."
+                )
+                self.add_memory(
+                    f"Delivered {quantity_target} {resource_name} to {supervisor.name}; treasury received {revenue} coins."
+                )
+                world.add_event_log_message(
+                    f"{self.name} turns over {quantity_target} {resource_name} to {supervisor.name} for {revenue} coins of tithe."
+                )
+            else:
+                stockpiles = world.get_stockpiles_for_resource(resource_name)
+                if stockpiles:
+                    deposit_target = min(
+                        stockpiles,
+                        key=lambda sp: min(abs(pt[0] - self.x) + abs(pt[1] - self.y) for pt in sp.access_points),
+                    )
+                    access_point = min(
+                        deposit_target.access_points,
+                        key=lambda loc: abs(loc[0] - self.x) + abs(loc[1] - self.y),
+                    )
+                    if (self.x, self.y) != access_point:
+                        self.move_towards(access_point[0], access_point[1], world)
+                        return
+                    success, added = deposit_target.add_item(resource_name, carried)
+                    if success and added:
+                        self.inventory.pop(resource_name, None)
+                        world.add_event_log_message(
+                            f"{self.name} stores {added} {resource_name} in {deposit_target.name} awaiting tithe pickup."
+                        )
+                        if world.game_time:
+                            world.ledger.update_stockpile_record(
+                                deposit_target.name, deposit_target.inventory, world.game_time.current_day
+                            )
+                else:
+                    self.add_memory("No stockpile available to hold the collected tithe.")
+
+            self.current_goal.parameters["estate_task_completed"] = True
+            self.current_goal.set_completed()
+            self.current_goal = self.get_default_goal()
+            return
+
+        exhausted = self.current_goal.parameters.setdefault("exhausted_stockpiles", [])
+        stockpiles = [sp for sp in world.get_stockpiles_for_resource(resource_name) if sp.name not in exhausted]
+        if not stockpiles:
+            self.add_memory(f"All stockpiles are empty of {resource_name}; reporting back to the reeve.")
+            self.current_goal.set_failed(reason="No stockpile could fulfil the tithe request.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        target_stockpile = min(
+            stockpiles,
+            key=lambda sp: min(abs(pt[0] - self.x) + abs(pt[1] - self.y) for pt in sp.access_points),
+        )
+        access_point = min(
+            target_stockpile.access_points,
+            key=lambda loc: abs(loc[0] - self.x) + abs(loc[1] - self.y),
+        )
+
+        if (self.x, self.y) != access_point:
+            self.move_towards(access_point[0], access_point[1], world)
+            return
+
+        needed = quantity_target - carried
+        success, removed = target_stockpile.remove_item(resource_name, needed)
+        if not success or removed <= 0:
+            exhausted.append(target_stockpile.name)
+            self.add_memory(
+                f"{target_stockpile.name} had no spare {resource_name}; trying a different store."
+            )
+            return
+
+        self.inventory[resource_name] = self.inventory.get(resource_name, 0) + removed
+        if world.game_time:
+            world.ledger.update_stockpile_record(
+                target_stockpile.name, target_stockpile.inventory, world.game_time.current_day
+            )
+        world.add_event_log_message(
+            f"{self.name} withdraws {removed} {resource_name} from {target_stockpile.name} for estate tithe."
+        )
+        self.add_memory(f"Collected {removed} {resource_name} from {target_stockpile.name} for the reeve.")
 
     def _execute_hold_high_court(self, world: 'World'):
         if not self.vassals:
@@ -2200,15 +2573,70 @@ class Character:
                 break
 
         if all_vassals_present:
+            today = world.game_time.current_day if world.game_time else None
+            if today is not None and self.last_high_court_day == today:
+                self.add_memory("The high court already convened today; dismissing the gathering.")
+                self.current_goal.set_completed()
+                self.current_goal = self.get_default_goal()
+                return
+
             self.add_memory("All my vassals are present. The high court is now in session.")
-            # The "court" itself is a placeholder action for now.
-            world.add_event_log_message(f"{self.name} holds high court with their vassals.")
-            # Relationship boosts for all involved.
+            pressures = world.identify_resource_pressures()
+            shortage_reports = [p for p in pressures if p["status"] == "shortage"]
+            surplus_reports = [p for p in pressures if p["status"] == "surplus"]
+            crime_count = len(world.pending_crimes)
+
+            discussion_points = []
+            if shortage_reports:
+                focus = shortage_reports[0]
+                discussion_points.append(
+                    f"shortage of {focus['resource']} (only {focus['quantity']})"
+                )
+                world.set_resource_collection_directive(
+                    focus["resource"],
+                    max(3, focus["threshold"] - focus["quantity"]),
+                    duration_days=3,
+                    reason=f"High court decree by {self.name}",
+                    originator=self.name,
+                )
+            if surplus_reports:
+                focus = surplus_reports[0]
+                discussion_points.append(
+                    f"surplus {focus['resource']} (stocked at {focus['quantity']})"
+                )
+            if crime_count:
+                discussion_points.append(f"{crime_count} unresolved crimes")
+
+            summary = "; ".join(discussion_points) if discussion_points else "routine matters"
+            world.add_event_log_message(
+                f"{self.name} holds high court ({summary})."
+            )
+            world.add_notable_event(
+                "HighCourt",
+                {
+                    "summary": f"{self.name}'s court addressed {summary}.",
+                    "liege": self.name,
+                    "vassal_count": len(self.vassals),
+                },
+            )
+
             for vassal_name in self.vassals:
                 vassal = world.get_character_by_name(vassal_name)
-                if vassal:
-                    self.modify_relationship(vassal_name, 3, world, reason="They attended my high court.")
-                    vassal.modify_relationship(self.name, 2, world, reason="I attended their high court as a loyal vassal.")
+                if not vassal:
+                    continue
+                relation_bonus = 2
+                mood_bonus = 3
+                if shortage_reports:
+                    relation_bonus -= 1
+                    vassal.update_mood_score(-2, "Court revealed shortages to address")
+                if surplus_reports:
+                    mood_bonus += 2
+                self.modify_relationship(vassal_name, relation_bonus, world, reason="They attended my high court.")
+                vassal.modify_relationship(self.name, relation_bonus - 1, world, reason="Attended their liege's court.")
+                vassal.update_mood_score(mood_bonus, f"Participated in high court with {self.name}")
+
+            if today is not None:
+                self.last_high_court_day = today
 
             self.current_goal.set_completed()
             self.current_goal = self.get_default_goal()
@@ -2262,25 +2690,37 @@ class Character:
                         speech_topic = f"progress delivering stronger {resource_focus} stores"
                 elif chosen_promise.get("type") == "community_event":
                     speech_topic = "keeping community spirit high"
-        # Basic LLM integration placeholder
-        generated_speech_snippet = ""
-        if config.USE_LLM:
-            # Simple prompt, can be greatly expanded
-            prompt = (f"You are {self.name}, the Mayor of a small, developing settlement. "
-                      f"Your personality is {self.personality} and you have traits: {', '.join(self.traits)}. "
-                      f"Briefly generate a snippet of a speech you are giving to your populace about {speech_topic}. "
-                      f"Keep it under 50 words.")
-            generated_speech_snippet = generate_dialogue(prompt, self.name) # Assuming generate_dialogue can be used for this
+        economic_report = getattr(world, "last_daily_economic_report", {}) or {}
+        taxes = economic_report.get("tax_collected", 0)
+        wages_paid = economic_report.get("wages_paid", 0)
+        pressures = world.identify_resource_pressures()
+        shortage = next((p for p in pressures if p["status"] == "shortage"), None)
+        surplus = next((p for p in pressures if p["status"] == "surplus"), None)
 
-        if generated_speech_snippet:
-            self.add_memory(f"Gave a speech: \"{generated_speech_snippet}\"")
-            world.add_event_log_message(f"Mayor {self.name} addresses the populace: \"{generated_speech_snippet}\"")
-        else:
-            self.add_memory(f"Practiced a speech about {speech_topic}.")
-            world.add_event_log_message(f"Mayor {self.name} clears their throat, preparing a speech about {speech_topic}.")
+        speech_segments = [
+            f"Citizens, {speech_topic}.",
+            f"Our treasury stands at {world.treasury_coins} coins",
+        ]
 
-        # Future: This action could affect world morale, NPC opinions of the Mayor, etc.
-        # For now, it's just a logged action.
+        if taxes:
+            speech_segments.append(f"tax collection brought in {taxes} coins yesterday")
+        if wages_paid:
+            speech_segments.append(f"and we met {wages_paid} coins of wages")
+        if shortage:
+            speech_segments.append(
+                f"we must rally gatherers to raise {shortage['resource']} above {shortage['threshold']} units"
+            )
+        elif surplus:
+            speech_segments.append(
+                f"our surplus of {surplus['resource']} now reaches {surplus['quantity']} units—let's invest it wisely"
+            )
+        speech_segments.append(f"The weather is {world.weather.lower()}, yet our resolve stays bright.")
+        speech_segments.append("Together we will keep the settlement thriving.")
+
+        generated_speech_snippet = " ".join(speech_segments)
+
+        self.add_memory(f"Gave a speech: \"{generated_speech_snippet}\"")
+        world.add_event_log_message(f"Mayor {self.name} addresses the populace: \"{generated_speech_snippet}\"")
 
         self.current_goal = self.get_default_goal() # Return to overseeing or default state
         return
@@ -2475,6 +2915,9 @@ class Character:
             pass # Builder logic sets to EXECUTE_BUILD_ORDER or IDLE
         elif self.current_goal.type == GoalType.PERFORM_WOODCUTTER_DUTIES: self._execute_perform_woodcutter_duties(world)
         elif self.current_goal.type == GoalType.PERFORM_STONEMASON_DUTIES: self._execute_perform_stonemason_duties(world)
+        elif self.current_goal.type == GoalType.PERFORM_FARMER_DUTIES: self._execute_perform_farmer_duties(world)
+        elif self.current_goal.type == GoalType.PERFORM_HUNTER_DUTIES: self._execute_perform_hunter_duties(world)
+        elif self.current_goal.type == GoalType.PERFORM_FLETCHER_DUTIES: self._execute_perform_fletcher_duties(world)
         # Add other "Perform <Job> Duties" here, they typically set a more specific goal and call decide_action or return
 
         # Specific Action Goals
@@ -4087,7 +4530,13 @@ class Character:
                 can_help = True
         elif help_type == "tool" and item_name_needed: # Simplistic: asking for a specific tool by name
             dialogue_line_self = f"{target_name}, I desperately need a {item_name_needed}. Do you have one I could borrow/have?"
-            if target_char.inventory.get(item_name_needed, 0) > 0: # TODO: check if it's their equipped tool
+            target_tool_count = target_char.inventory.get(item_name_needed, 0)
+            equipped_matches = (
+                target_char.equipped_tool is not None
+                and target_char.equipped_tool.get("name") == item_name_needed
+            )
+            spare_tools = target_tool_count - (1 if equipped_matches else 0)
+            if spare_tools > 0 or (target_tool_count > 0 and not equipped_matches):
                 can_help = True
         elif help_type == "task_assistance": # Conceptual for now
             dialogue_line_self = f"{target_name}, I'm really struggling with this task. Any chance you could lend a hand?"
@@ -4107,9 +4556,20 @@ class Character:
                 outcome_message = f"{target_name} gave {quantity_needed} {item_name_needed} to {self.name}."
                 dialogue_line_target = f"Of course, {self.name}. Here you go."
             elif help_type == "tool" and item_name_needed:
-                # TODO: More complex tool lending/giving logic, for now, simple transfer
-                target_char.inventory[item_name_needed] -= 1
-                if target_char.inventory[item_name_needed] <= 0: del target_char.inventory[item_name_needed]
+                giving_equipped_tool = (
+                    target_char.equipped_tool is not None
+                    and target_char.equipped_tool.get("name") == item_name_needed
+                    and target_char.inventory.get(item_name_needed, 0) <= 1
+                )
+                if giving_equipped_tool:
+                    target_char.unequip_tool()
+
+                current_tool_count = target_char.inventory.get(item_name_needed, 0)
+                if current_tool_count > 0:
+                    target_char.inventory[item_name_needed] = current_tool_count - 1
+                    if target_char.inventory[item_name_needed] <= 0:
+                        del target_char.inventory[item_name_needed]
+
                 self.inventory[item_name_needed] = self.inventory.get(item_name_needed, 0) + 1
                 outcome_message = f"{target_name} gave a {item_name_needed} to {self.name}."
                 dialogue_line_target = f"Certainly, {self.name}, take this {item_name_needed}."

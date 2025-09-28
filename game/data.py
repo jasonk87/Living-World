@@ -24,6 +24,13 @@ BLUEPRINTS = {
         "description": "A simple pickaxe for mining stone and soft ores.",
         "craft_time_per_unit": 10
     },
+    "Arrow Bundle": {
+        "required_resources": {"Wood": 2},
+        "job_skill_needed": "Fletching",
+        "type": "Ammunition",
+        "description": "A bundle of arrows ready for archers and hunters.",
+        "craft_time_per_unit": 4
+    },
     "Wooden Bed": {
         "required_resources": {"Wood": 15},
         "job_skill_needed": "Carpentry",
@@ -108,6 +115,27 @@ JOB_TASK_DEFINITIONS = {
         "resource_produced": "Herbs",
         "base_yield": 1,
         "base_time_per_yield": 4    # Ticks to gather one unit of herbs
+    },
+    "Tend Fields": {
+        "required_tool_type": None,
+        "skill_used": "Farming",
+        "resource_produced": "Food",
+        "base_yield": 1,
+        "base_time_per_yield": 4
+    },
+    "Hunt Game": {
+        "required_tool_type": None,
+        "skill_used": "Hunting",
+        "resource_produced": "Food",
+        "base_yield": 1,
+        "base_time_per_yield": 5
+    },
+    "Fletch Arrows": {
+        "required_tool_type": None,
+        "skill_used": "Fletching",
+        "resource_produced": "Arrow Bundle",
+        "base_yield": 1,
+        "base_time_per_yield": 3
     },
     "Treat Patient": {
         "required_tool_type": None, # Could require "Medical Kit" later
@@ -257,12 +285,14 @@ STRUCTURE_BLUEPRINTS = {
         "map_char_initial": ".",
         "map_char_complete": "W"
     },
-    # Example of a placeholder for a planned, but not yet started, construction site marker if needed by UI
     "construction_site": {
         "display_name": "Construction Site",
         "size": (1,1),
         "map_char_initial": "X",
-        "map_char_complete": "X" # Should not complete as this type
+        "map_char_complete": "X",
+        "functionality": {"tags": ["construction", "progress_marker"]},
+        "required_resources": {},
+        "construction_phases": [{"name": "Site Preparation", "work_required": 1, "map_char_during": "X"}]
     }
 }
 
@@ -291,11 +321,15 @@ ROLE_HIERARCHY = {
     "Woodcutter": "Manager",
     "Stonemason": "Manager",
     "Miner": "Manager", # Assuming Miner reports to Manager
-    # TODO: Add other production worker roles as they are defined
+    "Farmer": "Manager",
+    "Hunter": "Manager",
+    "Fletcher": "Master Craftsman",
+    "Expedition Leader": "Militia Commander",
 
     # Report to Militia Commander
     "Militia Captain": "Militia Commander",
-    # TODO: Add individual soldier roles if they need direct hierarchy entry, e.g., "Militia Soldier": "Militia Captain"
+    "Militia Soldier": "Militia Captain",
+    "Scout": "Militia Captain",
 
     # Report to Chief Medical Officer
     "Medic": "Chief Medical Officer",
@@ -375,7 +409,7 @@ ROLE_DETAILS = {
             "ManageSubordinates(subordinate_name, action_type, details)", # For Militia Captains
             "ReportToSupervisor(report_type, details_dict)" # e.g., readiness_status, threat_assessment
         ],
-        "job_default_goal": "Oversee Expedition" # Placeholder; needs better default e.g., "MaintainDefenses"
+        "job_default_goal": "Maintain Defenses"
     },
     "Sheriff": {
         "description": "Maintains day-to-day peace and enforces local laws.",
@@ -532,6 +566,81 @@ ROLE_DETAILS = {
     "Woodcutter": {"reports_to": "Manager", "job_default_goal": "Perform Woodcutter Duties"},
     "Stonemason": {"reports_to": "Manager", "job_default_goal": "Perform Stonemason Duties"},
     "Miner": {"reports_to": "Manager", "job_default_goal": "Perform Miner Duties"}, # Assuming a "Perform Miner Duties" goal
+    "Farmer": {
+        "description": "Cultivates crops and keeps granaries stocked for the settlement.",
+        "reports_to": "Manager",
+        "responsibilities": [
+            "Preparing, planting, and harvesting farmland parcels.",
+            "Maintaining irrigation trenches and soil health.",
+            "Delivering harvested food to approved stockpiles."
+        ],
+        "capabilities": [
+            "TillField(field_location)",
+            "HarvestCrop(field_location, crop_type)",
+            "DeliverHarvest(stockpile_name, quantity)"
+        ],
+        "job_default_goal": "Perform Farmer Duties"
+    },
+    "Hunter": {
+        "description": "Supplies meat and hides by ranging beyond the palisade.",
+        "reports_to": "Manager",
+        "responsibilities": [
+            "Scouting and tracking game trails.",
+            "Harvesting meat and useful materials from prey.",
+            "Alerting the militia if dangerous beasts encroach."
+        ],
+        "capabilities": [
+            "TrackGame(area_name)",
+            "HuntGame(target_species)",
+            "DressKill(resource_name)"
+        ],
+        "job_default_goal": "Perform Hunter Duties"
+    },
+    "Fletcher": {
+        "description": "Crafts and maintains ammunition for hunters and militia units.",
+        "reports_to": "Master Craftsman",
+        "responsibilities": [
+            "Producing arrows, bolts, and fletching supplies.",
+            "Inspecting projectile stock for damage.",
+            "Requesting feathers, wood, and arrowheads from stockpiles."
+        ],
+        "capabilities": [
+            "CraftArrows(batch_size)",
+            "InspectQuiver(quiver_owner)",
+            "RequestFletchingMaterials(resource, quantity)"
+        ],
+        "job_default_goal": "Perform Fletcher Duties"
+    },
+    "Scout": {
+        "description": "Reconnoiters nearby regions and provides early warning of threats.",
+        "reports_to": "Militia Captain",
+        "responsibilities": [
+            "Patrolling the settlement perimeter.",
+            "Reporting suspicious activity or terrain changes.",
+            "Guiding expeditions along safe routes."
+        ],
+        "capabilities": [
+            "ReconArea(area_name)",
+            "ReportFindings(superior_name, details)",
+            "MarkSafeTrail(trail_name)"
+        ],
+        "job_default_goal": "Patrol Area"
+    },
+    "Militia Soldier": {
+        "description": "Front-line defender who responds to alarms and patrol orders.",
+        "reports_to": "Militia Captain",
+        "responsibilities": [
+            "Standing watch on assigned posts.",
+            "Responding quickly to raids or internal disturbances.",
+            "Maintaining weapons and basic armor."
+        ],
+        "capabilities": [
+            "StandWatch(post_name)",
+            "RespondToAlarm(location)",
+            "MaintainWeapon(weapon_name)"
+        ],
+        "job_default_goal": "Patrol Area"
+    },
 
     "Reeve": {
         "description": "An official appointed by a noble to supervise their estate or manor.",
@@ -565,6 +674,9 @@ ROLE_DETAILS = {
 JOB_SALARIES = {
     "Perform Woodcutter Duties": 5,
     "Perform Stonemason Duties": 5,
+    "Perform Farmer Duties": 5,
+    "Perform Hunter Duties": 6,
+    "Perform Fletcher Duties": 7,
     "Assess Production Needs": 10, # Master Craftsman creating a WO
     "Manage Subordinates": 3, # Manager reviewing a WO
     "Maintain Ledger": 4, # Bookkeeper counting a stockpile
@@ -581,4 +693,5 @@ MARKET_PRICES = {
     "Wood": 2, # Price to buy 1 unit of wood
     "Stone": 3, # Price to buy 1 unit of stone
     "Food": 4, # Price to buy 1 unit of food
+    "Arrow Bundle": 8,
 }

@@ -95,6 +95,9 @@ class GoalType(Enum):
     PERFORM_WOODCUTTER_DUTIES = auto()
     PERFORM_STONEMASON_DUTIES = auto()
     PERFORM_MINER_DUTIES = auto()
+    PERFORM_FARMER_DUTIES = auto()
+    PERFORM_HUNTER_DUTIES = auto()
+    PERFORM_FLETCHER_DUTIES = auto()
 
 
 class GoalStatus(Enum):
@@ -193,6 +196,9 @@ def create_goal_from_job(job_name: str, char_name: str) -> Goal:
                 "Perform Woodcutter Duties": GoalType.PERFORM_WOODCUTTER_DUTIES,
                 "Perform Stonemason Duties": GoalType.PERFORM_STONEMASON_DUTIES,
                 "Perform Miner Duties": GoalType.PERFORM_MINER_DUTIES,
+                "Perform Farmer Duties": GoalType.PERFORM_FARMER_DUTIES,
+                "Perform Hunter Duties": GoalType.PERFORM_HUNTER_DUTIES,
+                "Perform Fletcher Duties": GoalType.PERFORM_FLETCHER_DUTIES,
                 "Assess Production Needs": GoalType.ASSESS_PRODUCTION_NEEDS,
                 "Manage Subordinates": GoalType.MANAGE_SUBORDINATES,
                 "Maintain Ledger": GoalType.MAINTAIN_LEDGER,

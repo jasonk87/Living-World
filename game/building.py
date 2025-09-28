@@ -6,7 +6,7 @@ class Building:
                  size: Tuple[int, int], required_resources: Dict[str, int],
                  functionality: Optional[Dict[str, Any]], required_skill: Optional[Dict[str, Any]],
                  construction_phases: Optional[List[Dict[str, Any]]] = None, # For phased construction
-                 map_char_initial: str = 'X',  # Default placeholder before construction starts
+                 map_char_initial: str = 'X',  # Default map character while construction is underway
                  map_char_complete: str = 'B', # Default for completed building
                  build_time: int = 0): # build_time might be deprecated if phases define all work
 
