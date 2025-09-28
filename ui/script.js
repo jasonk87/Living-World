@@ -1,12 +1,16 @@
 document.addEventListener('DOMContentLoaded', () => {
     // --- Element Selectors ---
     const gameStatusHeader = document.getElementById('game-status-header');
-    const gameMapDiv = document.getElementById('game-map');
+    const mapStage = document.getElementById('map-stage');
+    const mapViewport = document.getElementById('map-viewport');
+    const mapGridDiv = document.getElementById('game-map');
+    const mapCharactersLayer = document.getElementById('map-characters');
     const eventLogDiv = document.getElementById('event-log');
     const pauseButton = document.getElementById('pause-button');
     const speedButtons = document.querySelectorAll('.speed-button');
-    const tabs = document.querySelectorAll('.tab-button');
-    const tabContents = document.querySelectorAll('.tab-content');
+    const overlayButtons = document.querySelectorAll('.overlay-toggle');
+    const overlayPanels = document.querySelectorAll('.overlay-panel');
+    const panelCloseButtons = document.querySelectorAll('.panel-close');
     const characterListDiv = document.getElementById('character-list');
     const followOverlay = document.getElementById('followed-character-overlay');
     const followOverlayBody = document.getElementById('followed-character-body');
@@ -17,6 +21,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const hudWeatherValue = document.getElementById('hud-weather-value');
     const hudElectionValue = document.getElementById('hud-election-value');
     const characterSearchInput = document.getElementById('character-search');
+    const infoPanel = document.getElementById('info-panel');
 
     // --- API & State ---
     const API_BASE_URL = 'http://localhost:8000';
@@ -24,29 +29,76 @@ document.addEventListener('DOMContentLoaded', () => {
     let latestGameState = null;
     let selectedCharacterName = null;
     let followedCharacterName = null;
-    let pendingAutoCenter = false;
     let characterSearchTerm = '';
+    let pendingAutoCenter = false;
+    let autoFollowCamera = true;
 
-    // --- Tab Switching Logic ---
-    tabs.forEach(tab => {
-        tab.addEventListener('click', () => {
-            tabs.forEach(item => item.classList.remove('active'));
-            tabContents.forEach(content => content.classList.remove('active'));
-
-            tab.classList.add('active');
-            const targetContent = document.getElementById(tab.dataset.tab);
-            if (targetContent) {
-                targetContent.classList.add('active');
-            }
-        });
-    });
+    const characterMarkers = new Map();
+    let mapDimensions = { rows: 0, cols: 0 };
+    let viewportPan = { x: 0, y: 0 };
+    let viewportZoom = 1;
+    let activePointerId = null;
+    let lastPointerPosition = { x: 0, y: 0 };
 
     // --- Utility Helpers ---
+    const getTileSize = () => parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--tile-size')) || 48;
+
+    function openPanel(panelId) {
+        const panel = document.getElementById(panelId);
+        if (!panel) return;
+        panel.classList.add('open');
+        panel.setAttribute('aria-hidden', 'false');
+    }
+
+    function closePanel(panelId) {
+        const panel = document.getElementById(panelId);
+        if (!panel) return;
+        panel.classList.remove('open');
+        panel.setAttribute('aria-hidden', 'true');
+        if (panelId === 'info-panel') {
+            const entityDetails = document.getElementById('entity-details');
+            if (entityDetails && !entityDetails.innerHTML.trim()) {
+                entityDetails.innerHTML = '<p>Click on the map to inspect citizens or structures.</p>';
+            }
+        }
+    }
+
+    function togglePanel(panelId) {
+        const panel = document.getElementById(panelId);
+        if (!panel) return;
+        const isOpen = panel.classList.contains('open');
+        if (isOpen) {
+            closePanel(panelId);
+        } else {
+            if (!panel.classList.contains('dock-right')) {
+                overlayPanels.forEach(other => {
+                    if (other.id !== panelId && !other.classList.contains('dock-right')) {
+                        closePanel(other.id);
+                    }
+                });
+            }
+            openPanel(panelId);
+        }
+    }
+
     function setPanelLoading(panelId, message = 'Loading details...') {
         const panel = document.getElementById(panelId);
-        if (panel) {
-            panel.innerHTML = `<p>${message}</p>`;
+        if (!panel) return;
+        panel.innerHTML = `<p>${message}</p>`;
+        if (panelId === 'entity-details') {
+            openPanel('info-panel');
         }
+        if (panelId === 'character-details-panel') {
+            openPanel('characters-panel');
+        }
+    }
+
+    function handleCharacterSelection(name) {
+        selectedCharacterName = name;
+        setFollowedCharacter(name, { autoCenter: true });
+        openPanel('info-panel');
+        openPanel('characters-panel');
+        loadCharacterDetails(name, { worldPanel: true, characterPanel: true });
     }
 
     function updateFollowedCharacterOverlay(character) {
@@ -147,10 +199,12 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (!name) {
             pendingAutoCenter = false;
+            autoFollowCamera = false;
             updateFollowedCharacterOverlay(null);
         } else {
             if (autoCenter) {
                 pendingAutoCenter = true;
+                autoFollowCamera = true;
             }
             if (latestGameState) {
                 const match = (latestGameState.characters || []).find(char => char.name === name);
@@ -320,76 +374,79 @@ document.addEventListener('DOMContentLoaded', () => {
         `;
 
         const placementSection = document.createElement('section');
-        placementSection.innerHTML = `
-            <h4>Placement</h4>
+        placementSection.innerHTML = '<h4>Placement</h4>';
+        placementSection.innerHTML += `
             <p><strong>Coordinates:</strong> (${character.x}, ${character.y})</p>
-            <p><strong>Supervisor:</strong> ${character.supervisor_name || 'None'}</p>
-            <p><strong>Subordinates:</strong> ${(character.subordinates_names || []).join(', ') || 'None'}</p>
+            <p><strong>Region:</strong> ${character.region || 'Unknown'}</p>
         `;
 
-        const memorySection = document.createElement('section');
-        memorySection.innerHTML = '<h4>Recent Memories</h4>';
-        if (character.memory && character.memory.length) {
+        const historySection = document.createElement('section');
+        historySection.innerHTML = '<h4>Activity History</h4>';
+        if (character.activity_log && character.activity_log.length) {
             const list = document.createElement('ul');
-            [...character.memory].reverse().forEach(entry => {
+            character.activity_log.slice(-8).reverse().forEach(entry => {
                 const li = document.createElement('li');
-                li.textContent = entry;
+                li.innerHTML = `<strong>Day ${entry.day}</strong>: ${entry.description}`;
                 list.appendChild(li);
             });
-            memorySection.appendChild(list);
+            historySection.appendChild(list);
         } else {
-            memorySection.innerHTML += '<p>No memories recorded.</p>';
+            historySection.innerHTML += '<p>No recent activity recorded.</p>';
         }
 
-        wrapper.append(goalSection, placementSection, memorySection);
+        wrapper.append(goalSection, placementSection, historySection);
         return wrapper;
     }
 
     function buildCharacterDetails(character) {
-        const wrapper = document.createElement('div');
-        wrapper.classList.add('character-detail-wrapper');
+        const wrapper = document.createElement('section');
+        wrapper.classList.add('detail-tabs');
 
-        const header = document.createElement('div');
-        header.classList.add('character-detail-header');
+        const header = document.createElement('header');
         header.innerHTML = `
-            <div>
-                <h3>${character.name}</h3>
-                <p class="meta">${character.job} (${character.rank}) • ${character.money} coins</p>
-                <p class="meta">${character.is_sick ? `Sick (sev ${character.sickness_severity})` : 'Healthy'} | ${character.is_injured ? `Injured (sev ${character.injury_severity})` : 'Uninjured'}</p>
-            </div>
+            <h3>${character.name}</h3>
+            <p>${character.job || 'Unassigned'} • Reputation ${character.reputation ?? '—'}</p>
         `;
+
         const followButton = document.createElement('button');
-        followButton.classList.add('follow-button');
-        if (followedCharacterName === character.name) {
-            followButton.classList.add('active');
+        followButton.type = 'button';
+        followButton.classList.add('primary-control');
+        if (character.name === followedCharacterName) {
             followButton.textContent = 'Following';
+            followButton.setAttribute('aria-pressed', 'true');
         } else {
             followButton.textContent = 'Follow';
+            followButton.setAttribute('aria-pressed', 'false');
         }
+
         followButton.addEventListener('click', () => {
             if (followedCharacterName === character.name) {
                 setFollowedCharacter(null);
-                loadCharacterDetails(character.name, { worldPanel: false, characterPanel: true });
+                followButton.textContent = 'Follow';
+                followButton.setAttribute('aria-pressed', 'false');
             } else {
-                selectedCharacterName = character.name;
                 setFollowedCharacter(character.name, { autoCenter: true });
-                loadCharacterDetails(character.name, { worldPanel: false, characterPanel: true });
+                followButton.textContent = 'Following';
+                followButton.setAttribute('aria-pressed', 'true');
             }
         });
+
         header.appendChild(followButton);
 
         const tabButtonsContainer = document.createElement('div');
         tabButtonsContainer.classList.add('detail-tab-buttons');
         const tabContentsContainer = document.createElement('div');
+        tabContentsContainer.classList.add('detail-tab-contents');
 
-        const tabsConfig = [
+        const tabs = [
             { label: 'Overview', builder: buildOverviewContent },
             { label: 'Social', builder: buildSocialContent },
             { label: 'Activity', builder: buildActivityContent },
         ];
 
-        tabsConfig.forEach((tabConfig, index) => {
+        tabs.forEach((tabConfig, index) => {
             const button = document.createElement('button');
+            button.type = 'button';
             button.classList.add('detail-tab-button');
             if (index === 0) button.classList.add('active');
             button.textContent = tabConfig.label;
@@ -424,6 +481,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (type === 'character') {
             targetPanel.appendChild(buildCharacterDetails(entity));
             updateFollowedCharacterOverlay(entity);
+            openPanel('info-panel');
             return;
         }
 
@@ -441,6 +499,243 @@ document.addEventListener('DOMContentLoaded', () => {
             `;
         }
         targetPanel.appendChild(dl);
+        openPanel('info-panel');
+    }
+
+    function updateViewportTransform() {
+        if (!mapViewport) return;
+        mapViewport.style.transform = `translate(${viewportPan.x}px, ${viewportPan.y}px) scale(${viewportZoom})`;
+    }
+
+    function centerViewportOn(x, y) {
+        if (!mapStage || !mapViewport) return;
+        const tileSize = getTileSize();
+        const stageRect = mapStage.getBoundingClientRect();
+        const targetX = (x + 0.5) * tileSize;
+        const targetY = (y + 0.5) * tileSize;
+        viewportPan.x = stageRect.width / 2 - targetX * viewportZoom;
+        viewportPan.y = stageRect.height / 2 - targetY * viewportZoom;
+        updateViewportTransform();
+    }
+
+    function ensureMapBase(gameState) {
+        if (!mapGridDiv || !mapCharactersLayer || !gameState || !Array.isArray(gameState.grid)) return;
+        const gridSize = Array.isArray(gameState.grid_size) ? gameState.grid_size : [0, 0];
+        const [rows, cols] = gridSize;
+        if (!rows || !cols) return;
+
+        const needsRebuild = rows !== mapDimensions.rows || cols !== mapDimensions.cols || mapGridDiv.childElementCount === 0;
+        if (needsRebuild) {
+            mapDimensions = { rows, cols };
+            mapGridDiv.innerHTML = '';
+            const fragment = document.createDocumentFragment();
+            for (let r = 0; r < rows; r++) {
+                for (let c = 0; c < cols; c++) {
+                    const cell = document.createElement('div');
+                    cell.classList.add('map-cell');
+                    cell.dataset.x = c;
+                    cell.dataset.y = r;
+                    cell.addEventListener('click', onMapCellClick);
+                    fragment.appendChild(cell);
+                }
+            }
+            mapGridDiv.appendChild(fragment);
+        }
+
+        const tileSize = getTileSize();
+        const width = cols * tileSize;
+        const height = rows * tileSize;
+        mapViewport.style.width = `${width}px`;
+        mapViewport.style.height = `${height}px`;
+        mapCharactersLayer.style.width = `${width}px`;
+        mapCharactersLayer.style.height = `${height}px`;
+
+        const cells = mapGridDiv.children;
+        for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+                const index = r * cols + c;
+                const cell = cells[index];
+                if (!cell) continue;
+                const tileRow = gameState.grid[r] || [];
+                const tileType = tileRow[c] || 'Unknown';
+                const tileClass = `tile-${tileType.replace(/\s+/g, '-')}`;
+                cell.className = `map-cell ${tileClass}`;
+                cell.title = `${tileType} (${c}, ${r})`;
+                delete cell.dataset.building;
+                delete cell.dataset.buildingOriginX;
+                delete cell.dataset.buildingOriginY;
+                delete cell.dataset.buildingName;
+            }
+        }
+
+        (gameState.buildings || []).forEach(building => {
+            for (let r = 0; r < building.height; r++) {
+                for (let c = 0; c < building.width; c++) {
+                    const x = building.x + c;
+                    const y = building.y + r;
+                    if (x < 0 || y < 0 || x >= cols || y >= rows) continue;
+                    const index = y * cols + x;
+                    const cell = mapGridDiv.children[index];
+                    if (!cell) continue;
+                    cell.classList.add(building.structure_type === 'Stockpile' ? 'stockpile-cell' : 'building-cell');
+                    cell.dataset.building = 'true';
+                    cell.dataset.buildingOriginX = building.x;
+                    cell.dataset.buildingOriginY = building.y;
+                    cell.dataset.buildingName = building.display_name || building.structure_type;
+                    cell.title = `${building.display_name || building.structure_type} (${x}, ${y})`;
+                }
+            }
+        });
+    }
+
+    function onMapCellClick(event) {
+        const cell = event.currentTarget;
+        if (cell.dataset.building === 'true') {
+            event.stopPropagation();
+            const coords = {
+                x: Number(cell.dataset.buildingOriginX),
+                y: Number(cell.dataset.buildingOriginY),
+            };
+            openPanel('info-panel');
+            loadBuildingDetails(coords);
+        }
+    }
+
+    function updateCharacterMarkers(characters) {
+        if (!mapCharactersLayer) return;
+        const tileSize = getTileSize();
+        const seen = new Set();
+
+        (characters || []).forEach(character => {
+            let marker = characterMarkers.get(character.name);
+            if (!marker) {
+                marker = document.createElement('button');
+                marker.type = 'button';
+                marker.classList.add('char-marker');
+                marker.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    handleCharacterSelection(character.name);
+                });
+                marker.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        handleCharacterSelection(character.name);
+                    }
+                });
+                marker.addEventListener('pointerdown', (e) => {
+                    e.stopPropagation();
+                });
+                mapCharactersLayer.appendChild(marker);
+                characterMarkers.set(character.name, marker);
+            }
+
+            marker.dataset.job = character.job || 'Unassigned';
+            marker.dataset.name = character.name;
+            marker.textContent = character.name.charAt(0).toUpperCase();
+            marker.title = `${character.name} (${character.job || 'Unassigned'})`;
+            marker.classList.toggle('following', character.name === followedCharacterName);
+            marker.classList.toggle('sick', Boolean(character.is_sick));
+            marker.classList.toggle('injured', Boolean(character.is_injured));
+            marker.style.transform = `translate3d(${character.x * tileSize}px, ${character.y * tileSize}px, 0)`;
+
+            if (character.name === selectedCharacterName) {
+                marker.classList.add('active');
+            } else {
+                marker.classList.remove('active');
+            }
+
+            seen.add(character.name);
+        });
+
+        Array.from(characterMarkers.keys()).forEach(name => {
+            if (!seen.has(name)) {
+                const marker = characterMarkers.get(name);
+                if (marker && marker.parentElement) {
+                    marker.parentElement.removeChild(marker);
+                }
+                characterMarkers.delete(name);
+            }
+        });
+
+        if (followedCharacterName) {
+            const followed = (characters || []).find(char => char.name === followedCharacterName);
+            updateFollowedCharacterOverlay(followed || null);
+            if (followed && (pendingAutoCenter || autoFollowCamera)) {
+                centerViewportOn(followed.x, followed.y);
+                pendingAutoCenter = false;
+            }
+        } else {
+            updateFollowedCharacterOverlay(null);
+        }
+    }
+
+    function updateGameInfo(gameState) {
+        if (!gameStatusHeader || !gameState) return;
+        const statusClass = gameState.is_paused ? 'status-pill muted' : 'status-pill';
+        gameStatusHeader.innerHTML = `
+            <span class="status-pill">Day ${gameState.day}</span>
+            <span class="status-pill">Tick ${gameState.tick}/${gameState.ticks_per_day}</span>
+            <span class="status-pill">Speed ${gameState.current_speed_multiplier}x</span>
+            <span class="${statusClass}">${gameState.is_paused ? 'Paused' : 'Running'}</span>
+        `;
+        if (pauseButton) {
+            pauseButton.textContent = gameState.is_paused ? 'Resume' : 'Pause';
+        }
+    }
+
+    function updateEventLog(log) {
+        if (!eventLogDiv) return;
+        if (!log || !log.length) {
+            eventLogDiv.innerHTML = '<p class="empty">No events logged yet.</p>';
+            return;
+        }
+        eventLogDiv.innerHTML = log.slice().reverse().map(entry => `<p>${entry}</p>`).join('');
+    }
+
+    function renderCharacterList(characters) {
+        if (!characterListDiv || !Array.isArray(characters)) return;
+
+        const sortedCharacters = [...characters].sort((a, b) => a.name.localeCompare(b.name));
+        const searchTerm = characterSearchTerm.trim();
+        const filteredCharacters = sortedCharacters.filter(char => {
+            if (!searchTerm) return true;
+            const haystack = `${char.name} ${char.job} ${extractGoal(char.current_goal).type}`.toLowerCase();
+            return haystack.includes(searchTerm);
+        });
+
+        if (!filteredCharacters.length) {
+            characterListDiv.innerHTML = '<div class="empty-state">No citizens match your search.</div>';
+            return;
+        }
+
+        characterListDiv.innerHTML = filteredCharacters.map(char => {
+            const isActive = char.name === selectedCharacterName;
+            const isFollowing = char.name === followedCharacterName;
+            const goal = extractGoal(char.current_goal).type;
+            const loadText = typeof char.inventory_load === 'number' ? ` • Load: ${char.inventory_load}` : '';
+            return `
+                <article class="character-card ${isActive ? 'active' : ''} ${isFollowing ? 'following' : ''}" data-char-name="${char.name}">
+                    <strong>${char.name}</strong>
+                    <small>${char.job || 'Unassigned'} • Goal: ${goal}</small>
+                    <small>Pos: (${char.x}, ${char.y})${loadText}</small>
+                </article>
+            `;
+        }).join('');
+
+        characterListDiv.querySelectorAll('.character-card').forEach(card => {
+            card.addEventListener('click', () => {
+                const name = card.dataset.charName;
+                handleCharacterSelection(name);
+            });
+        });
+    }
+
+    function renderMap(gameState) {
+        if (!gameState) return;
+        ensureMapBase(gameState);
+        updateCharacterMarkers(gameState.characters || []);
+        latestGameState = gameState;
+        updateMapMetaInfo(gameState);
     }
 
     async function fetchGameState() {
@@ -520,141 +815,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    function renderMap(gameState) {
-        if (!gameMapDiv || !gameState || !gameState.grid) return;
-
-        latestGameState = gameState;
-        updateMapMetaInfo(gameState);
-        gameMapDiv.innerHTML = '';
-        gameMapDiv.style.gridTemplateColumns = `repeat(${gameState.grid_size[1]}, 1fr)`;
-        gameMapDiv.style.gridTemplateRows = `repeat(${gameState.grid_size[0]}, 1fr)`;
-
-        for (let r = 0; r < gameState.grid_size[0]; r++) {
-            for (let c = 0; c < gameState.grid_size[1]; c++) {
-                const cell = document.createElement('div');
-                cell.classList.add('map-cell');
-                const tileType = gameState.grid[r][c];
-                cell.classList.add(`tile-${tileType.replace(/\s+/g, '-') || 'Unknown'}`);
-                cell.title = `${tileType} (${c}, ${r})`;
-                gameMapDiv.appendChild(cell);
-            }
-        }
-
-        (gameState.buildings || []).forEach(b => {
-            for (let rOffset = 0; rOffset < b.height; rOffset++) {
-                for (let cOffset = 0; cOffset < b.width; cOffset++) {
-                    const cellX = b.x + cOffset;
-                    const cellY = b.y + rOffset;
-                    const cellIndex = cellY * gameState.grid_size[1] + cellX;
-                    const cellDiv = gameMapDiv.children[cellIndex];
-                    if (cellDiv) {
-                        cellDiv.className = 'map-cell';
-                        const typeClass = b.structure_type === 'Stockpile' ? 'stockpile-cell' : 'building-cell';
-                        cellDiv.classList.add(typeClass);
-                        cellDiv.title = `${b.display_name} (${b.structure_type})`;
-                        cellDiv.addEventListener('click', () => loadBuildingDetails({ x: cellX, y: cellY }));
-                    }
-                }
-            }
-        });
-
-        (gameState.characters || []).forEach(char => {
-            const cellIndex = char.y * gameState.grid_size[1] + char.x;
-            const cellDiv = gameMapDiv.children[cellIndex];
-            if (!cellDiv) return;
-            const charMarker = document.createElement('div');
-            charMarker.classList.add('char-marker');
-            charMarker.title = `${char.name} (${char.job})`;
-            if (char.is_sick) charMarker.style.backgroundColor = 'orange';
-            if (char.is_injured) charMarker.style.borderColor = 'red';
-            if (char.name === followedCharacterName) {
-                charMarker.classList.add('following');
-                cellDiv.classList.add('followed-cell');
-                if (pendingAutoCenter) {
-                    requestAnimationFrame(() => {
-                        charMarker.scrollIntoView({ block: 'center', inline: 'center', behavior: 'smooth' });
-                    });
-                    pendingAutoCenter = false;
-                }
-            }
-            charMarker.addEventListener('click', (e) => {
-                e.stopPropagation();
-                selectedCharacterName = char.name;
-                setFollowedCharacter(char.name, { autoCenter: true });
-                loadCharacterDetails(char.name, { worldPanel: true, characterPanel: true });
-            });
-            cellDiv.appendChild(charMarker);
-        });
-
-        if (followedCharacterName) {
-            const followed = (gameState.characters || []).find(char => char.name === followedCharacterName);
-            updateFollowedCharacterOverlay(followed || null);
-        }
-    }
-
-    function updateGameInfo(gameState) {
-        if (!gameStatusHeader || !gameState) return;
-        const statusClass = gameState.is_paused ? 'status-pill muted' : 'status-pill';
-        gameStatusHeader.innerHTML = `
-            <span class="status-pill">Day ${gameState.day}</span>
-            <span class="status-pill">Tick ${gameState.tick}/${gameState.ticks_per_day}</span>
-            <span class="status-pill">Speed ${gameState.current_speed_multiplier}x</span>
-            <span class="${statusClass}">${gameState.is_paused ? 'Paused' : 'Running'}</span>
-        `;
-        if (pauseButton) {
-            pauseButton.textContent = gameState.is_paused ? 'Resume' : 'Pause';
-        }
-    }
-
-    function updateEventLog(log) {
-        if (!eventLogDiv) return;
-        if (!log || !log.length) {
-            eventLogDiv.innerHTML = '<p class="empty">No events logged yet.</p>';
-            return;
-        }
-        eventLogDiv.innerHTML = log.slice().reverse().map(entry => `<p>${entry}</p>`).join('');
-    }
-
-    function renderCharacterList(characters) {
-        if (!characterListDiv || !Array.isArray(characters)) return;
-
-        const sortedCharacters = [...characters].sort((a, b) => a.name.localeCompare(b.name));
-        const searchTerm = characterSearchTerm.trim();
-        const filteredCharacters = sortedCharacters.filter(char => {
-            if (!searchTerm) return true;
-            const haystack = `${char.name} ${char.job} ${extractGoal(char.current_goal).type}`.toLowerCase();
-            return haystack.includes(searchTerm);
-        });
-
-        if (!filteredCharacters.length) {
-            characterListDiv.innerHTML = '<div class="empty-state">No citizens match your search.</div>';
-            return;
-        }
-
-        characterListDiv.innerHTML = filteredCharacters.map(char => {
-            const isActive = char.name === selectedCharacterName;
-            const isFollowing = char.name === followedCharacterName;
-            const goal = extractGoal(char.current_goal).type;
-            const loadText = typeof char.inventory_load === 'number' ? ` • Load: ${char.inventory_load}` : '';
-            return `
-                <article class="character-card ${isActive ? 'active' : ''} ${isFollowing ? 'following' : ''}" data-char-name="${char.name}">
-                    <strong>${char.name}</strong>
-                    <small>${char.job || 'Unassigned'} • Goal: ${goal}</small>
-                    <small>Pos: (${char.x}, ${char.y})${loadText}</small>
-                </article>
-            `;
-        }).join('');
-
-        characterListDiv.querySelectorAll('.character-card').forEach(card => {
-            card.addEventListener('click', () => {
-                const name = card.dataset.charName;
-                selectedCharacterName = name;
-                setFollowedCharacter(name, { autoCenter: true });
-                loadCharacterDetails(name, { worldPanel: true, characterPanel: true });
-            });
-        });
-    }
-
     async function updateUI() {
         const gameState = await fetchGameState();
         if (gameState) {
@@ -670,7 +830,69 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    function handleWheelZoom(event) {
+        if (!mapStage) return;
+        event.preventDefault();
+        const zoomFactor = event.deltaY < 0 ? 1.1 : 0.9;
+        const newZoom = Math.min(3, Math.max(0.5, viewportZoom * zoomFactor));
+        const rect = mapStage.getBoundingClientRect();
+        const cursorX = event.clientX - rect.left;
+        const cursorY = event.clientY - rect.top;
+        const offsetX = (cursorX - viewportPan.x) / viewportZoom;
+        const offsetY = (cursorY - viewportPan.y) / viewportZoom;
+        viewportZoom = newZoom;
+        viewportPan.x = cursorX - offsetX * viewportZoom;
+        viewportPan.y = cursorY - offsetY * viewportZoom;
+        updateViewportTransform();
+    }
+
+    function beginMapDrag(event) {
+        if (event.pointerType === 'mouse' && event.button !== 0) return;
+        if (activePointerId !== null) return;
+        activePointerId = event.pointerId;
+        lastPointerPosition = { x: event.clientX, y: event.clientY };
+        mapStage.setPointerCapture(activePointerId);
+        autoFollowCamera = false;
+    }
+
+    function moveMapDrag(event) {
+        if (activePointerId !== event.pointerId) return;
+        const deltaX = event.clientX - lastPointerPosition.x;
+        const deltaY = event.clientY - lastPointerPosition.y;
+        lastPointerPosition = { x: event.clientX, y: event.clientY };
+        viewportPan.x += deltaX;
+        viewportPan.y += deltaY;
+        updateViewportTransform();
+    }
+
+    function endMapDrag(event) {
+        if (activePointerId !== event.pointerId) return;
+        mapStage.releasePointerCapture(activePointerId);
+        activePointerId = null;
+    }
+
+    function refreshMapLayout() {
+        if (!latestGameState) return;
+        ensureMapBase(latestGameState);
+        updateCharacterMarkers(latestGameState.characters || []);
+        updateViewportTransform();
+        if (followedCharacterName && autoFollowCamera) {
+            const followed = (latestGameState.characters || []).find(char => char.name === followedCharacterName);
+            if (followed) {
+                centerViewportOn(followed.x, followed.y);
+            }
+        }
+    }
+
     // --- Event Listeners ---
+    overlayButtons.forEach(button => {
+        button.addEventListener('click', () => togglePanel(button.dataset.panel));
+    });
+
+    panelCloseButtons.forEach(button => {
+        button.addEventListener('click', () => closePanel(button.dataset.panel));
+    });
+
     if (characterSearchInput) {
         characterSearchInput.addEventListener('input', () => {
             characterSearchTerm = characterSearchInput.value.trim().toLowerCase();
@@ -683,11 +905,43 @@ document.addEventListener('DOMContentLoaded', () => {
     if (pauseButton) {
         pauseButton.addEventListener('click', () => performControlAction(`${API_BASE_URL}/toggle_pause`));
     }
+
     speedButtons.forEach(button => {
         button.addEventListener('click', () => {
             performControlAction(`${API_BASE_URL}/set_speed?multiplier=${button.dataset.speed}`);
         });
     });
+
+    if (mapStage) {
+        mapStage.addEventListener('pointerdown', beginMapDrag);
+        mapStage.addEventListener('pointermove', moveMapDrag);
+        mapStage.addEventListener('pointerup', endMapDrag);
+        mapStage.addEventListener('pointerleave', endMapDrag);
+        mapStage.addEventListener('wheel', handleWheelZoom, { passive: false });
+    }
+
+    if (followOverlay) {
+        followOverlay.addEventListener('click', () => {
+            if (followedCharacterName) {
+                autoFollowCamera = true;
+                pendingAutoCenter = true;
+                if (latestGameState) {
+                    const followed = (latestGameState.characters || []).find(char => char.name === followedCharacterName);
+                    if (followed) {
+                        centerViewportOn(followed.x, followed.y);
+                    }
+                }
+            }
+        });
+    }
+
+    window.addEventListener('resize', () => {
+        refreshMapLayout();
+    });
+
+    // --- Initial State ---
+    openPanel('hud-panel');
+    updateViewportTransform();
 
     // --- Initial Load & Interval ---
     updateUI();

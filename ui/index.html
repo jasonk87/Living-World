@@ -3,41 +3,61 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Living World Sim - 2.0</title>
+    <title>Living World Command</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <header class="app-header">
         <div class="brand">
             <h1>Living World Command</h1>
-            <p>Oversee your settlement in real time.</p>
+            <p>Stay on the map, steer every heartbeat of the settlement.</p>
         </div>
         <div class="header-controls">
             <div id="game-status-header" class="status-pill-group">
                 <span class="status-pill muted">Awaiting world state…</span>
             </div>
             <div id="controls" class="control-deck">
-                <button id="pause-button" class="primary-control">Pause</button>
+                <button id="pause-button" class="primary-control" type="button">Pause</button>
                 <div class="speed-group" aria-label="Simulation speed">
                     <span>Speed</span>
-                    <button class="speed-button" data-speed="0.5">0.5x</button>
-                    <button class="speed-button" data-speed="1">1x</button>
-                    <button class="speed-button" data-speed="2">2x</button>
-                    <button class="speed-button" data-speed="5">5x</button>
+                    <button class="speed-button" data-speed="0.5" type="button">0.5x</button>
+                    <button class="speed-button" data-speed="1" type="button">1x</button>
+                    <button class="speed-button" data-speed="2" type="button">2x</button>
+                    <button class="speed-button" data-speed="5" type="button">5x</button>
                 </div>
             </div>
         </div>
     </header>
 
-    <nav class="tabs">
-        <button class="tab-button active" data-tab="world-tab">World</button>
-        <button class="tab-button" data-tab="characters-tab">Characters</button>
-        <button class="tab-button" data-tab="event-log-tab">Event Log</button>
-    </nav>
+    <main class="main-stage">
+        <div id="map-stage" class="map-stage" aria-label="World map viewport">
+            <div id="map-viewport" class="map-viewport">
+                <div id="game-map" class="map-grid" role="presentation"></div>
+                <div id="map-characters" class="map-characters" aria-live="polite"></div>
+            </div>
+            <aside id="followed-character-overlay" class="floating-panel hidden" aria-live="assertive">
+                <header>
+                    <h3>Following</h3>
+                </header>
+                <div id="followed-character-body">
+                    <p>Select a character to follow.</p>
+                </div>
+            </aside>
+            <div id="map-meta" class="map-meta"></div>
+        </div>
 
-    <main class="tab-content-container">
-        <!-- World Tab -->
-        <div id="world-tab" class="tab-content active">
+        <div class="overlay-controls" role="toolbar" aria-label="Overlay toggles">
+            <button class="overlay-toggle" data-panel="hud-panel" type="button">World Intel</button>
+            <button class="overlay-toggle" data-panel="characters-panel" type="button">Citizens</button>
+            <button class="overlay-toggle" data-panel="event-panel" type="button">Chronicle</button>
+        </div>
+
+        <section id="hud-panel" class="overlay-panel" aria-hidden="true">
+            <button class="panel-close" data-panel="hud-panel" type="button" aria-label="Close World Intel panel">&times;</button>
+            <header class="panel-heading">
+                <h2>World Intel</h2>
+                <p>Glanceable status without leaving the field.</p>
+            </header>
             <section class="world-hud" aria-label="World summary">
                 <article class="hud-card">
                     <h3>Population</h3>
@@ -60,97 +80,60 @@
                     <span>Days remaining</span>
                 </article>
             </section>
-
-            <div class="world-layout">
-                <section class="map-column">
-                    <article class="glass-card">
-                        <header class="card-header">
-                            <div>
-                                <h2>World Map</h2>
-                                <p>Pan across your settlement and track citizens.</p>
-                            </div>
-                            <div class="card-meta">
-                                <span id="map-meta"></span>
-                            </div>
-                        </header>
-                        <div id="game-map-area" class="map-area">
-                            <div id="followed-character-overlay" class="hidden">
-                                <h3>Following</h3>
-                                <div id="followed-character-body">
-                                    <p>Select a character to follow.</p>
-                                </div>
-                            </div>
-                            <div id="game-map">
-                                <!-- Map cells will be generated by JavaScript -->
-                            </div>
-                        </div>
-                    </article>
-
-                    <article class="glass-card">
-                        <header class="card-header">
-                            <div>
-                                <h2>Live Event Feed</h2>
-                                <p>Latest happenings across the realm.</p>
-                            </div>
-                        </header>
-                        <div id="event-feed" class="compact-event-feed">
-                            <p class="empty">No events logged yet.</p>
-                        </div>
-                    </article>
-                </section>
-
-                <aside class="intel-column">
-                    <article id="info-panel" class="glass-card">
-                        <header class="card-header">
-                            <div>
-                                <h2>Entity Details</h2>
-                                <p>Dive into citizens, buildings, and activities.</p>
-                            </div>
-                        </header>
-                        <div id="entity-details" class="panel-body">
-                            <p>Click on an entity on the map for details.</p>
-                        </div>
-                    </article>
-                </aside>
-            </div>
-        </div>
-
-        <!-- Characters Tab -->
-        <div id="characters-tab" class="tab-content">
-            <header class="card-header">
-                <div>
-                    <h2>Citizens</h2>
-                    <p>Browse the roster, follow routines, and inspect stories.</p>
+            <article class="glass-card">
+                <header class="card-header">
+                    <div>
+                        <h2>Live Event Feed</h2>
+                        <p>Latest happenings across the realm.</p>
+                    </div>
+                </header>
+                <div id="event-feed" class="compact-event-feed">
+                    <p class="empty">No events logged yet.</p>
                 </div>
-                <div class="character-search">
-                    <label for="character-search" class="visually-hidden">Search characters</label>
-                    <input type="search" id="character-search" placeholder="Search by name or role" autocomplete="off">
-                </div>
+            </article>
+        </section>
+
+        <section id="characters-panel" class="overlay-panel" aria-hidden="true">
+            <button class="panel-close" data-panel="characters-panel" type="button" aria-label="Close Citizens panel">&times;</button>
+            <header class="panel-heading">
+                <h2>Citizens</h2>
+                <p>Follow dwarves in real time and inspect their stories.</p>
             </header>
+            <div class="character-search">
+                <label for="character-search" class="visually-hidden">Search characters</label>
+                <input type="search" id="character-search" placeholder="Search by name, role, or goal" autocomplete="off">
+            </div>
             <div class="character-list-container">
                 <div id="character-list" class="character-grid">
-                    <!-- Character list will be populated by JS -->
+                    <!-- Character list populated by JavaScript -->
                 </div>
                 <div id="character-details-panel" class="glass-card">
                     <p>Select a character to see their details.</p>
                 </div>
             </div>
-        </div>
+        </section>
 
-        <!-- Event Log Tab -->
-        <div id="event-log-tab" class="tab-content">
-            <article class="glass-card">
-                <header class="card-header">
-                    <div>
-                        <h2>Full Event Log</h2>
-                        <p>Review the complete chronicle of your settlement.</p>
-                    </div>
-                </header>
-                <div id="event-log" class="panel-body">
-                    <!-- Event log messages will be generated by JavaScript -->
-                </div>
-            </article>
-        </div>
+        <section id="event-panel" class="overlay-panel" aria-hidden="true">
+            <button class="panel-close" data-panel="event-panel" type="button" aria-label="Close Chronicle panel">&times;</button>
+            <header class="panel-heading">
+                <h2>Chronicle</h2>
+                <p>Review the complete chronicle of your settlement.</p>
+            </header>
+            <div id="event-log" class="panel-body">
+                <!-- Event log messages populated by JavaScript -->
+            </div>
+        </section>
+
+        <section id="info-panel" class="overlay-panel dock-right" aria-hidden="true">
+            <button class="panel-close" data-panel="info-panel" type="button" aria-label="Close details panel">&times;</button>
+            <header class="panel-heading">
+                <h2>Entity Details</h2>
+                <p>Dive into citizens, buildings, and activities.</p>
+            </header>
+            <div id="entity-details" class="panel-body">
+                <p>Click on the map to inspect citizens or structures.</p>
+            </div>
+        </section>
     </main>
 
     <script src="script.js"></script>
