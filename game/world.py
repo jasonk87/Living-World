@@ -406,10 +406,114 @@ class World:
         return crime
 
     # Event related methods (can be kept minimal if EventManager is not fully used)
-    def apply_event_effects(self, event_instance: Any): # Using Any if ActiveEvent is not defined
-        pass # Placeholder
+    def _event_attr(self, event_instance: Any, key: str, default: Any = None) -> Any:
+        """Safely fetches either a dict key or attribute from an event payload."""
+        if isinstance(event_instance, dict):
+            return event_instance.get(key, default)
+        return getattr(event_instance, key, default)
+
+    def _extract_event_effects(self, event_instance: Any) -> List[Tuple[str, Dict[str, Any]]]:
+        """Normalises arbitrary event payloads into world-effect entries."""
+        if not event_instance:
+            return []
+
+        effect_entries: List[Any] = []
+        raw_effects = self._event_attr(event_instance, "effects")
+        if isinstance(raw_effects, list):
+            effect_entries = raw_effects
+        elif isinstance(raw_effects, dict):
+            effect_entries = [raw_effects]
+        else:
+            effect_entries = [event_instance]
+
+        allowed_keys = {"resource_yield_bonus", "travel_speed_multiplier", "market_price_adjustment"}
+        base_key = self._event_attr(event_instance, "effect_key") or self._event_attr(event_instance, "id")
+        if not base_key:
+            base_key = self._event_attr(event_instance, "name")
+
+        extracted: List[Tuple[str, Dict[str, Any]]] = []
+        for idx, entry in enumerate(effect_entries):
+            entry_key = self._event_attr(entry, "effect_key") or base_key
+            if not entry_key:
+                if self.game_time:
+                    entry_key = f"event_{self.game_time.current_day}_{idx}"
+                else:
+                    entry_key = f"event_{idx}"
+
+            effect_data: Dict[str, Any] = {}
+            for key in allowed_keys:
+                value = self._event_attr(entry, key)
+                if value is None:
+                    value = self._event_attr(event_instance, key)
+                if value is not None:
+                    effect_data[key] = value
+
+            expires_day = self._event_attr(entry, "expires_day")
+            duration_days = self._event_attr(entry, "duration_days")
+            if expires_day is None and duration_days is None:
+                duration_days = self._event_attr(event_instance, "duration_days")
+
+            if expires_day is None and duration_days is not None and self.game_time:
+                expires_day = self.game_time.current_day + max(1, int(duration_days))
+
+            if expires_day is not None:
+                effect_data["expires_day"] = expires_day
+
+            if effect_data:
+                extracted.append((entry_key, effect_data))
+
+        return extracted
+
+    def apply_event_effects(self, event_instance: Any):  # Using Any if ActiveEvent is not defined
+        effects = self._extract_event_effects(event_instance)
+        if not effects:
+            return
+
+        applied_keys: List[str] = []
+        for effect_key, effect_data in effects:
+            self.add_temporary_world_effect(effect_key, effect_data)
+            applied_keys.append(effect_key)
+
+        summary = self._event_attr(event_instance, "summary") or self._event_attr(event_instance, "type")
+        if applied_keys:
+            self.add_event_log_message(
+                f"Applied world effects {applied_keys} from event {summary or 'unknown'}"
+            )
+
+        if isinstance(event_instance, dict):
+            stored = event_instance.setdefault("applied_effect_keys", [])
+            stored.extend(applied_keys)
+        else:
+            already = getattr(event_instance, "applied_effect_keys", [])
+            setattr(event_instance, "applied_effect_keys", list(already) + applied_keys)
+
     def expire_event_effects(self, event_instance: Any):
-        pass # Placeholder
+        if not event_instance:
+            return
+
+        if isinstance(event_instance, dict):
+            effect_keys = list(event_instance.get("applied_effect_keys", []))
+        else:
+            effect_keys = list(getattr(event_instance, "applied_effect_keys", []))
+
+        if not effect_keys:
+            effect_keys = [key for key, _ in self._extract_event_effects(event_instance)]
+
+        removed: List[str] = []
+        for effect_key in effect_keys:
+            if effect_key in self.active_world_effects:
+                del self.active_world_effects[effect_key]
+                removed.append(effect_key)
+
+        if removed:
+            self.add_event_log_message(f"Expired world effects {removed} tied to resolved event.")
+            self._recalculate_environment_effects()
+
+        if isinstance(event_instance, dict):
+            event_instance.pop("applied_effect_keys", None)
+        else:
+            if hasattr(event_instance, "applied_effect_keys"):
+                delattr(event_instance, "applied_effect_keys")
 
     def handle_election(self):
         if not self.game_time or not hasattr(self.game_time, 'days_until_election'):

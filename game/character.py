@@ -580,7 +580,50 @@ class Character:
             self.add_memory(f"Still owed {owed_amount} coins for {reason}.")
             self.update_mood_score(getattr(config, "MOOD_CHANGE_PAYMENT_DELAY", -5), "Wages delayed")
 
-    def interact(self, o: 'OtherCharacter', w: 'World'): pass
+    def interact(self, other: 'Character', world: 'World') -> bool:
+        """Trigger a lightweight social interaction with another character."""
+        if other is None or world is None:
+            return False
+        if other.name == self.name:
+            return False
+
+        if not self.current_goal or self.current_goal.type not in {
+            GoalType.IDLE,
+            GoalType.WANDER,
+            GoalType.SMALL_TALK,
+            GoalType.INTRODUCE_SELF_TO_STRANGER,
+        }:
+            return False
+
+        distance = abs(self.x - other.x) + abs(self.y - other.y)
+        knows_other = other.name in self.known_characters
+
+        if knows_other:
+            new_goal = Goal(
+                GoalType.SMALL_TALK,
+                assignee_id=self.name,
+                originator_id=self.name,
+                parameters={"target_char_name": other.name},
+            )
+            interaction_desc = "small talk"
+        else:
+            new_goal = Goal(
+                GoalType.INTRODUCE_SELF_TO_STRANGER,
+                assignee_id=self.name,
+                originator_id=self.name,
+                parameters={"target_char_name": other.name},
+            )
+            interaction_desc = "an introduction"
+
+        self.current_goal = new_goal
+
+        if distance > 1:
+            self.add_memory(f"Heading toward {other.name} for {interaction_desc}.")
+            self.move_towards(other.x, other.y, world)
+        else:
+            self.add_memory(f"Initiating {interaction_desc} with {other.name}.")
+
+        return True
 
     def move(self, dx: int, dy: int, world: 'World') -> bool:
         new_x, new_y = self.x + dx, self.y + dy
