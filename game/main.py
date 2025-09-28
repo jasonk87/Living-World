@@ -348,6 +348,8 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "market_prices": getattr(game_world, 'market_prices', {}),
                     "resource_pressures": game_world.identify_resource_pressures() if hasattr(game_world, 'identify_resource_pressures') else [],
                     "crime_reports": getattr(game_world, 'crime_reports', []),
+                    "pending_crimes": getattr(game_world, 'pending_crimes', []),
+                    "campaign_promises": getattr(game_world, 'campaign_promises', {}),
                 }
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')

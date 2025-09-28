@@ -477,6 +477,25 @@ button:focus-visible {
     border: 1px solid rgba(93, 224, 255, 0.1);
 }
 
+.mini-list li.status-pledged {
+    border-color: rgba(93, 224, 255, 0.35);
+}
+
+.mini-list li.status-enacted {
+    border-color: rgba(110, 255, 196, 0.4);
+    box-shadow: inset 0 0 12px rgba(110, 255, 196, 0.15);
+}
+
+.mini-list li.status-failed {
+    border-color: rgba(255, 92, 112, 0.45);
+    box-shadow: inset 0 0 12px rgba(255, 92, 112, 0.12);
+    color: #ff9aa6;
+}
+
+.mini-list li.status-failed strong {
+    color: #ffd7dc;
+}
+
 .mini-list li strong {
     color: var(--text-color);
 }
@@ -486,6 +505,12 @@ button:focus-visible {
     border: none;
     color: var(--text-muted);
     padding-left: 0;
+}
+
+.mini-list li .meta {
+    margin-top: 0.3rem;
+    font-size: 0.75rem;
+    color: var(--text-muted);
 }
 
 .mini-note {

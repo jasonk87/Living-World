@@ -64,6 +64,10 @@ class World:
         self.todays_wages_owed: int = 0
         self.last_daily_economic_report: Dict[str, Any] = {}
         self.crime_reports: List[Dict[str, Any]] = []
+        self.pending_crimes: List[Dict[str, Any]] = []
+        self.active_crimes: Dict[str, Dict[str, Any]] = {}
+        self._crime_incident_counter: int = 0
+        self.today_surplus_sales: List[Dict[str, Any]] = []
 
     def update_rumors_daily(self):
         """Decays strength of all rumors and removes very weak ones."""
@@ -299,6 +303,107 @@ class World:
             if char.name == name:
                 return char
         return None
+
+    def _next_crime_id(self) -> str:
+        self._crime_incident_counter += 1
+        return f"crime_{self._crime_incident_counter}"
+
+    def _record_crime_history(self, incident: Dict[str, Any]):
+        """Store or update a snapshot of an incident for HUD/history purposes."""
+        summary = {
+            "id": incident.get("id"),
+            "day": incident.get("resolved_day", incident.get("reported_day", -1)),
+            "type": incident.get("type", "crime"),
+            "suspect": incident.get("suspect"),
+            "resource": incident.get("resource"),
+            "amount": incident.get("amount"),
+            "location": incident.get("location_label"),
+            "status": incident.get("status"),
+            "assigned_to": incident.get("assigned_to"),
+            "result": incident.get("result"),
+            "caught": incident.get("caught"),
+            "description": incident.get("description"),
+        }
+        existing = next((entry for entry in self.crime_reports if entry.get("id") == summary["id"]), None)
+        if existing:
+            existing.update({k: v for k, v in summary.items() if v is not None})
+        else:
+            self.crime_reports.append(summary)
+        self.crime_reports = self.crime_reports[-20:]
+
+    def get_crime_by_id(self, crime_id: str) -> Optional[Dict[str, Any]]:
+        if crime_id in self.active_crimes:
+            return self.active_crimes[crime_id]
+        for crime in self.pending_crimes:
+            if crime.get("id") == crime_id:
+                return crime
+        return next((record for record in reversed(self.crime_reports) if record.get("id") == crime_id), None)
+
+    def claim_next_crime(self, responder_name: str) -> Optional[Dict[str, Any]]:
+        """Assign the oldest unclaimed crime incident to a responder."""
+        for crime in self.pending_crimes:
+            if crime.get("status") not in {"pending", "unassigned"}:
+                continue
+            next_review_day = crime.get("next_review_day")
+            if (
+                self.game_time
+                and next_review_day is not None
+                and next_review_day > self.game_time.current_day
+            ):
+                continue
+            crime["status"] = "assigned"
+            crime["assigned_to"] = responder_name
+            crime["assignment_day"] = self.game_time.current_day if self.game_time else -1
+            crime.pop("next_review_day", None)
+            summary = crime.get("summary") or crime.get("description")
+            if summary:
+                self.add_event_log_message(f"{responder_name} responds to report: {summary}")
+            self._record_crime_history(crime)
+            self.active_crimes[crime["id"]] = crime
+            return crime
+        return None
+
+    def resolve_crime_outcome(
+        self,
+        crime_id: str,
+        result: str,
+        responder_name: str,
+        *,
+        caught: bool,
+        notes: Optional[str] = None,
+        requeue: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        crime = self.get_crime_by_id(crime_id)
+        if not crime:
+            return None
+
+        if requeue:
+            crime["status"] = "pending"
+            crime["assigned_to"] = None
+            crime.pop("assignment_day", None)
+            if self.game_time:
+                crime["next_review_day"] = self.game_time.current_day + 1
+            if notes:
+                crime["description"] = f"{crime.get('description', 'Disturbance')} (lead cold: {notes})"
+            self._record_crime_history(crime)
+            return crime
+
+        crime["status"] = "resolved"
+        crime["resolved_day"] = self.game_time.current_day if self.game_time else -1
+        crime["resolved_by"] = responder_name
+        crime["result"] = result
+        crime["caught"] = caught
+        if notes:
+            crime["resolution_notes"] = notes
+            crime["description"] = f"{crime.get('description', 'Disturbance resolved')} ({notes})"
+        resolution_blurb = crime.get("description") or result
+        self.add_event_log_message(f"{responder_name} resolved {crime.get('type', 'incident')} — {resolution_blurb}.")
+
+        self.pending_crimes = [c for c in self.pending_crimes if c.get("id") != crime_id]
+        if crime_id in self.active_crimes:
+            del self.active_crimes[crime_id]
+        self._record_crime_history(crime)
+        return crime
 
     # Event related methods (can be kept minimal if EventManager is not fully used)
     def apply_event_effects(self, event_instance: Any): # Using Any if ActiveEvent is not defined
@@ -603,6 +708,42 @@ class World:
         pressures.sort(key=lambda entry: entry.get("severity", 0), reverse=True)
         return pressures
 
+    def _handle_surplus_trade(self, resource_name: str, severity: int) -> Optional[Dict[str, Any]]:
+        sale_cap = getattr(config, "MAX_SURPLUS_SALE_PER_DAY", 0)
+        if sale_cap <= 0 or severity <= 0:
+            return None
+        if any(trade.get("resource") == resource_name for trade in self.today_surplus_sales):
+            return None
+
+        quantity_to_sell = min(severity, sale_cap)
+        withdrawn = self._withdraw_from_stockpiles(resource_name, quantity_to_sell)
+        if withdrawn <= 0:
+            return None
+
+        unit_price = self.get_market_price(resource_name)
+        revenue = unit_price * withdrawn
+        self.treasury_coins += revenue
+        trade_details = {
+            "resource": resource_name,
+            "quantity": withdrawn,
+            "unit_price": unit_price,
+            "revenue": revenue,
+            "day": self.game_time.current_day if self.game_time else -1,
+        }
+        self.today_surplus_sales.append(trade_details)
+        self.add_event_log_message(
+            f"Converted surplus {withdrawn} {resource_name} into {revenue} coins at the market."
+        )
+        self.add_notable_event(
+            "SurplusTrade",
+            {
+                "summary": f"Sold {withdrawn} {resource_name} for {revenue} coins.",
+                "resource": resource_name,
+                "revenue": revenue,
+            },
+        )
+        return trade_details
+
     def set_resource_collection_directive(
         self,
         resource_name: str,
@@ -764,33 +905,84 @@ class World:
             if not success or removed <= 0:
                 continue
 
+            day_value = self.game_time.current_day if self.game_time else -1
             character.inventory[resource_name] = character.inventory.get(resource_name, 0) + removed
+            location_coords = (stockpile.rect[0], stockpile.rect[1])
+            location_label = f"{stockpile.name} ({location_coords[0]}, {location_coords[1]})"
+            summary = f"{removed} {resource_name} missing from {stockpile.name}"
             description = f"{character.name} stole {removed} {resource_name} from {stockpile.name}"
 
             detection_chance = detection_base / max(0.25, security_modifier)
-            if random.random() < detection_chance:
+            caught = random.random() < detection_chance
+            recovered_amount = 0
+            if caught:
                 description += " but was caught"
+                recovered_amount = min(removed, character.inventory.get(resource_name, 0))
+                if recovered_amount > 0:
+                    success_add, returned = stockpile.add_item(resource_name, recovered_amount)
+                    if success_add:
+                        recovered_amount = returned
+                        character.inventory[resource_name] = character.inventory.get(resource_name, 0) - returned
+                        if character.inventory.get(resource_name, 0) <= 0:
+                            character.inventory.pop(resource_name, None)
+                        summary = f"Recovered {returned} {resource_name} from {character.name}"
+                        if self.game_time:
+                            self.ledger.update_stockpile_record(
+                                stockpile.name, stockpile.inventory, self.game_time.current_day
+                            )
                 character.add_memory("Was caught stealing from the stockpile.")
                 character.update_reputation(-3, "Caught stealing supplies", self)
-                character.update_mood_score(getattr(config, "MOOD_CHANGE_CAUGHT_STEALING", -15), "Caught stealing supplies")
+                character.update_mood_score(
+                    getattr(config, "MOOD_CHANGE_CAUGHT_STEALING", -15), "Caught stealing supplies"
+                )
             else:
-                character.add_memory(f"Stole {removed} {resource_name} from {stockpile.name} under cover of night.")
-                character.update_mood_score(getattr(config, "MOOD_CHANGE_STOLE_SUCCESS", 2), "Stole supplies without notice")
+                character.add_memory(
+                    f"Stole {removed} {resource_name} from {stockpile.name} under cover of night."
+                )
+                character.update_mood_score(
+                    getattr(config, "MOOD_CHANGE_STOLE_SUCCESS", 2), "Stole supplies without notice"
+                )
 
+            incident_id = self._next_crime_id()
+            incident = {
+                "id": incident_id,
+                "type": "theft",
+                "reported_day": day_value,
+                "suspect": character.name,
+                "resource": resource_name,
+                "amount": removed,
+                "recovered": recovered_amount,
+                "location": {"stockpile": stockpile.name, "coords": location_coords},
+                "location_label": location_label,
+                "description": description,
+                "summary": summary,
+                "status": "resolved" if caught else "pending",
+                "caught": caught,
+            }
+
+            self.add_event_log_message(f"Security incident: {description}.")
+            if not caught:
+                self.pending_crimes.append(incident)
+                self.active_crimes[incident_id] = incident
+                self.add_event_log_message(
+                    f"Case opened: {incident['summary']} (suspect {character.name})."
+                )
+            else:
+                incident["result"] = "apprehended_on_scene"
+
+            self._record_crime_history(incident)
             theft_events.append({
+                "id": incident_id,
                 "character": character.name,
                 "resource": resource_name,
                 "amount": removed,
+                "status": incident["status"],
                 "description": description,
+                "caught": caught,
             })
             if self.game_time:
                 self.ledger.update_stockpile_record(stockpile.name, stockpile.inventory, self.game_time.current_day)
 
-        if theft_events:
-            day_value = self.game_time.current_day if self.game_time else -1
-            for event in theft_events:
-                self.crime_reports.append({"day": day_value, **event})
-            self.crime_reports = self.crime_reports[-12:]
         report["crime_events"] = theft_events
 
     def _settle_wage_backlog(self) -> int:
@@ -867,6 +1059,8 @@ class World:
             "arrears_paid": 0,
             "crime_events": [],
             "treasury": self.treasury_coins,
+            "surplus_trades": list(self.today_surplus_sales),
+            "pending_crimes": len(self.pending_crimes),
         }
 
         tax_income = getattr(config, "DAILY_BASE_TAX_INCOME", 0)
@@ -880,6 +1074,8 @@ class World:
 
         self._apply_daily_food_consumption(report)
         self._resolve_theft_attempts(report)
+        report["pending_crimes"] = len(self.pending_crimes)
+        report["surplus_trades"] = list(self.today_surplus_sales)
 
         summary = (
             f"Economic summary — Treasury {self.treasury_coins}c "
@@ -890,7 +1086,15 @@ class World:
         for crime_event in report.get("crime_events", []):
             self.add_event_log_message(f"Security report: {crime_event['description']}.")
 
+        if report["surplus_trades"]:
+            trade_summaries = ", ".join(
+                f"{trade['quantity']} {trade['resource']} (+{trade['revenue']}c)"
+                for trade in report["surplus_trades"]
+            )
+            self.add_event_log_message(f"Trade ledger: {trade_summaries} exported to market.")
+
         self.last_daily_economic_report = report
+        self.today_surplus_sales = []
 
     # --- Governance & Campaign Management ---
 
@@ -956,6 +1160,13 @@ class World:
                 "created_day": self.game_time.current_day,
                 "cycle_start_day": self.active_campaign_cycle_start,
                 "summary": summary,
+                "deadline_day": self.game_time.current_day
+                + max(
+                    1,
+                    getattr(config, "CAMPAIGN_PROMISE_DEADLINES", {}).get(
+                        promise_type, getattr(config, "CAMPAIGN_PROMISE_DEFAULT_WINDOW", 4)
+                    ),
+                ),
             }
             self.campaign_promises.setdefault(candidate.name, []).append(promise)
 
@@ -976,6 +1187,32 @@ class World:
         promises = self.campaign_promises.get(mayor.name, [])
         if not promises:
             return
+
+        today = self.game_time.current_day
+        failure_rep_delta = getattr(config, "CAMPAIGN_PROMISE_FAILURE_REPUTATION", -5)
+        failure_mood_delta = getattr(config, "MOOD_CHANGE_CAMPAIGN_PROMISE_FAILED", -10)
+        for promise in promises:
+            if promise.get("status") != "pledged":
+                continue
+            deadline_day = promise.get("deadline_day")
+            if deadline_day is not None and today > deadline_day:
+                promise["status"] = "failed"
+                promise["failed_day"] = today
+                summary = promise.get("summary", "campaign promise")
+                mayor.add_memory(f"Failed to deliver on promise: {summary}.")
+                mayor.update_reputation(failure_rep_delta, f"Failed promise: {summary}", self)
+                mayor.update_mood_score(failure_mood_delta, "Failed to deliver campaign promise")
+                self.add_event_log_message(
+                    f"Promise broken — Mayor {mayor.name} did not fulfill '{summary}' before Day {deadline_day}."
+                )
+                self.add_notable_event(
+                    "CampaignPromiseFailed",
+                    {
+                        "candidate": mayor.name,
+                        "summary": summary,
+                        "deadline_day": deadline_day,
+                    },
+                )
 
         for promise in promises:
             if promise.get("status") != "pledged":
@@ -1046,21 +1283,22 @@ class World:
             return
         pressures = self.identify_resource_pressures()
         for pressure in pressures:
-            if pressure["status"] != "shortage":
-                continue
             resource = pressure["resource"]
-            if resource in self.resource_collection_directives:
-                continue
-            severity = pressure["severity"]
-            per_trip_quota = max(4, min(15, severity + 3))
-            duration_days = 5
-            self.set_resource_collection_directive(
-                resource,
-                per_trip_quota,
-                duration_days,
-                reason="Automated economic response to shortage",
-                originator="Economic Council",
-            )
+            if pressure["status"] == "shortage":
+                if resource in self.resource_collection_directives:
+                    continue
+                severity = pressure["severity"]
+                per_trip_quota = max(4, min(15, severity + 3))
+                duration_days = 5
+                self.set_resource_collection_directive(
+                    resource,
+                    per_trip_quota,
+                    duration_days,
+                    reason="Automated economic response to shortage",
+                    originator="Economic Council",
+                )
+            elif pressure["status"] == "surplus":
+                self._handle_surplus_trade(resource, pressure.get("severity", 0))
 
     def daily_environment_tick(self):
         if not self.game_time:

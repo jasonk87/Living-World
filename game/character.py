@@ -91,6 +91,8 @@ class Character:
         self.goal_before_fetching_tool: Optional[Goal] = None # Store previous Goal object
         self.current_task_def_name: Optional[str] = None # For _execute_generic_task, could be part of GATHER_RESOURCE params
         self._mc_item_check_idx: int = 0
+        self.active_crime_assignment: Optional[str] = None
+        self.crime_investigation_focus: Optional[Dict[str, Any]] = None
 
         self.is_sick: bool = False
         self.sickness_severity: int = 0
@@ -1700,6 +1702,9 @@ class Character:
             self.current_goal = self.get_default_goal()
             return
 
+        if hasattr(world, "fulfill_campaign_promises"):
+            world.fulfill_campaign_promises(self)
+
         self.add_memory(f"{self.name} the Mayor is assessing the overall resource status of the settlement.")
 
         key_resources = ["Wood", "Stone"] # Initial key resources to monitor. Add "Food" if it becomes a general resource.
@@ -1875,27 +1880,44 @@ class Character:
             self.current_goal = self.get_default_goal()
             return
 
-        self.add_memory(f"Sheriff {self.name} is maintaining peace in the settlement.")
+        if self.active_crime_assignment:
+            if self.current_goal.type != GoalType.INVESTIGATE_DISTURBANCE:
+                self.current_goal = Goal(
+                    GoalType.INVESTIGATE_DISTURBANCE,
+                    assignee_id=self.name,
+                    originator_id=self.name,
+                    parameters={"crime_id": self.active_crime_assignment},
+                )
+            return
 
-        # Initial simple behavior: Log surveying and occasionally move to a central point or wander.
+        incident = world.claim_next_crime(self.name) if hasattr(world, "claim_next_crime") else None
+        if incident:
+            self.active_crime_assignment = incident.get("id")
+            self.crime_investigation_focus = incident.copy()
+            suspect_name = incident.get("suspect", "unknown party")
+            self.add_memory(
+                f"Responding to theft report involving {suspect_name} at {incident.get('location_label', 'unknown site')}.")
+            self.current_goal = Goal(
+                GoalType.INVESTIGATE_DISTURBANCE,
+                assignee_id=self.name,
+                originator_id=self.name,
+                parameters={
+                    "crime_id": incident.get("id"),
+                    "suspect": incident.get("suspect"),
+                    "location": incident.get("location"),
+                },
+            )
+            return
+
+        self.add_memory(f"Sheriff {self.name} is maintaining peace in the settlement.")
         if random.random() < 0.2:
             self.add_memory("Surveying the surroundings for any disturbances.")
-
-        # Placeholder for patrolling movement: move towards a conceptual "town_center" or just wander slightly.
-        # If world had defined key locations, Sheriff could move between them.
-        # For now, a simple wander-like behavior if not actively doing something else.
-        if random.random() < 0.1: # Low chance to decide to move to a different spot
-            # Simple wander to simulate being present in different areas.
-            # This could be replaced with movement to specific patrol points if defined.
+        if random.random() < 0.1:
             dx = random.choice([-1, 0, 1])
             dy = random.choice([-1, 0, 1])
             if dx != 0 or dy != 0:
                 self.add_memory(f"Sheriff {self.name} moves to a new vantage point.")
-                self.move(dx, dy, world) # move will handle collisions/boundaries
-
-        # Future: Scan for incidents, characters with "Troublemaker" trait, etc.
-        # For now, the Sheriff's presence is the primary function.
-        # Goal remains "Maintain Peace in Settlement" unless an incident changes it.
+                self.move(dx, dy, world)
         return
 
     def _execute_patrol_area(self, world: 'World'): # For Deputy
@@ -1903,26 +1925,161 @@ class Character:
             self.current_goal = self.get_default_goal()
             return
 
-        self.add_memory(f"Deputy {self.name} is patrolling their assigned area.")
+        if self.active_crime_assignment:
+            if self.current_goal.type != GoalType.INVESTIGATE_DISTURBANCE:
+                self.current_goal = Goal(
+                    GoalType.INVESTIGATE_DISTURBANCE,
+                    assignee_id=self.name,
+                    originator_id=self.name,
+                    parameters={"crime_id": self.active_crime_assignment},
+                )
+            return
 
-        # Simple patrolling behavior: move randomly or towards predefined points.
-        # For now, just a random move.
-        if random.random() < 0.3: # Chance to move each tick while patrolling
+        incident = world.claim_next_crime(self.name) if hasattr(world, "claim_next_crime") else None
+        if incident:
+            self.active_crime_assignment = incident.get("id")
+            self.crime_investigation_focus = incident.copy()
+            self.add_memory(
+                f"Deputy {self.name} takes over patrol case {incident.get('id')} near {incident.get('location_label', 'the yards')}.")
+            self.current_goal = Goal(
+                GoalType.INVESTIGATE_DISTURBANCE,
+                assignee_id=self.name,
+                originator_id=self.name,
+                parameters={
+                    "crime_id": incident.get("id"),
+                    "suspect": incident.get("suspect"),
+                    "location": incident.get("location"),
+                },
+            )
+            return
+
+        self.add_memory(f"Deputy {self.name} is patrolling their assigned area.")
+        if random.random() < 0.3:
             dx = random.choice([-1, 0, 1])
             dy = random.choice([-1, 0, 1])
-            if dx != 0 or dy != 0: # Ensure there's an actual move attempt
+            if dx != 0 or dy != 0:
                 if self.move(dx, dy, world):
                     self.add_memory(f"Patrolling... moved to ({self.x},{self.y}).")
                 else:
-                    self.add_memory(f"Patrolling... tried to move but was blocked.")
+                    self.add_memory("Patrolling... tried to move but was blocked.")
             else:
                 self.add_memory("Patrolling... surveying current location.")
         else:
             self.add_memory("Patrolling... observing the area.")
-
-        # Goal remains "Patrol Area". Deputies would continuously patrol.
-        # Could add logic to return to a "Guardhouse" or report to Sheriff periodically.
         return
+
+    def _execute_investigate_disturbance(self, world: 'World'):
+        goal_params = self.current_goal.parameters if self.current_goal else {}
+        crime_id = goal_params.get("crime_id") or self.active_crime_assignment
+        if not crime_id:
+            self.active_crime_assignment = None
+            self.crime_investigation_focus = None
+            self.current_goal = self.get_default_goal()
+            return
+
+        incident = world.get_crime_by_id(crime_id) if hasattr(world, "get_crime_by_id") else None
+        if not incident or incident.get("status") == "resolved":
+            self.active_crime_assignment = None
+            self.crime_investigation_focus = None
+            self.current_goal = self.get_default_goal()
+            return
+
+        suspect_name = incident.get("suspect")
+        suspect = world.get_character_by_name(suspect_name) if suspect_name else None
+        location_data = incident.get("location") or goal_params.get("location")
+        location_coords: Optional[Tuple[int, int]] = None
+        if isinstance(location_data, dict):
+            coords = location_data.get("coords")
+            if coords:
+                location_coords = (coords[0], coords[1])
+        if suspect:
+            location_coords = (suspect.x, suspect.y)
+
+        if location_coords and (self.x, self.y) != location_coords:
+            self.move_towards(location_coords[0], location_coords[1], world)
+            if suspect:
+                self.add_memory(f"Closing in on {suspect_name} regarding case {crime_id}.")
+            else:
+                self.add_memory(
+                    f"Investigating disturbance near {incident.get('location_label', 'the reported site')} for case {crime_id}."
+                )
+            return
+
+        security_skill = self.skills.get("Security", {}).get("level", 0)
+        success_chance = min(0.95, 0.45 + 0.08 * security_skill + (0.05 if suspect else 0.0))
+        investigation_success = random.random() < success_chance
+
+        if investigation_success and suspect:
+            recovered_amount = 0
+            stolen_resource = incident.get("resource")
+            if stolen_resource:
+                available = suspect.inventory.get(stolen_resource, 0)
+                if available > 0:
+                    recovered_amount = min(available, incident.get("amount", available))
+                    suspect.inventory[stolen_resource] = available - recovered_amount
+                    if suspect.inventory[stolen_resource] <= 0:
+                        suspect.inventory.pop(stolen_resource, None)
+                    target_stockpile = None
+                    if isinstance(location_data, dict):
+                        target_stockpile = world.get_stockpile_by_name(location_data.get("stockpile"))
+                    if target_stockpile and target_stockpile.is_allowed(stolen_resource):
+                        added, actual = target_stockpile.add_item(stolen_resource, recovered_amount)
+                        if added:
+                            recovered_amount = actual
+                            if world.game_time:
+                                world.ledger.update_stockpile_record(
+                                    target_stockpile.name,
+                                    target_stockpile.inventory,
+                                    world.game_time.current_day,
+                                )
+                    if recovered_amount > 0 and (not target_stockpile or not target_stockpile.is_allowed(stolen_resource)):
+                        self.inventory[stolen_resource] = self.inventory.get(stolen_resource, 0) + recovered_amount
+
+            suspect.update_reputation(-5, f"Apprehended for theft by {self.name}", world)
+            suspect.update_mood_score(
+                getattr(config, "MOOD_CHANGE_CAUGHT_STEALING", -15), "Apprehended for theft"
+            )
+            suspect.add_memory(f"Apprehended by {self.name} for theft case {crime_id}.")
+            self.add_memory(f"Detained {suspect_name} and resolved case {crime_id}.")
+            notes = (
+                f"Suspect detained; recovered {recovered_amount} {incident.get('resource', 'goods')}"
+                if recovered_amount
+                else "Suspect detained"
+            )
+            if hasattr(world, "resolve_crime_outcome"):
+                world.resolve_crime_outcome(
+                    crime_id,
+                    "apprehended",
+                    self.name,
+                    caught=True,
+                    notes=notes,
+                )
+        elif investigation_success:
+            self.add_memory(f"Secured the scene of case {crime_id}; suspect not present.")
+            if hasattr(world, "resolve_crime_outcome"):
+                world.resolve_crime_outcome(
+                    crime_id,
+                    "scene_secured",
+                    self.name,
+                    caught=False,
+                    notes="Scene secured",
+                    requeue=False,
+                )
+        else:
+            self.add_memory(f"Lost the trail for case {crime_id}; will revisit once new leads appear.")
+            if hasattr(world, "resolve_crime_outcome"):
+                world.resolve_crime_outcome(
+                    crime_id,
+                    "lost_trail",
+                    self.name,
+                    caught=False,
+                    notes="Lead went cold",
+                    requeue=True,
+                )
+
+        self.active_crime_assignment = None
+        self.crime_investigation_focus = None
+        self.current_goal = self.get_default_goal()
 
     def _execute_seek_medical_attention(self, world: 'World'):
         self.add_memory("Feeling unwell, seeking medical attention.")
@@ -2343,6 +2500,7 @@ class Character:
         elif self.current_goal.type == GoalType.PROVIDE_MEDICAL_CARE: self._execute_provide_medical_care(world)
         elif self.current_goal.type == GoalType.MAINTAIN_PEACE_IN_SETTLEMENT: self._execute_maintain_peace(world)
         elif self.current_goal.type == GoalType.PATROL_AREA: self._execute_patrol_area(world)
+        elif self.current_goal.type == GoalType.INVESTIGATE_DISTURBANCE: self._execute_investigate_disturbance(world)
         elif self.current_goal.type == GoalType.GIVE_SPEECH: self._execute_give_speech(world)
         elif self.current_goal.type == GoalType.SEEK_MEDICAL_ATTENTION: self._execute_seek_medical_attention(world)
         elif self.current_goal.type == GoalType.REPORT_TO_LIEGE: self._execute_report_to_liege(world)

@@ -26,6 +26,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const economyPressureList = document.getElementById('economy-pressure-list');
     const economyWageList = document.getElementById('economy-wage-list');
     const economyCrimeNote = document.getElementById('economy-crime-note');
+    const economyCampaignList = document.getElementById('economy-campaign-list');
     const characterSearchInput = document.getElementById('character-search');
     const infoPanel = document.getElementById('info-panel');
 
@@ -134,17 +135,88 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (economyCrimeNote) {
             const reportCrimes = Array.isArray(report.crime_events) ? report.crime_events : [];
-            let latestCrime = reportCrimes.slice(-1)[0];
-            if (!latestCrime && Array.isArray(gameState.crime_reports) && gameState.crime_reports.length) {
-                latestCrime = gameState.crime_reports.slice(-1)[0];
+            const historyCrimes = Array.isArray(gameState.crime_reports) ? gameState.crime_reports : [];
+            const pendingCrimes = Array.isArray(gameState.pending_crimes) ? gameState.pending_crimes : [];
+            let latestCrime = null;
+            if (reportCrimes.length) {
+                latestCrime = reportCrimes[reportCrimes.length - 1];
+            } else if (historyCrimes.length) {
+                latestCrime = historyCrimes[historyCrimes.length - 1];
             }
+
+            const messageParts = [];
+            if (pendingCrimes.length) {
+                const activeAssignments = pendingCrimes.filter(crime => crime.status === 'assigned').length;
+                const openCases = pendingCrimes.length;
+                const activeText = activeAssignments ? `, ${activeAssignments} active` : '';
+                messageParts.push(`${openCases} case${openCases === 1 ? '' : 's'} open${activeText}`);
+            }
+
             if (latestCrime && latestCrime.description) {
-                const dayLabel = typeof latestCrime.day === 'number' && latestCrime.day >= 0
-                    ? `Day ${latestCrime.day}: `
+                const crimeDay = typeof latestCrime.day === 'number' && latestCrime.day >= 0
+                    ? latestCrime.day
+                    : typeof latestCrime.reported_day === 'number' && latestCrime.reported_day >= 0
+                        ? latestCrime.reported_day
+                        : null;
+                const dayLabel = crimeDay !== null ? `Day ${crimeDay}: ` : '';
+                const statusLabel = latestCrime.status
+                    ? ` (${latestCrime.status.charAt(0).toUpperCase()}${latestCrime.status.slice(1)})`
                     : '';
-                economyCrimeNote.textContent = `${dayLabel}${latestCrime.description}`;
+                messageParts.push(`${dayLabel}${latestCrime.description}${statusLabel}`);
+            }
+
+            economyCrimeNote.textContent = messageParts.length
+                ? messageParts.join(' • ')
+                : 'No incidents reported.';
+        }
+
+        if (economyCampaignList) {
+            const promisesByCandidate = gameState.campaign_promises || {};
+            const allPromises = Object.entries(promisesByCandidate)
+                .flatMap(([candidate, entries]) => (Array.isArray(entries) ? entries : [])
+                    .map(promise => ({ ...promise, candidate })));
+
+            if (!allPromises.length) {
+                economyCampaignList.innerHTML = '<li class="empty">No promises active.</li>';
             } else {
-                economyCrimeNote.textContent = 'No incidents reported.';
+                const statusOrder = { failed: 0, pledged: 1, enacted: 2 };
+                const statusLabels = { pledged: 'Pledged', enacted: 'Fulfilled', failed: 'Failed' };
+                const formatDay = day => (typeof day === 'number' && day >= 0 ? `Day ${day}` : null);
+
+                allPromises.sort((a, b) => {
+                    const orderDiff = (statusOrder[a.status] ?? 1) - (statusOrder[b.status] ?? 1);
+                    if (orderDiff !== 0) return orderDiff;
+                    return (b.created_day ?? 0) - (a.created_day ?? 0);
+                });
+
+                economyCampaignList.innerHTML = allPromises.slice(0, 5).map(promise => {
+                    const status = (promise.status || 'pledged').toLowerCase();
+                    const statusLabel = statusLabels[status] || status.charAt(0).toUpperCase() + status.slice(1);
+                    const deadlineText = status === 'pledged'
+                        ? formatDay(promise.deadline_day)
+                        : status === 'enacted'
+                            ? formatDay(promise.fulfilled_day)
+                            : status === 'failed'
+                                ? formatDay(promise.failed_day || promise.deadline_day)
+                                : null;
+                    const timeline = deadlineText
+                        ? (status === 'pledged'
+                            ? `Due ${deadlineText}`
+                            : status === 'enacted'
+                                ? `Fulfilled ${deadlineText}`
+                                : `Failed ${deadlineText}`)
+                        : '';
+
+                    const summaryText = promise.summary || 'Promise logged.';
+                    const timelineHtml = timeline ? `<div class="meta">${timeline}</div>` : '';
+                    return `
+                        <li class="status-${status}">
+                            <div><strong>${promise.candidate}</strong> • ${statusLabel}</div>
+                            <div>${summaryText}</div>
+                            ${timelineHtml}
+                        </li>
+                    `;
+                }).join('');
             }
         }
     }

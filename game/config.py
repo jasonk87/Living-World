@@ -17,6 +17,7 @@ DAILY_FOOD_CONSUMPTION_PER_CITIZEN = 1
 STARVATION_HUNGER_PENALTY = 15
 MOOD_CHANGE_STARVING = -12
 MOOD_CHANGE_PAYMENT_DELAY = -6
+MAX_SURPLUS_SALE_PER_DAY = 12
 THEFT_BASE_CHANCE = 0.04
 THEFT_DESPERATION_SCALE = 0.35
 THEFT_HUNGER_THRESHOLD = 35
@@ -44,6 +45,14 @@ MEDICAL_SUPPLY_LOW_THRESHOLD = 5 # Example: CMO concerned if Herbs/Bandages drop
 
 # Governance Configs
 ELECTION_CYCLE_DAYS = 30 # How often mayoral elections are held
+CAMPAIGN_PROMISE_DEFAULT_WINDOW = 4
+CAMPAIGN_PROMISE_DEADLINES = {
+    "resource_drive": 6,
+    "trade_policy": 4,
+    "community_event": 3,
+}
+CAMPAIGN_PROMISE_FAILURE_REPUTATION = -6
+MOOD_CHANGE_CAMPAIGN_PROMISE_FAILED = -12
 
 # Social Interaction
 REACTIVE_SOCIAL_BASE_CHANCE = 0.05 # Base chance for reactive social interactions like offering comfort
