@@ -37,7 +37,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const infoPanel = document.getElementById('info-panel');
 
     // --- API & State ---
-    const API_BASE_URL = 'http://localhost:5000';
+    const DEFAULT_API_BASE_URL = 'http://localhost:5000';
+    const API_BASE_URL = (() => {
+        const { origin, protocol } = window.location;
+        const isHttpProtocol = protocol === 'http:' || protocol === 'https:';
+        if (origin && origin !== 'null' && isHttpProtocol) {
+            return origin;
+        }
+        return DEFAULT_API_BASE_URL;
+    })();
     let isFetchingGameState = false;
     let latestGameState = null;
     let selectedCharacterName = null;
