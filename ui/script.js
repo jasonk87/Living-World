@@ -24,6 +24,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const hudTreasuryValue = document.getElementById('hud-treasury-value');
     const hudRationsValue = document.getElementById('hud-rations-value');
     const hudHydrationValue = document.getElementById('hud-hydration-value');
+    const hudHousingValue = document.getElementById('hud-housing-value');
     const economyMarketList = document.getElementById('economy-market-list');
     const economyPressureList = document.getElementById('economy-pressure-list');
     const economyWageList = document.getElementById('economy-wage-list');
@@ -31,6 +32,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const economyCampaignList = document.getElementById('economy-campaign-list');
     const environmentModifierList = document.getElementById('environment-modifier-list');
     const rumorFeedList = document.getElementById('rumor-feed-list');
+    const housingStatusList = document.getElementById('housing-status-list');
     const characterSearchInput = document.getElementById('character-search');
     const infoPanel = document.getElementById('info-panel');
 
@@ -78,6 +80,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!gameState) return;
         const report = gameState.daily_economy_report || {};
         const environment = gameState.environment_effects || report.environment || {};
+        const housingSnapshot = gameState.housing || report.housing || {};
 
         if (hudTreasuryValue) {
             const treasury = typeof gameState.treasury === 'number' ? gameState.treasury : null;
@@ -96,6 +99,21 @@ document.addEventListener('DOMContentLoaded', () => {
             const waterDeficit = typeof report.water_deficit === 'number' ? report.water_deficit : 0;
             const deficitText = waterDeficit > 0 ? ` • Short ${waterDeficit}` : '';
             hudHydrationValue.textContent = `${waterConsumed}${deficitText}`;
+        }
+
+        if (hudHousingValue) {
+            const claimed = typeof housingSnapshot.claimed_beds === 'number' ? housingSnapshot.claimed_beds : null;
+            const totalBeds = typeof housingSnapshot.total_beds === 'number' ? housingSnapshot.total_beds : null;
+            const availableBeds = typeof housingSnapshot.available_beds === 'number' ? housingSnapshot.available_beds : null;
+            const homelessCount = Array.isArray(housingSnapshot.homeless_characters)
+                ? housingSnapshot.homeless_characters.length
+                : 0;
+            if (claimed === null || totalBeds === null || availableBeds === null) {
+                hudHousingValue.textContent = '—';
+            } else {
+                const homelessText = homelessCount ? ` • Outside ${homelessCount}` : '';
+                hudHousingValue.textContent = `${claimed}/${totalBeds} occupied • ${availableBeds} open${homelessText}`;
+            }
         }
 
         if (hudTravelValue) {
@@ -191,6 +209,56 @@ document.addEventListener('DOMContentLoaded', () => {
             environmentModifierList.innerHTML = lines.length
                 ? lines.slice(0, 6).join('')
                 : '<li class="empty">No modifiers active.</li>';
+        }
+
+        if (housingStatusList) {
+            const lines = [];
+            const totalBeds = typeof housingSnapshot.total_beds === 'number' ? housingSnapshot.total_beds : null;
+            const claimedBeds = typeof housingSnapshot.claimed_beds === 'number' ? housingSnapshot.claimed_beds : null;
+            const availableBeds = typeof housingSnapshot.available_beds === 'number' ? housingSnapshot.available_beds : null;
+            const restingNames = Array.isArray(housingSnapshot.resting_characters)
+                ? housingSnapshot.resting_characters
+                : [];
+            const homelessNames = Array.isArray(housingSnapshot.homeless_characters)
+                ? housingSnapshot.homeless_characters
+                : [];
+
+            if (totalBeds !== null && claimedBeds !== null && availableBeds !== null) {
+                const summaryBits = [`${claimedBeds}/${totalBeds} occupied`, `${availableBeds} open`];
+                if (restingNames.length) {
+                    summaryBits.push(`${restingNames.length} resting`);
+                }
+                lines.push(`<li><strong>Capacity</strong>: ${summaryBits.join(' • ')}</li>`);
+            }
+
+            const structures = Array.isArray(housingSnapshot.structures) ? housingSnapshot.structures : [];
+            structures.slice(0, 5).forEach(structure => {
+                const capacity = typeof structure.capacity === 'number' ? structure.capacity : 0;
+                const occupants = Array.isArray(structure.occupants) ? structure.occupants : [];
+                const used = Math.min(occupants.length, capacity);
+                const available = Math.max(0, capacity - used);
+                const className = available === 0 ? 'housing-full' : 'housing-available';
+                const occupantPreview = occupants.length
+                    ? `${occupants.slice(0, 3).join(', ')}${occupants.length > 3 ? '…' : ''}`
+                    : 'Vacant';
+                lines.push(`
+                    <li class="${className}">
+                        <strong>${structure.name}</strong>: ${used}/${capacity} beds
+                        <span class="meta">${available} open • ${occupantPreview}</span>
+                    </li>
+                `.trim());
+            });
+
+            if (homelessNames.length) {
+                const preview = homelessNames.slice(0, 4).join(', ');
+                const more = homelessNames.length > 4 ? '…' : '';
+                const meta = preview ? `<span class="meta">${preview}${more}</span>` : '';
+                lines.push(`<li class="alert"><strong>Homeless</strong>: ${homelessNames.length} ${meta}</li>`);
+            }
+
+            housingStatusList.innerHTML = lines.length
+                ? lines.join('')
+                : '<li class="empty">No housing data.</li>';
         }
 
         if (economyCrimeNote) {

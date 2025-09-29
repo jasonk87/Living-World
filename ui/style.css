@@ -492,6 +492,21 @@ button:focus-visible {
     color: #ff9aa6;
 }
 
+.mini-list li.housing-available {
+    border-color: rgba(110, 255, 196, 0.35);
+}
+
+.mini-list li.housing-full {
+    border-color: rgba(255, 122, 122, 0.45);
+    box-shadow: inset 0 0 12px rgba(255, 92, 112, 0.12);
+}
+
+.mini-list li.alert {
+    border-color: rgba(255, 170, 76, 0.55);
+    box-shadow: inset 0 0 14px rgba(255, 170, 76, 0.18);
+    color: #ffe7c6;
+}
+
 .mini-list li.rumor-positive {
     border-color: rgba(110, 255, 196, 0.45);
 }

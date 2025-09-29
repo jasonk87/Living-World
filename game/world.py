@@ -76,6 +76,8 @@ class World:
         self._crime_incident_counter: int = 0
         self.today_surplus_sales: List[Dict[str, Any]] = []
         self._residential_assignments: Dict[str, Tuple[int, int]] = {}
+        self.last_housing_evaluation_day: Optional[int] = None
+        self.latest_housing_snapshot: Dict[str, Any] = self.get_housing_snapshot()
 
     def update_rumors_daily(self):
         """Decays strength of all rumors and removes very weak ones."""
@@ -174,12 +176,16 @@ class World:
 
     def claim_residential_spot(self, character: 'Character') -> Optional[Building]:
         existing_location = self._residential_assignments.get(character.name)
+        assigned_building: Optional[Building] = None
         if existing_location:
             existing = self.get_building_by_location(existing_location)
             if existing and self._is_residential(existing):
                 if character.name not in existing.occupants:
                     existing.add_occupant(character.name)
-                return existing
+                assigned_building = existing
+        if assigned_building:
+            self.latest_housing_snapshot = self.get_housing_snapshot()
+            return assigned_building
 
         for building in self.buildings:
             if not self._is_residential(building):
@@ -187,12 +193,17 @@ class World:
             capacity = int(building.functionality.get("provides_shelter", 0))
             if character.name in building.occupants:
                 self._residential_assignments[character.name] = building.location
-                return building
+                assigned_building = building
+                break
             if len(building.occupants) < capacity:
                 building.add_occupant(character.name)
                 self._residential_assignments[character.name] = building.location
-                return building
-        return None
+                assigned_building = building
+                break
+
+        if assigned_building:
+            self.latest_housing_snapshot = self.get_housing_snapshot()
+        return assigned_building
 
     def release_residential_spot(self, character: 'Character'):
         assigned = self._residential_assignments.get(character.name)
@@ -209,6 +220,67 @@ class World:
             target_building.remove_occupant(character.name)
         if character.name in self._residential_assignments:
             del self._residential_assignments[character.name]
+        self.latest_housing_snapshot = self.get_housing_snapshot()
+
+    def get_housing_snapshot(self) -> Dict[str, Any]:
+        total_beds = 0
+        claimed_beds = 0
+        structures: List[Dict[str, Any]] = []
+        occupant_lookup: Dict[str, str] = {}
+
+        for building in self.buildings:
+            if not self._is_residential(building):
+                continue
+
+            capacity = max(0, int(building.functionality.get("provides_shelter", 0)))
+            total_beds += capacity
+            occupants = list(building.occupants)
+            claimed_beds += min(len(occupants), capacity)
+            available = max(0, capacity - min(len(occupants), capacity))
+
+            structures.append(
+                {
+                    "name": building.display_name,
+                    "location": building.location,
+                    "capacity": capacity,
+                    "occupants": occupants,
+                    "available": available,
+                }
+            )
+
+            for occupant_name in occupants:
+                occupant_lookup[occupant_name] = building.display_name
+
+        assignments: Dict[str, str] = {}
+        for char_name, location in self._residential_assignments.items():
+            building = self.get_building_by_location(location)
+            if building and self._is_residential(building):
+                assignments[char_name] = building.display_name
+
+        homeless: List[str] = []
+        for character in self.characters:
+            home_name = assignments.get(character.name) or occupant_lookup.get(character.name)
+            if home_name:
+                assignments[character.name] = home_name
+            else:
+                homeless.append(character.name)
+
+        resting_characters = [
+            character.name
+            for character in self.characters
+            if getattr(character, "resting_at_home", False)
+        ]
+
+        snapshot = {
+            "total_beds": total_beds,
+            "claimed_beds": claimed_beds,
+            "available_beds": max(0, total_beds - claimed_beds),
+            "structures": structures,
+            "assignments": assignments,
+            "homeless_characters": homeless,
+            "resting_characters": resting_characters,
+        }
+        return snapshot
 
     def get_operational_buildings_of_type(self, structure_type_str: str) -> List[Building]:
         return [b for b in self.buildings if b.structure_type == structure_type_str and b.is_operational]
@@ -1216,6 +1288,55 @@ class World:
         report["water_consumed"] = total_consumed
         report["water_deficit"] = total_deficit
 
+    def _evaluate_housing_daily(self, report: Dict[str, Any]) -> Dict[str, Any]:
+        snapshot = self.get_housing_snapshot()
+        report["housing"] = snapshot
+        self.latest_housing_snapshot = snapshot
+
+        if not self.game_time:
+            return snapshot
+
+        today = self.game_time.current_day
+        if self.last_housing_evaluation_day == today:
+            return snapshot
+
+        homeless_names = snapshot.get("homeless_characters", [])
+        mood_penalty = getattr(config, "MOOD_CHANGE_HOMELESS_SLEEP", -6)
+        energy_penalty = getattr(config, "ENERGY_PENALTY_HOMELESS_SLEEP", 8)
+        belonging_penalty = getattr(config, "BELONGING_PENALTY_HOMELESS_SLEEP", 4)
+        for name in homeless_names:
+            character = self.get_character_by_name(name)
+            if not character:
+                continue
+            character.add_memory("Slept outdoors without the safety of a roof.")
+            if mood_penalty:
+                character.update_mood_score(mood_penalty, "Slept without shelter")
+            if energy_penalty:
+                current_energy = character.needs.get("Energy", 70)
+                character.needs["Energy"] = max(
+                    config.NEED_SCORE_MIN,
+                    current_energy - energy_penalty,
+                )
+            if belonging_penalty:
+                current_belonging = character.needs.get(
+                    "Belonging", config.NEED_BELONGING_DEFAULT
+                )
+                character.needs["Belonging"] = max(
+                    config.NEED_SCORE_MIN,
+                    current_belonging - belonging_penalty,
+                )
+
+        rest_bonus = getattr(config, "MOOD_CHANGE_RESTED_IN_HOME", 0)
+        if rest_bonus:
+            for name in snapshot.get("resting_characters", []):
+                character = self.get_character_by_name(name)
+                if not character:
+                    continue
+                character.update_mood_score(rest_bonus, "Recovered in warm shelter")
+
+        self.last_housing_evaluation_day = today
+        return snapshot
+
     def _get_security_modifier(self) -> float:
         modifier = 1.0
         if any(char.job == "Sheriff" for char in self.characters):
@@ -1459,6 +1580,7 @@ class World:
 
         self._apply_daily_food_consumption(report)
         self._apply_daily_water_consumption(report)
+        housing_snapshot = self._evaluate_housing_daily(report)
         self._resolve_theft_attempts(report)
         report["pending_crimes"] = len(self.pending_crimes)
         report["surplus_trades"] = list(self.today_surplus_sales)
@@ -1470,6 +1592,17 @@ class World:
             f" water deficit {report['water_deficit']} casks."
         )
         self.add_event_log_message(summary)
+        if housing_snapshot:
+            homeless_count = len(housing_snapshot.get("homeless_characters", []))
+            available_beds = housing_snapshot.get("available_beds")
+            if homeless_count:
+                self.add_event_log_message(
+                    f"Housing report: {homeless_count} citizen{'s' if homeless_count != 1 else ''} slept outdoors."
+                )
+            elif isinstance(available_beds, int):
+                self.add_event_log_message(
+                    f"Housing report: {available_beds} bed{'s' if available_beds != 1 else ''} currently open."
+                )
         for crime_event in report.get("crime_events", []):
             self.add_event_log_message(f"Security report: {crime_event['description']}.")
 
