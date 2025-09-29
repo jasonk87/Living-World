@@ -24,6 +24,8 @@ import socketserver
 import json
 import threading
 import time as py_time # Renamed to avoid conflict with game.time.Time
+import urllib.request
+import webbrowser
 
 # --- Global Game State Variables ---
 game_world: Optional[World] = None
@@ -278,7 +280,30 @@ def simulation_thread_func():
 
 
 # --- HTTP Server Logic ---
-PORT = 8000
+PORT = 5000
+
+
+def trigger_initial_ui_fetch(port: int, delay: float = 0.5, attempts: int = 5) -> None:
+    """Warm the UI by requesting the index page (and fall back to opening a browser)."""
+
+    def _fetch() -> None:
+        url = f"http://localhost:{port}/"
+        for attempt in range(attempts):
+            try:
+                with urllib.request.urlopen(url):
+                    print(f"Initial UI fetch succeeded for {url}")
+                    return
+            except Exception as exc:  # noqa: BLE001 - log and continue retries
+                print(f"Attempt {attempt + 1} to fetch {url} failed: {exc}")
+                py_time.sleep(delay)
+
+        try:
+            webbrowser.open(url)
+            print(f"Opened default browser for {url}")
+        except Exception as exc:  # noqa: BLE001 - best-effort browser launch
+            print(f"Unable to launch browser automatically for {url}: {exc}")
+
+    threading.Thread(target=_fetch, daemon=True).start()
 class GameDataHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         global game_world, game_time_obj, game_paused, simulation_running, SIMULATION_SPEED_MULTIPLIER # Correct placement
@@ -606,8 +631,9 @@ if __name__ == "__main__":
     try:
         with socketserver.TCPServer(("", PORT), GameDataHandler) as httpd:
             print(f"Serving HTTP on port {PORT}...")
-            print("Game simulation running in background. Access UI at http://localhost:8000/ (assuming index.html in ui folder)")
+            print(f"Game simulation running in background. Access UI at http://localhost:{PORT}/ (assuming index.html in ui folder)")
             print("Press Ctrl+C to stop server and simulation.")
+            trigger_initial_ui_fetch(PORT)
             httpd.serve_forever()
     except KeyboardInterrupt:
         print("\nCtrl+C received. Shutting down server and simulation...")

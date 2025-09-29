@@ -5,7 +5,7 @@ def run():
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         try:
-            page.goto("http://localhost:8000", timeout=10000)
+            page.goto("http://localhost:5000", timeout=10000)
 
             # Wait for the map to be ready
             page.wait_for_selector("#game-map", timeout=5000)

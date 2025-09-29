@@ -37,7 +37,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const infoPanel = document.getElementById('info-panel');
 
     // --- API & State ---
-    const API_BASE_URL = 'http://localhost:8000';
+    const API_BASE_URL = 'http://localhost:5000';
     let isFetchingGameState = false;
     let latestGameState = null;
     let selectedCharacterName = null;
