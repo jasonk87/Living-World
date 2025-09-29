@@ -594,6 +594,15 @@ button:focus-visible {
     margin-top: 0.2rem;
 }
 
+.character-card .status-flags {
+    display: block;
+    margin-top: 0.35rem;
+    font-size: 0.7rem;
+    letter-spacing: 0.05em;
+    color: var(--accent-color);
+    text-transform: uppercase;
+}
+
 .character-list-container .glass-card {
     min-height: 140px;
 }

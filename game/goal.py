@@ -15,6 +15,7 @@ class GoalType(Enum):
     GATHER_WOOD = auto() # Specific version of GATHER_RESOURCE
     GATHER_STONE = auto() # Specific version of GATHER_RESOURCE
     GATHER_HERBS = auto() # Specific version of GATHER_RESOURCE
+    GATHER_WATER = auto()
 
     HAUL_RESOURCE_TO_STOCKPILE = auto()
     INITIATE_HAULING = auto() # Intermediate step for haulers
@@ -71,6 +72,9 @@ class GoalType(Enum):
 
     # Need-Driven & Prosocial
     EAT_FOOD = auto()
+    DRINK_WATER = auto()
+    FIND_SHELTER = auto()
+    REST_AT_HOME = auto()
     SEEK_RECOGNITION = auto() # Esteem
     IMPROVE_DWELLING = auto() # Safety
     HELP_FRIEND = auto() # Belonging / Relationship

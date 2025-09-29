@@ -23,6 +23,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const hudElectionValue = document.getElementById('hud-election-value');
     const hudTreasuryValue = document.getElementById('hud-treasury-value');
     const hudRationsValue = document.getElementById('hud-rations-value');
+    const hudHydrationValue = document.getElementById('hud-hydration-value');
     const economyMarketList = document.getElementById('economy-market-list');
     const economyPressureList = document.getElementById('economy-pressure-list');
     const economyWageList = document.getElementById('economy-wage-list');
@@ -88,6 +89,13 @@ document.addEventListener('DOMContentLoaded', () => {
             const deficit = typeof report.food_deficit === 'number' ? report.food_deficit : 0;
             const deficitText = deficit > 0 ? ` • Short ${deficit}` : '';
             hudRationsValue.textContent = `${consumed}${deficitText}`;
+        }
+
+        if (hudHydrationValue) {
+            const waterConsumed = typeof report.water_consumed === 'number' ? report.water_consumed : '—';
+            const waterDeficit = typeof report.water_deficit === 'number' ? report.water_deficit : 0;
+            const deficitText = waterDeficit > 0 ? ` • Short ${waterDeficit}` : '';
+            hudHydrationValue.textContent = `${waterConsumed}${deficitText}`;
         }
 
         if (hudTravelValue) {
@@ -346,6 +354,13 @@ document.addEventListener('DOMContentLoaded', () => {
         const healthSummary = `Health: ${sicknessText}, ${injuryText}`;
         const goalDetails = extractGoal(character.current_goal);
         const goalSummary = `${goalDetails.type}${goalDetails.priority !== '—' ? ` (prio ${goalDetails.priority})` : ''}`;
+        const energyText = typeof character.energy === 'number' ? character.energy : '—';
+        const thirstText = typeof character.thirst === 'number' ? character.thirst : '—';
+        const housingSummary = character.resting_at_home
+            ? 'Resting at assigned housing'
+            : Array.isArray(character.home_location)
+                ? `Sheltered at (${character.home_location[0]}, ${character.home_location[1]})`
+                : 'No assigned housing';
         const lastDialogue = (character.dialogue_history || []).slice(-1)[0];
         let dialogueSummary = 'No recent conversations logged.';
         if (lastDialogue) {
@@ -364,6 +379,8 @@ document.addEventListener('DOMContentLoaded', () => {
             <p>Location: (${character.x}, ${character.y})</p>
             <p>Goal: ${goalSummary}</p>
             <p>${healthSummary}</p>
+            <p>Needs: Energy ${energyText} • Thirst ${thirstText}</p>
+            <p>Housing: ${housingSummary}</p>
             <hr>
             <p><strong>Latest Social Exchange</strong></p>
             <p class="dialogue-snippet">${dialogueSummary}</p>
@@ -541,6 +558,15 @@ document.addEventListener('DOMContentLoaded', () => {
         needsSection.innerHTML = '<h4>Needs</h4>';
         needsSection.appendChild(formatKeyValueList(character.needs));
 
+        const housingSection = document.createElement('section');
+        housingSection.innerHTML = '<h4>Housing & Rest</h4>';
+        const home = Array.isArray(character.home_location)
+            ? `(${character.home_location[0]}, ${character.home_location[1]})`
+            : 'Unassigned';
+        const restStatus = character.resting_at_home ? 'Resting' : 'Active';
+        housingSection.innerHTML += `<p><strong>Status:</strong> ${restStatus}</p>`;
+        housingSection.innerHTML += `<p><strong>Home:</strong> ${home}</p>`;
+
         const skillsSection = document.createElement('section');
         skillsSection.innerHTML = '<h4>Skills</h4>';
         const skillLevels = Object.fromEntries(Object.entries(character.skills || {}).map(([skill, level]) => [skill, level]));
@@ -556,7 +582,7 @@ document.addEventListener('DOMContentLoaded', () => {
             inventorySection.appendChild(empty);
         }
 
-        wrapper.append(needsSection, skillsSection, inventorySection);
+        wrapper.append(needsSection, housingSection, skillsSection, inventorySection);
         return wrapper;
     }
 
@@ -739,6 +765,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 <h3>${entity.display_name}</h3>
                 <dt>Type</dt><dd>${entity.structure_type}</dd>
                 <dt>Operational</dt><dd>${entity.is_operational}</dd>
+                ${entity.provides_shelter ? `<dt>Shelter Capacity</dt><dd>${entity.provides_shelter}</dd>` : ''}
+                ${Array.isArray(entity.occupants) ? `<dt>Occupants</dt><dd>${entity.occupants.length ? entity.occupants.join(', ') : 'None'}</dd>` : ''}
                 ${entity.inventory ? `<dt>Inventory</dt><dd>${JSON.stringify(entity.inventory)}</dd>` : ''}
             `;
         }
@@ -957,11 +985,17 @@ document.addEventListener('DOMContentLoaded', () => {
             const isFollowing = char.name === followedCharacterName;
             const goal = extractGoal(char.current_goal).type;
             const loadText = typeof char.inventory_load === 'number' ? ` • Load: ${char.inventory_load}` : '';
+            const statusFlags = [];
+            if (char.resting_at_home) statusFlags.push('Resting');
+            if (typeof char.energy === 'number' && char.energy < 40) statusFlags.push('Fatigued');
+            if (typeof char.thirst === 'number' && char.thirst < 40) statusFlags.push('Thirsty');
+            const statusLine = statusFlags.length ? `<small class="status-flags">${statusFlags.join(' • ')}</small>` : '';
             return `
                 <article class="character-card ${isActive ? 'active' : ''} ${isFollowing ? 'following' : ''}" data-char-name="${char.name}">
                     <strong>${char.name}</strong>
                     <small>${char.job || 'Unassigned'} • Goal: ${goal}</small>
                     <small>Pos: (${char.x}, ${char.y})${loadText}</small>
+                    ${statusLine}
                 </article>
             `;
         }).join('');

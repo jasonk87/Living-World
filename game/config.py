@@ -14,8 +14,12 @@ MAX_SIMULATION_DAYS = 20 # Max days the simulation runs for in headless/test mod
 STARTING_TREASURY_COINS = 350
 DAILY_BASE_TAX_INCOME = 18
 DAILY_FOOD_CONSUMPTION_PER_CITIZEN = 1
+DAILY_WATER_CONSUMPTION_PER_CITIZEN = 1
 STARVATION_HUNGER_PENALTY = 15
+DEHYDRATION_THIRST_PENALTY = 20
 MOOD_CHANGE_STARVING = -12
+MOOD_CHANGE_DEHYDRATED = -14
+MOOD_CHANGE_REPLENISHED_WATER = 4
 MOOD_CHANGE_PAYMENT_DELAY = -6
 MAX_SURPLUS_SALE_PER_DAY = 12
 THEFT_BASE_CHANCE = 0.04
@@ -26,6 +30,7 @@ THEFT_MAX_QUANTITY = 3
 THEFT_DETECTION_BASE = 0.35
 MOOD_CHANGE_CAUGHT_STEALING = -18
 MOOD_CHANGE_STOLE_SUCCESS = 3
+
 
 # Environment Modelling
 SEASON_ENVIRONMENT_MODIFIERS = {
@@ -155,6 +160,7 @@ MOOD_CHANGE_SUCCESSFUL_TASK_MINOR = 3  # e.g. gathering one unit of resource
 MOOD_CHANGE_FAILED_TASK = -5
 MOOD_CHANGE_NEED_CRITICAL = -8         # Per critical need, per check
 MOOD_CHANGE_NEED_FULFILLED_FROM_CRITICAL = 10
+MOOD_CHANGE_NEED_FULFILLED = 4
 MOOD_CHANGE_TOOL_BROKE = -7
 MOOD_CHANGE_RECEIVED_WARNING = -15
 MOOD_CHANGE_FIRED = -50
@@ -258,7 +264,12 @@ MIN_RUMOR_STRENGTH_FOR_OPINION_EFFECT = 20 # Rumor needs this strength to affect
 MAX_OPINION_CHANGE_FROM_RUMOR = 5 # Max opinion points a single rumor instance can change
 
 # Complex Needs System
-HUNGER_THRESHOLD_EAT = 40 # Below this, character will try to eat
+HUNGER_THRESHOLD_EAT = 45 # Below this, character will try to eat
+THIRST_THRESHOLD_DRINK = 60 # Below this, characters will seek water
+ENERGY_THRESHOLD_REST = 45 # Below this, characters look for rest
+ENERGY_THRESHOLD_FULLY_RESTED = 92 # Energy level that ends resting behavior
+ENERGY_REST_GAIN_PER_TICK = 6 # How much energy is restored per rest tick
+ENERGY_PASSIVE_RECOVERY_WHILE_IDLE = 1 # Minor energy recovered when idle and safe
 HUNGER_DECAY_RATE_PER_TICK = 0.5 # How much hunger decays each tick
 NEED_SCORE_MIN = 0
 NEED_SCORE_MAX = 100

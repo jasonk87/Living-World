@@ -26,7 +26,8 @@ class Character:
                  money: int = 10,
                  family_members: Optional[List[str]] = None,
                  liege: Optional[str] = None,
-                 vassals: Optional[List[str]] = None):
+                 vassals: Optional[List[str]] = None,
+                 supervisor_name: Optional[str] = None):
         self.name = name; self.personality = personality; self.traits = traits;
         self.money: int = money
         self.family_members: List[str] = family_members if family_members else []
@@ -70,7 +71,7 @@ class Character:
         self.max_inventory_items = max_inventory_items
         # self.hauling_info attribute is fully removed. Logic relies on current_goal.parameters.
         # self.counting_target_stockpile_name: Optional[str] = None # Attribute removed.
-        self.supervisor_name: Optional[str] = None; self.subordinates_names: List[str] = []
+        self.supervisor_name: Optional[str] = supervisor_name; self.subordinates_names: List[str] = []
         self.managed_item_targets: Dict[str, int] = {}; self.order_cooldown: Dict[str, int] = {}
         self.active_work_order_id: Optional[str] = None; self.crafting_progress: int = 0
         self.materials_gathered_for_wo: bool = False; self.items_crafted_for_wo: bool = False
@@ -123,6 +124,9 @@ class Character:
         self.materials_gathered_for_build: bool = False
         self.building_site_target: Optional[Tuple[int, int]] = None # Parameter for EXECUTE_BUILD_ORDER
         self.current_building_project: Optional[str] = None # Blueprint key, parameter for EXECUTE_BUILD_ORDER
+        self.home_location: Optional[Tuple[int, int]] = None
+        self.resting_at_home: bool = False
+        self._rest_ticks: int = 0
 
         # Mood related attributes
         self.mood_score: int = config.MOOD_SCORE_NEUTRAL_START
@@ -841,6 +845,7 @@ class Character:
             "Iron Ore": ["Rocks", "Mountain"],
             "Herbs": ["Forest", "Meadow", "Grass"],
             "Food": ["Fields", "Meadow", "Grass"],
+            "Water": ["Water", "River", "Stream", "Well"],
         }
         tiles_to_scan = tile_preferences.get(resource_name, [])
         if not tiles_to_scan:
@@ -3014,6 +3019,40 @@ class Character:
                 self.update_mood_score(config.MOOD_CHANGE_NEED_CRITICAL * 2, f"Severely injured (severity: {self.injury_severity})") # Larger mood hit
                 self.current_goal = Goal(GoalType.SEEK_MEDICAL_ATTENTION, assignee_id=self.name, originator_id=self.name)
 
+        if self.resting_at_home and self.current_goal.type not in [GoalType.REST_AT_HOME, GoalType.FIND_SHELTER]:
+            if hasattr(world, "release_residential_spot"):
+                world.release_residential_spot(self)
+            self.resting_at_home = False
+            self._rest_ticks = 0
+
+        energy_level = self.needs.get("Energy", 100)
+        if energy_level < getattr(config, "ENERGY_THRESHOLD_REST", 40) and self.current_goal.type not in [GoalType.REST_AT_HOME, GoalType.FIND_SHELTER, GoalType.SEEK_MEDICAL_ATTENTION]:
+            home_building = self._ensure_home_assignment(world)
+            if home_building:
+                self.add_memory(f"Exhausted—heading to {home_building.display_name} to rest.")
+                self.current_goal = Goal(
+                    GoalType.REST_AT_HOME,
+                    assignee_id=self.name,
+                    originator_id=self.name,
+                    parameters={"building_location": home_building.location},
+                    priority=2,
+                )
+            else:
+                self.add_memory("I am exhausted but have no bed. I need to find shelter.")
+                self.current_goal = Goal(GoalType.FIND_SHELTER, assignee_id=self.name, originator_id=self.name, priority=3)
+
+        thirst_level = self.needs.get("Thirst", 100)
+        if thirst_level < getattr(config, "THIRST_THRESHOLD_DRINK", 55) and self.current_goal.type not in [GoalType.DRINK_WATER, GoalType.GATHER_WATER, GoalType.SEEK_TO_BUY_ITEM]:
+            if self.inventory.get("Water", 0) > 0:
+                self.add_memory("Feeling parched—I have water on hand to drink.")
+                self.current_goal = Goal(GoalType.DRINK_WATER, assignee_id=self.name, originator_id=self.name, priority=2)
+            elif world.get_total_resource_quantity("Water") > 0:
+                self.add_memory("Thirsty—I'll check communal stores for water.")
+                self.current_goal = Goal(GoalType.DRINK_WATER, assignee_id=self.name, originator_id=self.name, priority=2)
+            else:
+                self.add_memory("No water anywhere. I'll gather some fresh supplies.")
+                self.current_goal = Goal(GoalType.GATHER_WATER, assignee_id=self.name, originator_id=self.name, priority=2)
+
         # Hunger check: If hungry, character will prioritize eating or getting food.
         if self.needs.get('Hunger', 100) < config.HUNGER_THRESHOLD_EAT and self.current_goal.type not in [GoalType.EAT_FOOD, GoalType.SEEK_TO_BUY_ITEM]:
             if self.inventory.get("Food", 0) > 0:
@@ -3030,7 +3069,17 @@ class Character:
                 # For now, SEEK_SOLITUDE will just make them Wander.
                 # A more complex implementation could make them avoid others or go to a quiet spot.
                 self.add_memory(f"Feeling {self.mood}, I need some time alone.")
-                self.current_goal = Goal(GoalType.WANDER, assignee_id=self.name, originator_id=self.name, details="Seeking solitude due to mood.") # Wander is a simple proxy for solitude
+                self.current_goal = Goal(
+                    GoalType.WANDER,
+                    assignee_id=self.name,
+                    originator_id=self.name,
+                    parameters={"reason": "Seeking solitude due to mood."},
+                )  # Wander is a simple proxy for solitude
+
+        if self.current_goal.type in [GoalType.IDLE, GoalType.WANDER] and energy_level < config.NEED_SCORE_MAX:
+            passive_gain = getattr(config, "ENERGY_PASSIVE_RECOVERY_WHILE_IDLE", 0)
+            if passive_gain > 0:
+                self.needs["Energy"] = min(config.NEED_SCORE_MAX, energy_level + passive_gain)
 
         # --- Complex Need-Driven Goal/Action Biases ---
         # These are checked if not already in a critical goal state like SEEK_MEDICAL_ATTENTION or ASK_FOR_HELP
@@ -3139,6 +3188,7 @@ class Character:
             if resource_name == "Wood": self._execute_gather_wood(world)
             elif resource_name == "Stone": self._execute_gather_stone(world)
             elif resource_name == "Herbs": self._execute_gather_herbs(world)
+            elif resource_name == "Water": self._execute_gather_water(world)
             else: self.current_goal = self.get_default_goal() # Unknown resource
         elif self.current_goal.type == GoalType.INITIATE_HAULING: self._execute_initiate_hauling(world)
         elif self.current_goal.type == GoalType.HAUL_RESOURCE_TO_STOCKPILE: self._execute_haul_resource(world)
@@ -3179,6 +3229,10 @@ class Character:
 
         # Need-Driven Goals
         elif self.current_goal.type == GoalType.EAT_FOOD: self._execute_eat_food(world)
+        elif self.current_goal.type == GoalType.DRINK_WATER: self._execute_drink_water(world)
+        elif self.current_goal.type == GoalType.FIND_SHELTER: self._execute_find_shelter(world)
+        elif self.current_goal.type == GoalType.REST_AT_HOME: self._execute_rest_at_home(world)
+        elif self.current_goal.type == GoalType.GATHER_WATER: self._execute_gather_water(world)
         elif self.current_goal.type == GoalType.SEEK_RECOGNITION: self._execute_seek_recognition(world)
         elif self.current_goal.type == GoalType.MAKE_NEW_FRIEND: self._execute_make_new_friend(world)
         elif self.current_goal.type == GoalType.IMPROVE_DWELLING: self._execute_improve_dwelling(world)
@@ -4580,6 +4634,126 @@ class Character:
         else:
             # For other items, just go back to the default goal for now
             self.current_goal = self.get_default_goal()
+
+    def _ensure_home_assignment(self, world: 'World'):
+        if not hasattr(world, "claim_residential_spot"):
+            return None
+        building = world.claim_residential_spot(self)
+        if building:
+            self.home_location = building.location
+        return building
+
+    def _execute_find_shelter(self, world: 'World'):
+        building = self._ensure_home_assignment(world)
+        if building:
+            self.add_memory(f"Claimed a resting spot at {building.display_name}.")
+            self.current_goal = Goal(
+                GoalType.REST_AT_HOME,
+                assignee_id=self.name,
+                originator_id=self.name,
+                parameters={"building_location": building.location},
+                priority=2,
+            )
+            self._execute_rest_at_home(world)
+            return
+
+        self.add_memory("No housing available—finding a quiet place to recuperate under the stars.")
+        self.current_goal = Goal(GoalType.WANDER, assignee_id=self.name, originator_id=self.name, priority=6)
+
+    def _execute_rest_at_home(self, world: 'World'):
+        building = self._ensure_home_assignment(world)
+        if not building:
+            self.resting_at_home = False
+            self._rest_ticks = 0
+            self.add_memory("I have no home to rest in. I will keep moving.")
+            self.current_goal = Goal(GoalType.WANDER, assignee_id=self.name, originator_id=self.name, priority=6)
+            return
+
+        target_tile = building.location
+        if (self.x, self.y) not in building.get_tiles_occupied():
+            self.add_memory(f"Heading to {building.display_name} to rest.")
+            self.move_towards(target_tile[0], target_tile[1], world)
+            return
+
+        self.resting_at_home = True
+        self._rest_ticks += 1
+        current_energy = self.needs.get("Energy", 80)
+        gain = getattr(config, "ENERGY_REST_GAIN_PER_TICK", 5)
+        self.needs["Energy"] = min(config.NEED_SCORE_MAX, current_energy + gain)
+
+        if self._rest_ticks == 1:
+            self.add_memory(f"Settled in at {building.display_name} to recover.")
+
+        if self.needs["Energy"] >= getattr(config, "ENERGY_THRESHOLD_FULLY_RESTED", 95):
+            self.add_memory("Feeling refreshed and ready to work again.")
+            self.resting_at_home = False
+            self._rest_ticks = 0
+            if hasattr(world, "release_residential_spot"):
+                world.release_residential_spot(self)
+            self.current_goal.set_completed()
+            self.current_goal = self.get_default_goal()
+
+    def _execute_drink_water(self, world: 'World'):
+        water_blueprint = BLUEPRINTS.get("Water", {})
+        thirst_satisfaction = water_blueprint.get("thirst_satisfaction", 40)
+        if self.inventory.get("Water", 0) > 0:
+            self.inventory["Water"] -= 1
+            if self.inventory["Water"] <= 0:
+                del self.inventory["Water"]
+            self.needs["Thirst"] = min(
+                config.NEED_SCORE_MAX,
+                self.needs.get("Thirst", 60) + thirst_satisfaction,
+            )
+            self.add_memory("Enjoyed a drink of water.")
+            self.update_mood_score(getattr(config, "MOOD_CHANGE_REPLENISHED_WATER", 3), "Drank fresh water")
+            self.current_goal.set_completed()
+            self.current_goal = self.get_default_goal()
+            return
+
+        pulled = world.withdraw_resource("Water", 1) if hasattr(world, "withdraw_resource") else 0
+        if pulled > 0:
+            self.inventory["Water"] = self.inventory.get("Water", 0) + pulled
+            self.add_memory("Collected water from communal stores to drink.")
+            self._execute_drink_water(world)
+            return
+
+        self.add_memory("No water available in stockpiles—I need to gather some.")
+        self.current_goal = Goal(GoalType.GATHER_WATER, assignee_id=self.name, originator_id=self.name, priority=2)
+
+    def _execute_gather_water(self, world: 'World'):
+        task_loc = self.find_task_location("Draw Water", world)
+        if not task_loc:
+            self.add_memory("Could not find a water source nearby.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        if (self.x, self.y) != task_loc:
+            self.move_towards(task_loc[0], task_loc[1], world)
+            return
+
+        if not self._execute_generic_task(world, "Draw Water"):
+            return
+
+        directive = world.get_resource_directive("Water") if hasattr(world, "get_resource_directive") else None
+        per_trip_quota = directive.get("per_trip_quota") if directive else None
+        if directive and world.game_time and directive.get("last_reminded_day") != world.game_time.current_day:
+            directive["last_reminded_day"] = world.game_time.current_day
+            self.add_memory(
+                f"Leadership asks for {directive['per_trip_quota']} Water before returning."
+            )
+
+        inventory_water = self.inventory.get("Water", 0)
+        if (
+            self.get_inventory_load() >= self.max_inventory_items
+            or (per_trip_quota is not None and inventory_water >= per_trip_quota)
+        ):
+            haul_params = {"resource": "Water", "quantity": inventory_water}
+            self.add_memory("Water containers filled—preparing to deliver them to stockpiles.")
+            self.current_goal = Goal(GoalType.INITIATE_HAULING, assignee_id=self.name, originator_id=self.name, parameters=haul_params)
+            return
+
+        if inventory_water >= 1 and self.needs.get("Thirst", 60) < getattr(config, "THIRST_THRESHOLD_DRINK", 60):
+            self.current_goal = Goal(GoalType.DRINK_WATER, assignee_id=self.name, originator_id=self.name, priority=2)
 
     def _execute_eat_food(self, world: 'World'):
         if self.inventory.get("Food", 0) > 0:

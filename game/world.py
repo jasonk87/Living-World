@@ -52,6 +52,7 @@ class World:
             "Stone": 1.0,
             "Herbs": 1.0,
             "Food": 1.0,
+            "Water": 1.0,
         }
         self.market_price_multipliers: Dict[str, float] = {
             item_name: 1.0 for item_name in self.base_market_prices.keys()
@@ -74,6 +75,7 @@ class World:
         self.active_crimes: Dict[str, Dict[str, Any]] = {}
         self._crime_incident_counter: int = 0
         self.today_surplus_sales: List[Dict[str, Any]] = []
+        self._residential_assignments: Dict[str, Tuple[int, int]] = {}
 
     def update_rumors_daily(self):
         """Decays strength of all rumors and removes very weak ones."""
@@ -158,6 +160,55 @@ class World:
             if (x,y) in building.get_tiles_occupied():
                 return building
         return None
+
+    def get_building_by_location(self, location: Tuple[int, int]) -> Optional[Building]:
+        for building in self.buildings:
+            if building.location == location:
+                return building
+        return None
+
+    def _is_residential(self, building: Building) -> bool:
+        tags = building.functionality.get("tags", []) if building.functionality else []
+        provides = building.functionality.get("provides_shelter", 0) if building.functionality else 0
+        return building.is_operational and "residential" in tags and provides
+
+    def claim_residential_spot(self, character: 'Character') -> Optional[Building]:
+        existing_location = self._residential_assignments.get(character.name)
+        if existing_location:
+            existing = self.get_building_by_location(existing_location)
+            if existing and self._is_residential(existing):
+                if character.name not in existing.occupants:
+                    existing.add_occupant(character.name)
+                return existing
+
+        for building in self.buildings:
+            if not self._is_residential(building):
+                continue
+            capacity = int(building.functionality.get("provides_shelter", 0))
+            if character.name in building.occupants:
+                self._residential_assignments[character.name] = building.location
+                return building
+            if len(building.occupants) < capacity:
+                building.add_occupant(character.name)
+                self._residential_assignments[character.name] = building.location
+                return building
+        return None
+
+    def release_residential_spot(self, character: 'Character'):
+        assigned = self._residential_assignments.get(character.name)
+        target_building = None
+        if assigned:
+            target_building = self.get_building_by_location(assigned)
+        if not target_building:
+            # Attempt to locate any building currently listing the character as an occupant
+            for building in self.buildings:
+                if character.name in building.occupants:
+                    target_building = building
+                    break
+        if target_building:
+            target_building.remove_occupant(character.name)
+        if character.name in self._residential_assignments:
+            del self._residential_assignments[character.name]
 
     def get_operational_buildings_of_type(self, structure_type_str: str) -> List[Building]:
         return [b for b in self.buildings if b.structure_type == structure_type_str and b.is_operational]
@@ -908,6 +959,9 @@ class World:
                 break
         return amount_taken
 
+    def withdraw_resource(self, resource_name: str, quantity: int) -> int:
+        return self._withdraw_from_stockpiles(resource_name, quantity)
+
     def _consume_resource_for_character(self, character: 'Character', resource_name: str, quantity: int) -> int:
         if quantity <= 0:
             return 0
@@ -928,7 +982,7 @@ class World:
     def identify_resource_pressures(self) -> List[Dict[str, Any]]:
         """Returns resource pressure descriptors sorted by severity."""
         pressures: List[Dict[str, Any]] = []
-        resources_to_check = ["Wood", "Stone", "Herbs", "Food"]
+        resources_to_check = ["Wood", "Stone", "Herbs", "Food", "Water"]
         for resource in resources_to_check:
             quantity = self.get_total_resource_quantity(resource)
             low_threshold = getattr(config, "MAYOR_RESOURCE_LOW_THRESHOLD", 20)
@@ -1124,6 +1178,43 @@ class World:
                 character.add_memory("Went hungry today—stores are running low.")
         report["food_consumed"] = total_consumed
         report["food_deficit"] = total_deficit
+
+    def _apply_daily_water_consumption(self, report: Dict[str, Any]):
+        per_capita = getattr(config, "DAILY_WATER_CONSUMPTION_PER_CITIZEN", 0)
+        thirst_recovery = BLUEPRINTS.get("Water", {}).get("thirst_satisfaction", 40)
+        total_consumed = 0
+        total_deficit = 0
+        if per_capita <= 0:
+            report["water_consumed"] = total_consumed
+            report["water_deficit"] = total_deficit
+            return
+
+        for character in self.characters:
+            required = per_capita
+            consumed = self._consume_resource_for_character(character, "Water", required)
+            if consumed > 0:
+                total_consumed += consumed
+                thirst = character.needs.get("Thirst", 80)
+                thirst_gain = thirst_recovery * consumed
+                character.needs["Thirst"] = min(config.NEED_SCORE_MAX, thirst + thirst_gain)
+                ration_text = "drink" if consumed == 1 else "drinks"
+                character.add_memory(f"Drank {consumed} water {ration_text} with the community.")
+                character.update_mood_score(getattr(config, "MOOD_CHANGE_REPLENISHED_WATER", 3), "Enjoyed fresh water")
+            if consumed < required:
+                shortage = required - consumed
+                if shortage <= 0:
+                    continue
+                total_deficit += shortage
+                thirst = character.needs.get("Thirst", 60)
+                character.needs["Thirst"] = max(
+                    config.NEED_SCORE_MIN,
+                    thirst - getattr(config, "DEHYDRATION_THIRST_PENALTY", 15),
+                )
+                character.update_mood_score(getattr(config, "MOOD_CHANGE_DEHYDRATED", -12), "Went without water")
+                character.add_memory("Felt parched—stores couldn't provide water today.")
+
+        report["water_consumed"] = total_consumed
+        report["water_deficit"] = total_deficit
 
     def _get_security_modifier(self) -> float:
         modifier = 1.0
@@ -1344,6 +1435,8 @@ class World:
             "tax_collected": 0,
             "food_consumed": 0,
             "food_deficit": 0,
+            "water_consumed": 0,
+            "water_deficit": 0,
             "wages_paid": previous_wages_paid,
             "wages_owed": previous_wages_owed,
             "arrears": sum(debt.get("amount_due", 0) for debt in self.pending_wages),
@@ -1365,14 +1458,16 @@ class World:
         report["arrears"] = sum(debt.get("amount_due", 0) for debt in self.pending_wages)
 
         self._apply_daily_food_consumption(report)
+        self._apply_daily_water_consumption(report)
         self._resolve_theft_attempts(report)
         report["pending_crimes"] = len(self.pending_crimes)
         report["surplus_trades"] = list(self.today_surplus_sales)
 
         summary = (
             f"Economic summary — Treasury {self.treasury_coins}c "
-            f"(tax +{report['tax_collected']}c, wages paid {report['wages_paid']}c, arrears settled {report['arrears_paid']}c). "
-            f"Outstanding arrears {report['arrears']}c, food deficit {report['food_deficit']} rations."
+            f"(tax +{report['tax_collected']}c, wages paid {report['wages_paid']}c, arrears settled {report['arrears_paid']}c)."
+            f" Outstanding arrears {report['arrears']}c, food deficit {report['food_deficit']} rations,"
+            f" water deficit {report['water_deficit']} casks."
         )
         self.add_event_log_message(summary)
         for crime_event in report.get("crime_events", []):

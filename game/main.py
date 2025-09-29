@@ -54,6 +54,16 @@ def initialize_game_world():
     game_world.ledger.update_stockpile_record(wood_stockpile.name, wood_stockpile.inventory, game_time_obj.current_day)
     initial_setup_messages.append(f"Added WoodStore stockpile with {wood_stockpile.inventory.get('Wood',0)} Wood.")
 
+    water_stockpile = Stockpile(name="WaterCasks", x=2, y=3, width=1, height=1, allowed_resources=["Water"], total_capacity=80)
+    water_stockpile.add_item("Water", 24)
+    game_world.add_stockpile(water_stockpile)
+    game_world.ledger.update_stockpile_record(water_stockpile.name, water_stockpile.inventory, game_time_obj.current_day)
+    initial_setup_messages.append(f"Added WaterCasks stockpile with {water_stockpile.inventory.get('Water',0)} Water.")
+
+    # Establish natural water sources for gathering
+    game_world.add_resource("Water", (4, 0), tile_becomes="Water")
+    game_world.add_resource("Water", (5, 0), tile_becomes="Water")
+
     # Characters (example setup)
     liam_skills = {"Construction": 1, "Leadership": 5} # Give Liam some leadership for potential Mayor candidacy
     liam = Character(name="Liam", personality="Optimistic", traits=["Diligent"],
@@ -289,17 +299,28 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                 characters_repr = []
                 if hasattr(game_world, 'characters'):
                     for char in game_world.characters:
+                        goal_payload = None
+                        if hasattr(char.current_goal, 'to_dict'):
+                            goal_payload = char.current_goal.to_dict()
+                        elif char.current_goal:
+                            goal_payload = str(char.current_goal)
                         characters_repr.append({
                             "name": char.name,
                             "x": char.x,
                             "y": char.y,
                             "job": char.job,
-                            "goal": char.current_goal,
+                            "goal": goal_payload,
                             "is_sick": getattr(char, 'is_sick', False), # Add health status
                             "is_injured": getattr(char, 'is_injured', False),
                             "inventory_load": char.get_inventory_load(),
                             "known_characters": getattr(char, 'known_characters', []),
-                            "dialogue_history_count": len(getattr(char, 'dialogue_history', [])) # Just count for overview
+                            "dialogue_history_count": len(getattr(char, 'dialogue_history', [])), # Just count for overview
+                            "needs": getattr(char, 'needs', {}),
+                            "resting_at_home": getattr(char, 'resting_at_home', False),
+                            "home_location": getattr(char, 'home_location', None),
+                            "energy": getattr(char, 'needs', {}).get('Energy'),
+                            "thirst": getattr(char, 'needs', {}).get('Thirst'),
+                            "inventory": getattr(char, 'inventory', {}),
                         })
 
                 event_log_repr = game_world.event_log[-20:] if game_world else []
@@ -314,7 +335,9 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                             "height": b.size[1],
                             "map_char": b.get_current_map_char(),
                             "display_name": b.display_name,
-                            "structure_type": b.structure_type # Added for frontend differentiation
+                            "structure_type": b.structure_type, # Added for frontend differentiation
+                            "occupants": getattr(b, 'occupants', []),
+                            "provides_shelter": b.functionality.get('provides_shelter') if b.functionality else None,
                         })
                 if hasattr(game_world, 'stockpiles'): # Also include stockpiles as "buildings" for map display
                     for sp in game_world.stockpiles:
@@ -428,16 +451,25 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
 
             character = game_world.get_character_by_name(char_name)
             if character:
+                goal_payload = None
+                if hasattr(character.current_goal, 'to_dict'):
+                    goal_payload = character.current_goal.to_dict()
+                elif character.current_goal:
+                    goal_payload = str(character.current_goal)
                 char_data = {
                     "name": character.name,
                     "job": character.job,
                     "rank": character.rank,
                     "x": character.x,
                     "y": character.y,
-                    "current_goal": character.current_goal,
+                    "current_goal": goal_payload,
                     "inventory": character.inventory,
                     "skills": {skill_name: data["level"] for skill_name, data in character.skills.items()}, # Simplified skills view
                     "needs": character.needs,
+                    "energy": character.needs.get('Energy'),
+                    "thirst": character.needs.get('Thirst'),
+                    "resting_at_home": getattr(character, 'resting_at_home', False),
+                    "home_location": getattr(character, 'home_location', None),
                     "is_sick": getattr(character, 'is_sick', False),
                     "sickness_severity": getattr(character, 'sickness_severity', 0),
                     "is_injured": getattr(character, 'is_injured', False),
@@ -495,7 +527,9 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "current_progress": getattr(building, 'current_progress', 0),
                     "build_time": getattr(building, 'build_time', 0), # Total work for all phases
                     "current_phase_name": building.get_current_phase_name() if hasattr(building, 'get_current_phase_name') else "N/A",
-                    "map_char": building.get_current_map_char()
+                    "map_char": building.get_current_map_char(),
+                    "occupants": getattr(building, 'occupants', []),
+                    "provides_shelter": building.functionality.get('provides_shelter') if building.functionality else None,
                 }
                 # If it's a stockpile or has inventory (like some workshops might)
                 if hasattr(building, 'inventory'):

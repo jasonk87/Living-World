@@ -63,6 +63,11 @@ BLUEPRINTS = {
         "type": "Consumable",
         "description": "A simple meal to satisfy hunger.",
         "hunger_satisfaction": 40 # Custom property for consumables
+    },
+    "Water": {
+        "type": "Consumable",
+        "description": "Stored drinking water drawn from nearby wells and streams.",
+        "thirst_satisfaction": 45
     }
     # Add other items as needed, e.g., "Wooden Shield", "Stone Hammer"
 }
@@ -158,6 +163,13 @@ JOB_TASK_DEFINITIONS = {
         "resource_produced": None,
         "base_yield": 0,
         "base_time_per_yield": 0 # Represents general readiness/duty
+    },
+    "Draw Water": {
+        "required_tool_type": None,
+        "skill_used": "Labor",
+        "resource_produced": "Water",
+        "base_yield": 1,
+        "base_time_per_yield": 3
     },
     "Maintain Peace in Settlement": { # For Sheriff
         "required_tool_type": None, # Could be "Badge" or "Weapon" later
@@ -693,5 +705,6 @@ MARKET_PRICES = {
     "Wood": 2, # Price to buy 1 unit of wood
     "Stone": 3, # Price to buy 1 unit of stone
     "Food": 4, # Price to buy 1 unit of food
+    "Water": 2,
     "Arrow Bundle": 8,
 }
