@@ -96,6 +96,9 @@ class Character:
         self.last_estate_review_day: Optional[int] = None
         self.active_estate_orders: List[Dict[str, Any]] = []
         self.last_high_court_day: Optional[int] = None
+        self.last_campaign_speech_day: Optional[int] = None
+        self._comfort_cooldowns: Dict[str, int] = {}
+        self._argument_cooldowns: Dict[str, int] = {}
 
         self.is_sick: bool = False
         self.sickness_severity: int = 0
@@ -2768,6 +2771,89 @@ class Character:
         self.current_goal = self.get_default_goal() # Return to overseeing or default state
         return
 
+    def _execute_campaign_speech(self, world: 'World'):
+        if not world.game_time:
+            self.current_goal = self.get_default_goal()
+            return
+
+        rally_point = getattr(world, "market_location", (self.x, self.y))
+        if abs(self.x - rally_point[0]) + abs(self.y - rally_point[1]) > 2:
+            self.add_memory("Heading to the square to address voters.")
+            self.move_towards(rally_point[0], rally_point[1], world)
+            return
+
+        parameters = self.current_goal.parameters or {}
+        focus_summary = parameters.get("focus_summary") or "our settlement's future"
+        pledges = world.campaign_promises.get(self.name, [])
+        active_pledges = [p for p in pledges if p.get("status") == "pledged"]
+
+        env_snapshot = {}
+        if hasattr(world, "get_environment_snapshot") and callable(world.get_environment_snapshot):
+            env_snapshot = world.get_environment_snapshot() or {}
+        travel_speed = env_snapshot.get("travel_speed") or world.get_travel_speed_modifier()
+        resource_notes = []
+        for resource_name, entries in (env_snapshot.get("resource_multipliers") or {}).items():
+            combined = 1.0
+            for entry in entries:
+                combined *= entry.get("multiplier", 1.0)
+            if abs(combined - 1.0) > 0.01:
+                resource_notes.append(f"{resource_name} x{combined:.2f}")
+
+        speech_lines = [
+            f"Citizens, I stand before you to talk about {focus_summary}.",
+            f"Travel runs at {travel_speed:.2f}× pace—an edge we should seize.",
+        ]
+        if resource_notes:
+            snippet = ", ".join(resource_notes[: config.ENVIRONMENT_TRAVEL_SNIPPET_LIMIT])
+            speech_lines.append(f"Key yields today: {snippet}.")
+        if active_pledges:
+            leading = active_pledges[0]
+            summary = leading.get("summary", "our goals")
+            deadline = leading.get("deadline_day")
+            if deadline:
+                speech_lines.append(f"I will deliver on {summary} by day {deadline}.")
+            else:
+                speech_lines.append(f"I remain committed to {summary}.")
+        elif pledges:
+            speech_lines.append("Every promise kept strengthens our community.")
+        else:
+            speech_lines.append("Support me so we can keep prosperity flowing.")
+
+        speech_excerpt = " ".join(speech_lines)
+        self.add_memory(f"Campaign speech delivered: {speech_excerpt}")
+
+        listeners = [
+            char for char in world.get_nearby_characters(self, radius=4)
+            if char.name != self.name
+        ]
+        for listener in listeners:
+            relation_bonus = 2 + (1 if active_pledges else 0)
+            listener.modify_relationship(self.name, relation_bonus, world, reason="Attended campaign speech")
+            self.modify_relationship(listener.name, 1, world, reason="They attended my rally")
+            listener.update_mood_score(2, f"Motivated by {self.name}'s campaign rally")
+
+        if pledges:
+            self.update_reputation(2, "Campaign speech reinforced pledges", world)
+        else:
+            self.update_reputation(1, "Campaign speech rallied citizens", world)
+
+        audience_size = len(listeners)
+        world.add_event_log_message(
+            f"{self.name} campaigns about {focus_summary} for {audience_size} citizen{'s' if audience_size != 1 else ''}."
+        )
+        world.add_notable_event(
+            "CampaignSpeech",
+            {
+                "summary": f"{self.name} rallied {audience_size} citizens about {focus_summary}.",
+                "candidate": self.name,
+                "audience": audience_size,
+            },
+        )
+
+        self.last_campaign_speech_day = world.game_time.current_day
+        self.current_goal.set_completed()
+        self.current_goal = self.get_default_goal()
+
     def _execute_wander(self, world: 'World'): # Assumes current_goal is WANDER
         moves = []
         for dx, dy in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
@@ -2988,6 +3074,7 @@ class Character:
         elif self.current_goal.type == GoalType.PATROL_AREA: self._execute_patrol_area(world)
         elif self.current_goal.type == GoalType.INVESTIGATE_DISTURBANCE: self._execute_investigate_disturbance(world)
         elif self.current_goal.type == GoalType.GIVE_SPEECH: self._execute_give_speech(world)
+        elif self.current_goal.type == GoalType.CAMPAIGN_SPEECH: self._execute_campaign_speech(world)
         elif self.current_goal.type == GoalType.SEEK_MEDICAL_ATTENTION: self._execute_seek_medical_attention(world)
         elif self.current_goal.type == GoalType.REPORT_TO_LIEGE: self._execute_report_to_liege(world)
         elif self.current_goal.type == GoalType.MANAGE_ESTATE: self._execute_manage_estate(world)
@@ -3193,51 +3280,106 @@ class Character:
         if self.current_goal.type not in non_interruptible_social_goals :
             # --- Offer Comfort Check ---
             comfort_chance_modifier = 0.0
-            if "Kind" in self.traits: comfort_chance_modifier += 0.3
-            if "Compassionate" in self.traits: comfort_chance_modifier += 0.4
+            if "Kind" in self.traits:
+                comfort_chance_modifier += 0.3
+            if "Compassionate" in self.traits:
+                comfort_chance_modifier += 0.4
+
+            absolute_tick = None
+            if world.game_time:
+                absolute_tick = (
+                    world.game_time.current_day * world.game_time.ticks_per_day
+                    + world.game_time.current_tick
+                )
 
             if random.random() < (config.REACTIVE_SOCIAL_BASE_CHANCE + comfort_chance_modifier):
-                target_for_comfort: Optional[Character] = None
-                # Similar logic to find distressed character...
-                # (Assuming logic from the original block for finding char_in_need)
-                # Simplified for brevity:
-                for char_in_need in world.characters: # Placeholder for actual distress check logic
-                    if char_in_need.name != self.name and char_in_need.name in self.known_characters and \
-                       (char_in_need.mood in ["Sad", "Stressed"] or char_in_need.is_sick or char_in_need.is_injured) and \
-                       abs(self.x - char_in_need.x) + abs(self.y - char_in_need.y) <= 4:
-                        # Check if already comforted recently
-                        recently_interacted = False
-                        for entry in reversed(self.dialogue_history[-3:]):
-                             if entry.get("target") == char_in_need.name and entry.get("type") == "offer_comfort" and \
-                                world.game_time and (world.game_time.current_day - entry.get("day", -100)) < 1:
-                                 recently_interacted = True; break
-                        if not recently_interacted:
-                            target_for_comfort = char_in_need; break
+                distressed_candidates: List[Tuple[float, Character]] = []
+                for candidate in world.get_nearby_characters(self, radius=4):
+                    if candidate.name == self.name or candidate.name not in self.known_characters:
+                        continue
+                    distress_score = 0.0
+                    if candidate.mood in ["Sad", "Stressed", "Furious"]:
+                        distress_score += 15
+                    if candidate.is_sick:
+                        distress_score += 10 + candidate.sickness_severity * 2
+                    if candidate.is_injured:
+                        distress_score += 8 + candidate.injury_severity * 2
+                    belonging = candidate.needs.get('Belonging', config.NEED_BELONGING_DEFAULT)
+                    esteem = candidate.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT)
+                    distress_score += max(0, config.NEED_BELONGING_CRITICAL_THRESHOLD - belonging)
+                    distress_score += 0.5 * max(0, config.NEED_ESTEEM_CRITICAL_THRESHOLD - esteem)
+                    if candidate.needs.get('Hunger', 100) < config.CRITICAL_NEED_THRESHOLD_FOR_HELP:
+                        distress_score += 5
+                    if candidate.needs.get('Safety', config.NEED_SAFETY_DEFAULT) < config.NEED_SAFETY_CRITICAL_THRESHOLD:
+                        distress_score += 7
 
-                if target_for_comfort:
-                    self.current_goal = Goal(GoalType.OFFER_COMFORT, assignee_id=self.name, originator_id=self.name, parameters={"target_char_name": target_for_comfort.name})
-                    self.add_memory(f"Noticed {target_for_comfort.name} seems distressed. Decided to offer comfort.")
-                    # Goal set, dispatcher will handle.
+                    if distress_score < config.SOCIAL_DISTRESS_THRESHOLD:
+                        continue
+
+                    if absolute_tick is not None:
+                        last_tick = self._comfort_cooldowns.get(candidate.name)
+                        if last_tick is not None and absolute_tick - last_tick < config.ARGUMENT_RECENT_HISTORY_TICKS:
+                            continue
+
+                    distressed_candidates.append((distress_score, candidate))
+
+                if distressed_candidates:
+                    distressed_candidates.sort(key=lambda item: item[0], reverse=True)
+                    _, target_for_comfort = distressed_candidates[0]
+                    self.current_goal = Goal(
+                        GoalType.OFFER_COMFORT,
+                        assignee_id=self.name,
+                        originator_id=self.name,
+                        parameters={"target_char_name": target_for_comfort.name},
+                    )
+                    self.add_memory(
+                        f"Noticed {target_for_comfort.name} struggling (distress {distressed_candidates[0][0]:.1f}). Offering comfort."
+                    )
+                    if absolute_tick is not None:
+                        self._comfort_cooldowns[target_for_comfort.name] = absolute_tick
 
             # --- Potential for Argument Check ---
-            if self.current_goal.type not in non_interruptible_social_goals: # Re-check, Offer Comfort might have set goal
-                argue_chance_modifier = 0.0
-                if "Hot-headed" in self.traits: argue_chance_modifier += 0.15
-                # Similar logic to find target to argue with...
-                # Simplified for brevity:
-                for other_char in world.characters: # Placeholder for actual argument trigger logic
-                    if other_char.name != self.name and other_char.name in self.known_characters and \
-                       (self.get_relationship_score(other_char.name) < -40 or ("Hot-headed" in self.traits and "Hot-headed" in other_char.traits)) and \
-                       abs(self.x - other_char.x) + abs(self.y - other_char.y) <= 2:
-                        recently_interacted = False
-                        for entry in reversed(self.dialogue_history[-2:]):
-                             if entry.get("target") == other_char.name and entry.get("type") == "argue" and \
-                                world.game_time and (world.game_time.current_day - entry.get("day", -100)) < 1:
-                                 recently_interacted = True; break
-                        if not recently_interacted:
-                            self.current_goal = Goal(GoalType.ARGUE, assignee_id=self.name, originator_id=self.name, parameters={"target_char_name": other_char.name})
-                            self.add_memory(f"Feeling confrontational towards {other_char.name}. Decided to argue.")
-                            break # Found someone to argue with
+            if self.current_goal.type not in non_interruptible_social_goals:
+                argument_candidates: List[Tuple[float, Character]] = []
+                for other_char in world.get_nearby_characters(self, radius=3):
+                    if other_char.name == self.name or other_char.name not in self.known_characters:
+                        continue
+                    relationship_score = self.get_relationship_score(other_char.name)
+                    if relationship_score > config.ARGUMENT_RELATIONSHIP_THRESHOLD:
+                        continue
+
+                    tension_score = abs(relationship_score)
+                    if self.mood in ["Furious", "Stressed"]:
+                        tension_score += 10
+                    if other_char.mood in ["Furious", "Stressed"]:
+                        tension_score += 8
+                    if "Hot-headed" in self.traits:
+                        tension_score += 5
+                    if "Hot-headed" in other_char.traits:
+                        tension_score += 5
+
+                    if absolute_tick is not None:
+                        last_tick = self._argument_cooldowns.get(other_char.name)
+                        if last_tick is not None and absolute_tick - last_tick < config.ARGUMENT_RECENT_HISTORY_TICKS:
+                            continue
+
+                    argument_candidates.append((tension_score, other_char))
+
+                if argument_candidates:
+                    argument_candidates.sort(key=lambda item: item[0], reverse=True)
+                    top_score, target_char = argument_candidates[0]
+                    if top_score > abs(config.ARGUMENT_RELATIONSHIP_THRESHOLD):
+                        self.current_goal = Goal(
+                            GoalType.ARGUE,
+                            assignee_id=self.name,
+                            originator_id=self.name,
+                            parameters={"target_char_name": target_char.name},
+                        )
+                        self.add_memory(
+                            f"Frustrations with {target_char.name} boiled over (tension {top_score:.1f}). Confronting them."
+                        )
+                        if absolute_tick is not None:
+                            self._argument_cooldowns[target_char.name] = absolute_tick
 
             # --- Potential for Formal Apology ---
             if self.current_goal.type not in non_interruptible_social_goals: # Re-check again

@@ -34,6 +34,7 @@ class GoalType(Enum):
     APPROVE_MAJOR_PROJECT = auto() # Mayor
     HOST_EVENT = auto() # Mayor, Nobles (e.g. GiveSpeech, HoldMeeting)
     GIVE_SPEECH = auto() # Specific HOST_EVENT type
+    CAMPAIGN_SPEECH = auto() # Election trail promise rally
 
     # Military & Security
     MAINTAIN_DEFENSES = auto() # Militia Commander

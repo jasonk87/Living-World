@@ -19,6 +19,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const hudPopulationValue = document.getElementById('hud-population-value');
     const hudSeasonValue = document.getElementById('hud-season-value');
     const hudWeatherValue = document.getElementById('hud-weather-value');
+    const hudTravelValue = document.getElementById('hud-travel-value');
     const hudElectionValue = document.getElementById('hud-election-value');
     const hudTreasuryValue = document.getElementById('hud-treasury-value');
     const hudRationsValue = document.getElementById('hud-rations-value');
@@ -27,6 +28,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const economyWageList = document.getElementById('economy-wage-list');
     const economyCrimeNote = document.getElementById('economy-crime-note');
     const economyCampaignList = document.getElementById('economy-campaign-list');
+    const environmentModifierList = document.getElementById('environment-modifier-list');
+    const rumorFeedList = document.getElementById('rumor-feed-list');
     const characterSearchInput = document.getElementById('character-search');
     const infoPanel = document.getElementById('info-panel');
 
@@ -73,6 +76,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function updateEconomyIntel(gameState) {
         if (!gameState) return;
         const report = gameState.daily_economy_report || {};
+        const environment = gameState.environment_effects || report.environment || {};
 
         if (hudTreasuryValue) {
             const treasury = typeof gameState.treasury === 'number' ? gameState.treasury : null;
@@ -84,6 +88,15 @@ document.addEventListener('DOMContentLoaded', () => {
             const deficit = typeof report.food_deficit === 'number' ? report.food_deficit : 0;
             const deficitText = deficit > 0 ? ` • Short ${deficit}` : '';
             hudRationsValue.textContent = `${consumed}${deficitText}`;
+        }
+
+        if (hudTravelValue) {
+            const travelSpeed = typeof environment.travel_speed === 'number'
+                ? environment.travel_speed
+                : typeof gameState.travel_speed_modifier === 'number'
+                    ? gameState.travel_speed_modifier
+                    : null;
+            hudTravelValue.textContent = travelSpeed !== null ? `${travelSpeed.toFixed(2)}×` : '—';
         }
 
         if (economyMarketList) {
@@ -131,6 +144,45 @@ document.addEventListener('DOMContentLoaded', () => {
                     })
                     .join('');
             }
+        }
+
+        if (environmentModifierList) {
+            const lines = [];
+            const resourceMultipliers = environment.resource_multipliers || {};
+            Object.entries(resourceMultipliers).forEach(([resource, entries]) => {
+                let total = 1.0;
+                (entries || []).forEach(entry => {
+                    const multiplier = typeof entry.multiplier === 'number' ? entry.multiplier : 1.0;
+                    total *= multiplier;
+                });
+                if (Math.abs(total - 1.0) > 0.01) {
+                    const sources = (entries || []).map(entry => entry.source || 'Effect').join(', ');
+                    lines.push(`<li><strong>${resource}</strong>: x${total.toFixed(2)} <span class="meta">${sources}</span></li>`);
+                }
+            });
+
+            const travelSources = Array.isArray(environment.travel_sources) ? environment.travel_sources : [];
+            if (travelSources.length) {
+                const travelDetails = travelSources.map(entry => `${entry.source || 'Effect'} x${(entry.multiplier || 1).toFixed(2)}`);
+                lines.unshift(`<li><strong>Travel</strong>: ${environment.travel_speed ? environment.travel_speed.toFixed(2) + '×' : 'Stable'} <span class="meta">${travelDetails.join(', ')}</span></li>`);
+            }
+
+            const marketMultipliers = environment.market_multipliers || {};
+            Object.entries(marketMultipliers).forEach(([item, entries]) => {
+                let total = 1.0;
+                (entries || []).forEach(entry => {
+                    const multiplier = typeof entry.multiplier === 'number' ? entry.multiplier : 1.0;
+                    total *= multiplier;
+                });
+                if (Math.abs(total - 1.0) > 0.01) {
+                    const sources = (entries || []).map(entry => entry.source || 'Effect').join(', ');
+                    lines.push(`<li><strong>${item}</strong>: x${total.toFixed(2)} <span class="meta">${sources}</span></li>`);
+                }
+            });
+
+            environmentModifierList.innerHTML = lines.length
+                ? lines.slice(0, 6).join('')
+                : '<li class="empty">No modifiers active.</li>';
         }
 
         if (economyCrimeNote) {
@@ -219,6 +271,26 @@ document.addEventListener('DOMContentLoaded', () => {
                 }).join('');
             }
         }
+
+        if (rumorFeedList) {
+            const rumors = Array.isArray(gameState.rumors) ? gameState.rumors : [];
+            if (!rumors.length) {
+                rumorFeedList.innerHTML = '<li class="empty">No rumors circulating.</li>';
+            } else {
+                rumorFeedList.innerHTML = rumors.slice(0, 6).map(rumor => {
+                    const tone = rumor.is_positive ? 'Positive' : 'Negative';
+                    const strength = typeof rumor.strength === 'number' ? rumor.strength : '?';
+                    const reach = typeof rumor.known_count === 'number' ? rumor.known_count : 0;
+                    return `
+                        <li class="rumor-${tone.toLowerCase()}">
+                            <div><strong>${rumor.subject}</strong> • ${tone}</div>
+                            <div>${rumor.content}</div>
+                            <div class="meta">Strength ${strength} • Heard by ${reach}</div>
+                        </li>
+                    `;
+                }).join('');
+            }
+        }
     }
 
     function togglePanel(panelId) {
@@ -301,15 +373,29 @@ document.addEventListener('DOMContentLoaded', () => {
     function updateWorldSummary(gameState) {
         if (!gameState) return;
         const population = Array.isArray(gameState.characters) ? gameState.characters.length : 0;
+        const environment = gameState.environment_effects || {};
         if (hudPopulationValue) {
             hudPopulationValue.textContent = population;
         }
         if (hudSeasonValue) {
-            hudSeasonValue.textContent = gameState.season || 'Unknown';
+            const seasonName = environment.season || gameState.season || 'Unknown';
+            const seasonDay = environment.season_day;
+            hudSeasonValue.textContent = typeof seasonDay === 'number'
+                ? `${seasonName} · Day ${seasonDay}`
+                : seasonName;
         }
         if (hudWeatherValue) {
-            const weatherText = [gameState.weather, gameState.temperature_label].filter(Boolean).join(' • ');
-            hudWeatherValue.textContent = weatherText || gameState.weather || 'Calm';
+            const weatherLabel = environment.weather || gameState.weather;
+            const weatherText = [weatherLabel, gameState.temperature_label].filter(Boolean).join(' • ');
+            hudWeatherValue.textContent = weatherText || weatherLabel || 'Calm';
+        }
+        if (hudTravelValue) {
+            const travelSpeed = typeof environment.travel_speed === 'number'
+                ? environment.travel_speed
+                : typeof gameState.travel_speed_modifier === 'number'
+                    ? gameState.travel_speed_modifier
+                    : null;
+            hudTravelValue.textContent = travelSpeed !== null ? `${travelSpeed.toFixed(2)}×` : '—';
         }
         if (hudElectionValue) {
             const days = gameState.days_until_election;

@@ -27,6 +27,60 @@ THEFT_DETECTION_BASE = 0.35
 MOOD_CHANGE_CAUGHT_STEALING = -18
 MOOD_CHANGE_STOLE_SUCCESS = 3
 
+# Environment Modelling
+SEASON_ENVIRONMENT_MODIFIERS = {
+    "Spring": {
+        "resource_yield": {"Herbs": 1.15, "Food": 1.05},
+        "market_prices": {"Herbs": 0.95},
+        "travel_speed": 1.0,
+    },
+    "Summer": {
+        "resource_yield": {"Wood": 1.1, "Food": 1.1},
+        "market_prices": {"Food": 0.9},
+        "travel_speed": 1.05,
+    },
+    "Autumn": {
+        "resource_yield": {"Food": 1.2, "Wood": 0.95},
+        "market_prices": {"Food": 1.0},
+        "travel_speed": 1.0,
+    },
+    "Winter": {
+        "resource_yield": {"Wood": 0.8, "Herbs": 0.5},
+        "market_prices": {"Food": 1.25},
+        "travel_speed": 0.85,
+    },
+}
+
+WEATHER_ENVIRONMENT_MODIFIERS = {
+    "Sunny": {
+        "resource_yield": {"Stone": 1.05},
+        "market_prices": {},
+        "travel_speed": 1.05,
+    },
+    "Cloudy": {
+        "resource_yield": {},
+        "market_prices": {},
+        "travel_speed": 0.95,
+    },
+    "Rainy": {
+        "resource_yield": {"Herbs": 1.25},
+        "market_prices": {"Herbs": 0.9},
+        "travel_speed": 0.9,
+    },
+    "Snowy": {
+        "resource_yield": {"Wood": 0.85, "Stone": 0.8},
+        "market_prices": {"Wood": 1.1},
+        "travel_speed": 0.75,
+    },
+}
+
+ENVIRONMENT_PRICE_ELASTICITY = 0.05
+ENVIRONMENT_TRAVEL_SNIPPET_LIMIT = 3
+
+# Campaign & Governance Balancing
+CAMPAIGN_SPEECH_COOLDOWN_DAYS = 2
+
+
 # Other game settings (can be added later)
 STALE_THRESHOLD_DAYS = 2 # Days after which ledger data is considered stale for manager decisions
 MANAGEMENT_REVIEW_INTERVAL_DAYS = 5 # How often managers review subordinates
@@ -69,6 +123,9 @@ VERY_LOW_SOCIAL_NEED_THRESHOLD = 15 # Below this, other negative effects might o
 SOCIAL_INTERACTION_CHANCE_LOW_NEED_BONUS = 0.03 # Additional chance to interact if social need is low
 CRITICAL_NEED_THRESHOLD_FOR_HELP = 10 # e.g., if Hunger drops below this, might ask for food
 ASK_FOR_HELP_CHANCE = 0.25 # Base chance to ask for help when in critical need and a suitable target is nearby
+SOCIAL_DISTRESS_THRESHOLD = 25 # Score above which comfort is attempted
+ARGUMENT_RELATIONSHIP_THRESHOLD = -40 # Relationship score below which arguments may trigger
+ARGUMENT_RECENT_HISTORY_TICKS = 4 # Avoid arguing repeatedly within these ticks
 
 # Mood System Configs
 MOOD_SCORE_MIN = -100

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import random
+from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from .stockpile import Stockpile
@@ -12,6 +13,7 @@ from .building import Building
 from .data import STRUCTURE_BLUEPRINTS, MARKET_PRICES, BLUEPRINTS
 from .rumor import Rumor
 from . import config
+from .goal import Goal, GoalType
 
 if TYPE_CHECKING:
     from .character import Character
@@ -54,6 +56,9 @@ class World:
             item_name: 1.0 for item_name in self.base_market_prices.keys()
         }
         self.travel_speed_modifier: float = 1.0
+        self.environment_effect_snapshot: Dict[str, Any] = {}
+        self._last_environment_log_day: Optional[int] = None
+        self._previous_environment_digest: Optional[str] = None
         self.campaign_promises: Dict[str, List[Dict[str, Any]]] = {}
         self.active_campaign_cycle_start: Optional[int] = None
         self.last_campaign_day: Optional[int] = None
@@ -621,6 +626,14 @@ class World:
         # was added very recently.
         self.rumors.append(rumor)
         self.add_event_log_message(f"New Rumor Circulating: {rumor.subject_char_id} - {rumor.content_key} (Strength: {rumor.initial_strength})")
+        self.add_notable_event(
+            "RumorStarted",
+            {
+                "summary": f"Rumor about {rumor.subject_char_id}: {rumor.content_key}",
+                "subject": rumor.subject_char_id,
+                "strength": rumor.initial_strength,
+            },
+        )
         # print(f"DEBUG: World added rumor: {rumor}")
 
     def get_rumor_by_id(self, rumor_id: str) -> Optional[Rumor]:
@@ -630,80 +643,208 @@ class World:
                 return rumor
         return None
 
+    def get_rumor_digest(self, limit: int = 8) -> List[Dict[str, Any]]:
+        if not self.rumors:
+            return []
+        sorted_rumors = sorted(self.rumors, key=lambda r: r.current_strength, reverse=True)
+        digest: List[Dict[str, Any]] = []
+        for rumor in sorted_rumors[:limit]:
+            digest.append({
+                "id": rumor.rumor_id,
+                "subject": rumor.subject_char_id,
+                "content": rumor.content_key,
+                "strength": rumor.current_strength,
+                "known_count": len(rumor.known_by_char_ids),
+                "is_positive": rumor.is_positive,
+            })
+        return digest
+
     # --- Environment & Economy Utilities ---
 
     def _recalculate_environment_effects(self):
-        """Rebuilds environmental modifiers from season, weather, and active policies."""
-        # Reset modifiers
-        for resource_name in list(self.resource_yield_multipliers.keys()):
-            self.resource_yield_multipliers[resource_name] = 1.0
-        self.travel_speed_modifier = 1.0
-        for item_name in list(self.market_price_multipliers.keys()):
-            self.market_price_multipliers[item_name] = 1.0
+        """Rebuild environmental modifiers from season, weather, player policies, and economic pressures."""
+        previous_snapshot = deepcopy(self.environment_effect_snapshot)
 
-        # Seasonal baselines
-        if self.season == "Winter":
-            self.resource_yield_multipliers["Wood"] *= 0.8
-            self.resource_yield_multipliers["Herbs"] *= 0.5
-            self.travel_speed_modifier *= 0.85
-            self.market_price_multipliers["Food"] *= 1.25
-        elif self.season == "Summer":
-            self.resource_yield_multipliers["Wood"] *= 1.1
-            self.resource_yield_multipliers["Herbs"] *= 1.2
-            self.market_price_multipliers["Food"] *= 0.9
-        elif self.season == "Autumn":
-            self.resource_yield_multipliers["Food"] *= 1.15
+        resource_modifiers: Dict[str, float] = {
+            resource: 1.0 for resource in self.resource_yield_multipliers.keys()
+        }
+        travel_modifier = 1.0
+        market_modifiers: Dict[str, float] = {
+            item_name: 1.0 for item_name in self.market_price_multipliers.keys()
+        }
 
-        # Weather adjustments
-        if self.weather == "Rainy":
-            self.resource_yield_multipliers["Herbs"] *= 1.2
-            self.travel_speed_modifier *= 0.9
-        elif self.weather == "Snowy":
-            self.resource_yield_multipliers["Wood"] *= 0.9
-            self.resource_yield_multipliers["Stone"] *= 0.85
-            self.travel_speed_modifier *= 0.75
-            self.market_price_multipliers["Wood"] *= 1.1
-        elif self.weather == "Cloudy":
-            self.travel_speed_modifier *= 0.95
-        elif self.weather == "Sunny":
-            self.resource_yield_multipliers["Stone"] *= 1.05
+        contribution_map = {
+            "resource_multipliers": {},
+            "market_multipliers": {},
+            "travel_sources": [],
+        }
 
-        # Apply active world effects (e.g., mayoral policies)
-        if self.active_world_effects:
-            for effect_key, effect_data in list(self.active_world_effects.items()):
-                resource_bonus = effect_data.get("resource_yield_bonus")
-                if resource_bonus:
-                    res_name = resource_bonus.get("resource")
-                    multiplier = resource_bonus.get("multiplier", 1.0)
-                    if res_name in self.resource_yield_multipliers:
-                        self.resource_yield_multipliers[res_name] *= multiplier
-                travel_bonus = effect_data.get("travel_speed_multiplier")
-                if travel_bonus:
-                    self.travel_speed_modifier *= travel_bonus
-                market_bonus = effect_data.get("market_price_adjustment")
-                if market_bonus:
-                    for item_name, multiplier in market_bonus.items():
-                        if item_name in self.market_price_multipliers:
-                            self.market_price_multipliers[item_name] *= multiplier
+        def apply_resource(resource: str, multiplier: float, source: str):
+            if multiplier == 1.0:
+                return
+            resource_modifiers[resource] = resource_modifiers.get(resource, 1.0) * multiplier
+            contribution_map.setdefault("resource_multipliers", {}).setdefault(resource, []).append({
+                "source": source,
+                "multiplier": multiplier,
+            })
 
-        # Supply and demand nudges based on resource totals
+        def apply_market(item: str, multiplier: float, source: str):
+            if multiplier == 1.0:
+                return
+            market_modifiers[item] = market_modifiers.get(item, 1.0) * multiplier
+            contribution_map.setdefault("market_multipliers", {}).setdefault(item, []).append({
+                "source": source,
+                "multiplier": multiplier,
+            })
+
+        def apply_travel(multiplier: float, source: str):
+            nonlocal travel_modifier
+            if multiplier == 1.0:
+                return
+            travel_modifier *= multiplier
+            contribution_map.setdefault("travel_sources", []).append({
+                "source": source,
+                "multiplier": multiplier,
+            })
+
+        # Seasonal presets
+        season_modifiers = config.SEASON_ENVIRONMENT_MODIFIERS.get(self.season, {})
+        for resource, multiplier in season_modifiers.get("resource_yield", {}).items():
+            apply_resource(resource, multiplier, f"{self.season} climate")
+        for item, multiplier in season_modifiers.get("market_prices", {}).items():
+            apply_market(item, multiplier, f"{self.season} demand")
+        apply_travel(season_modifiers.get("travel_speed", 1.0), f"{self.season} roads")
+
+        # Weather overlays
+        weather_modifiers = config.WEATHER_ENVIRONMENT_MODIFIERS.get(self.weather, {})
+        for resource, multiplier in weather_modifiers.get("resource_yield", {}).items():
+            apply_resource(resource, multiplier, f"{self.weather} weather")
+        for item, multiplier in weather_modifiers.get("market_prices", {}).items():
+            apply_market(item, multiplier, f"{self.weather} conditions")
+        apply_travel(weather_modifiers.get("travel_speed", 1.0), f"{self.weather} weather")
+
+        # Active world policies or effects
+        for effect_key, effect_data in list(self.active_world_effects.items()):
+            resource_bonus = effect_data.get("resource_yield_bonus")
+            if resource_bonus:
+                res_name = resource_bonus.get("resource")
+                multiplier = resource_bonus.get("multiplier", 1.0)
+                apply_resource(res_name, multiplier, f"Policy: {effect_key}")
+            travel_bonus = effect_data.get("travel_speed_multiplier")
+            if travel_bonus:
+                apply_travel(travel_bonus, f"Policy: {effect_key}")
+            market_bonus = effect_data.get("market_price_adjustment")
+            if market_bonus:
+                for item_name, multiplier in market_bonus.items():
+                    apply_market(item_name, multiplier, f"Policy: {effect_key}")
+
+        # Economic pressures adjust prices slightly
         pressures = self.identify_resource_pressures()
         for pressure in pressures:
             resource = pressure["resource"]
-            status = pressure["status"]
-            severity = pressure["severity"]
-            multiplier_delta = 0.05 * min(3, max(1, severity // 10))
+            severity = pressure.get("severity", 0)
+            status = pressure.get("status")
+            elasticity = 1.0 + config.ENVIRONMENT_PRICE_ELASTICITY * min(4, max(1, severity // 10 or 1))
             if status == "shortage":
-                if resource in self.market_price_multipliers:
-                    self.market_price_multipliers[resource] *= (1.0 + multiplier_delta)
+                apply_market(resource, elasticity, "Shortage pressure")
             elif status == "surplus":
-                if resource in self.market_price_multipliers:
-                    self.market_price_multipliers[resource] *= max(0.5, 1.0 - multiplier_delta)
+                apply_market(resource, max(0.5, 1 / elasticity), "Surplus pressure")
 
-        # Rebuild market price table from multipliers
+        # Persist recalculated values
+        self.resource_yield_multipliers.update(resource_modifiers)
+        self.travel_speed_modifier = travel_modifier
+        self.market_price_multipliers.update(market_modifiers)
+
         for item_name, base_price in self.base_market_prices.items():
             adjusted_price = int(round(base_price * self.market_price_multipliers.get(item_name, 1.0)))
             self.market_prices[item_name] = max(1, adjusted_price)
+
+        season_day = None
+        if self.game_time:
+            days_per_season = getattr(config, "DAYS_PER_SEASON", 10)
+            season_day = ((self.game_time.current_day - 1) % days_per_season) + 1
+
+        snapshot = {
+            "season": self.season,
+            "weather": self.weather,
+            "season_day": season_day,
+            "travel_speed": round(self.travel_speed_modifier, 3),
+            "resource_multipliers": contribution_map.get("resource_multipliers", {}),
+            "market_multipliers": contribution_map.get("market_multipliers", {}),
+            "travel_sources": contribution_map.get("travel_sources", []),
+            "active_effects": list(self.active_world_effects.keys()),
+        }
+        self.environment_effect_snapshot = snapshot
+
+        if previous_snapshot != snapshot:
+            self._log_environment_summary()
+
+    def get_environment_snapshot(self) -> Dict[str, Any]:
+        return deepcopy(self.environment_effect_snapshot)
+
+    def _log_environment_summary(self):
+        if not self.environment_effect_snapshot:
+            return
+
+        snapshot = self.environment_effect_snapshot
+        digest_components = [
+            snapshot.get("season", ""),
+            snapshot.get("weather", ""),
+            str(snapshot.get("season_day", "")),
+            f"{snapshot.get('travel_speed', 1.0):.2f}",
+        ]
+
+        resource_bits = []
+        for resource, entries in snapshot.get("resource_multipliers", {}).items():
+            total = 1.0
+            for entry in entries:
+                total *= entry.get("multiplier", 1.0)
+            if abs(total - 1.0) > 0.01:
+                resource_bits.append(f"{resource} x{total:.2f}")
+
+        market_bits = []
+        for item, entries in snapshot.get("market_multipliers", {}).items():
+            total = 1.0
+            for entry in entries:
+                total *= entry.get("multiplier", 1.0)
+            if abs(total - 1.0) > 0.01:
+                market_bits.append(f"{item} x{total:.2f}")
+
+        digest_components.extend(sorted(resource_bits)[:3])
+        digest_components.extend(sorted(market_bits)[:3])
+        digest_key = "|".join(digest_components)
+
+        current_day = self.game_time.current_day if self.game_time else None
+        if (
+            current_day is not None
+            and self._last_environment_log_day == current_day
+            and self._previous_environment_digest == digest_key
+        ):
+            return
+
+        season_day = snapshot.get("season_day")
+        header = f"Environment update — {snapshot.get('season', 'Unknown')}"
+        if isinstance(season_day, int):
+            header += f" (Day {season_day})"
+        header += f", Weather: {snapshot.get('weather', 'Calm')}"
+
+        travel_text = f"Travel modifier {snapshot.get('travel_speed', 1.0):.2f}×"
+        resource_text = ", ".join(resource_bits[:3]) if resource_bits else "Stable yields"
+        market_text = ", ".join(market_bits[:3]) if market_bits else "Stable prices"
+
+        message = f"{header}. {travel_text}. Yields: {resource_text}. Markets: {market_text}."
+        self.add_event_log_message(message)
+        self.add_notable_event(
+            "EnvironmentShift",
+            {
+                "summary": message,
+                "season": snapshot.get("season"),
+                "weather": snapshot.get("weather"),
+            },
+        )
+
+        self._last_environment_log_day = current_day
+        self._previous_environment_digest = digest_key
 
     def add_temporary_world_effect(self, effect_key: str, effect_data: Dict[str, Any]):
         """Adds or replaces a temporary world-level effect and reapplies environment modifiers."""
@@ -847,6 +988,51 @@ class World:
             },
         )
         return trade_details
+
+    def _spawn_conversion_work_order(self, resource_name: str, severity: int) -> Optional[WorkOrder]:
+        if not self.game_time or severity <= 0:
+            return None
+
+        conversion_map = {
+            "Wood": {"item_name": "Arrow Bundle", "quantity_factor": 1},
+            "Herbs": {"item_name": "Bandages", "quantity_factor": 1},
+        }
+        recipe = conversion_map.get(resource_name)
+        if not recipe:
+            return None
+
+        target_item = recipe["item_name"]
+        existing = [
+            wo for wo in self.work_orders
+            if wo.details.get("item_name") == target_item and wo.status in {"Pending", "Approved", "InProgress"}
+        ]
+        if existing:
+            return None
+
+        blueprint = BLUEPRINTS.get(target_item)
+        if not blueprint or "required_resources" not in blueprint:
+            return None
+
+        quantity = max(1, severity // 5 * recipe.get("quantity_factor", 1))
+        required_resources = {
+            res: qty * quantity for res, qty in blueprint["required_resources"].items()
+        }
+        details = {
+            "item_name": target_item,
+            "quantity": quantity,
+            "required_resources": required_resources,
+        }
+        work_order = WorkOrder(
+            order_type="CraftItem",
+            details=details,
+            priority=3,
+            creation_day=self.game_time.current_day,
+        )
+        self.add_work_order(work_order)
+        self.add_event_log_message(
+            f"Economic council schedules crafting of {quantity} {target_item} to soak {resource_name} surplus."
+        )
+        return work_order
 
     def set_resource_collection_directive(
         self,
@@ -1165,6 +1351,7 @@ class World:
             "treasury": self.treasury_coins,
             "surplus_trades": list(self.today_surplus_sales),
             "pending_crimes": len(self.pending_crimes),
+            "environment": self.environment_effect_snapshot,
         }
 
         tax_income = getattr(config, "DAILY_BASE_TAX_INCOME", 0)
@@ -1285,6 +1472,40 @@ class World:
                 },
             )
 
+            if self.game_time:
+                cooldown = getattr(config, "CAMPAIGN_SPEECH_COOLDOWN_DAYS", 2)
+                last_speech_day = getattr(candidate, "last_campaign_speech_day", None)
+                can_schedule = (
+                    last_speech_day is None
+                    or self.game_time.current_day - last_speech_day >= cooldown
+                )
+                current_goal = getattr(candidate, "current_goal", None)
+                is_available = False
+                if current_goal is None:
+                    is_available = True
+                else:
+                    is_available = (
+                        current_goal.type in [GoalType.IDLE, GoalType.WANDER]
+                        or getattr(current_goal, "priority", 10) >= 6
+                    )
+                focus = summary
+                pledged = [
+                    p.get("summary")
+                    for p in self.campaign_promises.get(candidate.name, [])
+                    if p.get("status") == "pledged"
+                ]
+                if pledged:
+                    focus = pledged[0]
+                if can_schedule and is_available:
+                    candidate.current_goal = Goal(
+                        GoalType.CAMPAIGN_SPEECH,
+                        assignee_id=candidate.name,
+                        originator_id="Campaign",
+                        parameters={"focus_summary": focus},
+                        priority=4,
+                    )
+                    candidate.add_memory(f"Scheduled to deliver a campaign speech about {focus}.")
+
     def fulfill_campaign_promises(self, mayor: 'Character'):
         if not self.game_time:
             return
@@ -1402,7 +1623,9 @@ class World:
                     originator="Economic Council",
                 )
             elif pressure["status"] == "surplus":
-                self._handle_surplus_trade(resource, pressure.get("severity", 0))
+                severity = pressure.get("severity", 0)
+                self._handle_surplus_trade(resource, severity)
+                self._spawn_conversion_work_order(resource, severity)
 
     def daily_environment_tick(self):
         if not self.game_time:

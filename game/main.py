@@ -350,6 +350,8 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "crime_reports": getattr(game_world, 'crime_reports', []),
                     "pending_crimes": getattr(game_world, 'pending_crimes', []),
                     "campaign_promises": getattr(game_world, 'campaign_promises', {}),
+                    "environment_effects": game_world.get_environment_snapshot() if hasattr(game_world, 'get_environment_snapshot') else {},
+                    "rumors": game_world.get_rumor_digest() if hasattr(game_world, 'get_rumor_digest') else [],
                 }
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')

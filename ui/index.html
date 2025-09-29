@@ -75,6 +75,11 @@
                     <span>Atmospheric conditions</span>
                 </article>
                 <article class="hud-card">
+                    <h3>Travel Speed</h3>
+                    <p id="hud-travel-value">—</p>
+                    <span>Current modifier</span>
+                </article>
+                <article class="hud-card">
                     <h3>Next Election</h3>
                     <p id="hud-election-value">—</p>
                     <span>Days remaining</span>
@@ -132,9 +137,21 @@
                         <p id="economy-crime-note" class="mini-note">No incidents reported.</p>
                     </section>
                     <section>
+                        <h3>Environment Effects</h3>
+                        <ul id="environment-modifier-list" class="mini-list">
+                            <li class="empty">No modifiers active.</li>
+                        </ul>
+                    </section>
+                    <section>
                         <h3>Campaign Promises</h3>
                         <ul id="economy-campaign-list" class="mini-list">
                             <li class="empty">No promises active.</li>
+                        </ul>
+                    </section>
+                    <section>
+                        <h3>Rumor Mill</h3>
+                        <ul id="rumor-feed-list" class="mini-list">
+                            <li class="empty">No rumors circulating.</li>
                         </ul>
                     </section>
                 </div>

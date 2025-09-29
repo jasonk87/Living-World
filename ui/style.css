@@ -492,6 +492,14 @@ button:focus-visible {
     color: #ff9aa6;
 }
 
+.mini-list li.rumor-positive {
+    border-color: rgba(110, 255, 196, 0.45);
+}
+
+.mini-list li.rumor-negative {
+    border-color: rgba(255, 122, 122, 0.45);
+}
+
 .mini-list li.status-failed strong {
     color: #ffd7dc;
 }
