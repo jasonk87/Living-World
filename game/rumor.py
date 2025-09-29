@@ -48,6 +48,12 @@ class Rumor:
     def is_known_by(self, char_id: str) -> bool:
         return char_id in self.known_by_char_ids
 
+    def reinforce(self, amount: int, max_strength: int):
+        """Increase rumor strength while respecting the configured maximum."""
+        if amount <= 0:
+            return
+        self.current_strength = min(max_strength, self.current_strength + amount)
+
 # Example Usage (not part of the class itself, for testing/dev):
 # if __name__ == '__main__':
 #     rumor1 = Rumor(subject_char_id="Alice", content_key="found_treasure_positive",

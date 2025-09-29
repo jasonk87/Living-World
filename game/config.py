@@ -266,6 +266,11 @@ RUMOR_SPREAD_CHATTY_BONUS = 0.15 # Additional chance if character is "Chatty"
 RUMOR_OPINION_EFFECT_STRENGTH_FACTOR = 0.1 # e.g. rumor strength 50 * 0.1 = 5 opinion points
 MIN_RUMOR_STRENGTH_FOR_OPINION_EFFECT = 20 # Rumor needs this strength to affect opinion
 MAX_OPINION_CHANGE_FROM_RUMOR = 5 # Max opinion points a single rumor instance can change
+DAILY_RUMOR_SPREAD_ATTEMPTS = 3 # How many passive rumor propagation attempts occur each day
+RUMOR_PASSIVE_RELATIONSHIP_POSITIVE = 3 # Relationship boost towards the subject when a positive rumor spreads passively
+RUMOR_PASSIVE_RELATIONSHIP_NEGATIVE = -4 # Relationship change towards the subject for negative rumors shared passively
+RUMOR_PASSIVE_SUBJECT_REACTION_BONUS = 1 # How the subject feels about listeners believing a positive story
+RUMOR_PASSIVE_SUBJECT_REACTION_PENALTY = -2 # How the subject reacts when others believe a negative tale about them
 
 # Complex Needs System
 HUNGER_THRESHOLD_EAT = 45 # Below this, character will try to eat
@@ -284,6 +289,13 @@ NEED_ESTEEM_DEFAULT = 50
 NEED_SAFETY_DECAY_DAILY = 3
 NEED_BELONGING_DECAY_DAILY = 5 # Decays a bit faster, encouraging social upkeep
 NEED_ESTEEM_DECAY_DAILY = 2
+
+# Environment-to-Consumption Coupling
+ENVIRONMENT_SCARCITY_CONSUMPTION_SCALE = 0.75 # How aggressively low yields increase daily ration demand
+ENVIRONMENT_ABUNDANCE_CONSUMPTION_SCALE = 0.4 # How much plentiful yields lower daily ration demand
+ENVIRONMENT_SCARCITY_MOOD_PENALTY = -4 # Mood impact when rations are stretched due to scarcity
+ENVIRONMENT_ABUNDANCE_MOOD_BONUS = 2 # Mood boost when abundance makes meals generous
+ENVIRONMENT_CONSUMPTION_MINIMUM = 1 # Never consume fewer than this many rations per citizen
 
 # Critical Thresholds for Needs (when they start causing significant mood/behavioral changes)
 NEED_SAFETY_CRITICAL_THRESHOLD = 20

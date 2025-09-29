@@ -91,6 +91,9 @@ class World:
             if rumor.current_strength <= 0:
                 self.add_event_log_message(f"Rumor faded: {rumor.subject_char_id} - {rumor.content_key} (ID: {rumor.rumor_id[:4]})")
                 self.rumors.pop(i)
+
+        if self.rumors:
+            self._propagate_rumors_daily()
         # print(f"DEBUG: Daily rumor update complete. {len(self.rumors)} rumors remaining.")
 
 
@@ -783,6 +786,110 @@ class World:
             })
         return digest
 
+    def _propagate_rumors_daily(self) -> None:
+        """Passively spreads strong rumors to nearby citizens to keep the social web alive."""
+        if not self.game_time or not self.characters:
+            return
+
+        attempts = getattr(config, "DAILY_RUMOR_SPREAD_ATTEMPTS", 0)
+        if attempts <= 0:
+            return
+
+        min_strength = getattr(config, "MIN_RUMOR_STRENGTH_TO_SPREAD", 0)
+        viable_rumors = [
+            rumor for rumor in sorted(self.rumors, key=lambda r: r.current_strength, reverse=True)
+            if rumor.current_strength >= min_strength
+        ]
+        if not viable_rumors:
+            return
+
+        attempts = min(attempts, len(viable_rumors))
+        for rumor in viable_rumors[:attempts]:
+            subject_char = self.get_character_by_name(rumor.subject_char_id)
+            carriers = [
+                char for char in self.characters
+                if rumor.rumor_id in getattr(char, "known_rumor_ids", set())
+            ]
+            if not carriers:
+                if subject_char:
+                    carriers.append(subject_char)
+            if not carriers:
+                continue
+
+            carrier = random.choice(carriers)
+            rumor.add_knower(carrier.name)
+
+            potential_listeners = [
+                char
+                for char in self.characters
+                if char.name != carrier.name and rumor.rumor_id not in char.known_rumor_ids
+            ]
+            if not potential_listeners:
+                continue
+
+            acquainted_listeners = [
+                char
+                for char in potential_listeners
+                if carrier.name in char.known_characters or char.name in carrier.known_characters
+            ]
+            if acquainted_listeners:
+                potential_listeners = acquainted_listeners
+
+            listener = random.choice(potential_listeners)
+            listener.known_rumor_ids.add(rumor.rumor_id)
+            rumor.add_knower(listener.name)
+            if carrier.name not in listener.known_characters:
+                listener.known_characters.append(carrier.name)
+
+            if subject_char and subject_char.name not in listener.known_characters:
+                listener.known_characters.append(subject_char.name)
+
+            listener.add_memory(
+                f"Heard a rumor about {rumor.subject_char_id} from {carrier.name}."
+            )
+            carrier.add_memory(
+                f"Rumor about {rumor.subject_char_id} reached {listener.name}."
+            )
+
+            rumor.reinforce(
+                getattr(config, "RUMOR_SPREAD_STRENGTH_INCREASE", 0),
+                getattr(config, "RUMOR_MAX_STRENGTH", 100),
+            )
+            rumor.last_spread_day = self.game_time.current_day
+
+            # Let the listener react to the rumor's content.
+            listener._process_learned_rumor(rumor, self)
+
+            relation_delta = (
+                getattr(config, "RUMOR_PASSIVE_RELATIONSHIP_POSITIVE", 0)
+                if rumor.is_positive
+                else getattr(config, "RUMOR_PASSIVE_RELATIONSHIP_NEGATIVE", 0)
+            )
+            if relation_delta and subject_char:
+                listener.modify_relationship(
+                    subject_char.name,
+                    relation_delta,
+                    self,
+                    reason="Rumor shaped my view of them.",
+                )
+
+                subject_reaction = (
+                    getattr(config, "RUMOR_PASSIVE_SUBJECT_REACTION_BONUS", 0)
+                    if rumor.is_positive
+                    else getattr(config, "RUMOR_PASSIVE_SUBJECT_REACTION_PENALTY", 0)
+                )
+                if subject_reaction and listener.name in subject_char.known_characters:
+                    subject_char.modify_relationship(
+                        listener.name,
+                        subject_reaction,
+                        self,
+                        reason="They believed a story about me.",
+                    )
+
+            sentiment = "praises" if rumor.is_positive else "slanders"
+            self.add_event_log_message(
+                f"Rumor travels: {carrier.name} {sentiment} {rumor.subject_char_id} to {listener.name}."
+            )
     # --- Environment & Economy Utilities ---
 
     def _recalculate_environment_effects(self):
@@ -1227,8 +1334,35 @@ class World:
             report["food_deficit"] = total_deficit
             return
 
+        food_yield = self.get_resource_yield_multiplier("Food")
+        scarcity_factor = max(0.0, 1.0 - min(food_yield, 1.0))
+        abundance_factor = max(0.0, food_yield - 1.0)
+        consumption_min = getattr(config, "ENVIRONMENT_CONSUMPTION_MINIMUM", 1)
+        scarcity_scale = getattr(config, "ENVIRONMENT_SCARCITY_CONSUMPTION_SCALE", 0.0)
+        abundance_scale = getattr(config, "ENVIRONMENT_ABUNDANCE_CONSUMPTION_SCALE", 0.0)
+
+        effective_per_capita = per_capita
+        if scarcity_factor > 0:
+            effective_per_capita = max(
+                consumption_min,
+                int(round(per_capita * (1 + scarcity_factor * scarcity_scale))),
+            )
+        elif abundance_factor > 0:
+            effective_per_capita = max(
+                consumption_min,
+                int(round(per_capita * (1 - abundance_factor * abundance_scale))),
+            )
+
+        scarcity_mood = int(round(getattr(config, "ENVIRONMENT_SCARCITY_MOOD_PENALTY", 0) * scarcity_factor))
+        abundance_mood = int(round(getattr(config, "ENVIRONMENT_ABUNDANCE_MOOD_BONUS", 0) * abundance_factor))
+
+        population = len(self.characters)
+        report["food_per_capita"] = effective_per_capita
+        report["food_required"] = effective_per_capita * population
+        report["food_consumption_modifier"] = food_yield
+
         for character in self.characters:
-            required = per_capita
+            required = effective_per_capita
             consumed = self._consume_resource_for_character(character, "Food", required)
             if consumed > 0:
                 total_consumed += consumed
@@ -1238,6 +1372,16 @@ class World:
                 ration_text = "ration" if consumed == 1 else "rations"
                 character.add_memory(f"Shared the daily meal ({consumed} {ration_text}).")
                 character.update_mood_score(config.MOOD_CHANGE_NEED_FULFILLED, "Ate communal meal")
+                if scarcity_factor > 0 and scarcity_mood < 0:
+                    character.update_mood_score(
+                        scarcity_mood,
+                        "Rations felt meagre under harsh conditions",
+                    )
+                elif abundance_factor > 0 and abundance_mood > 0:
+                    character.update_mood_score(
+                        abundance_mood,
+                        "Feasted thanks to generous harvests",
+                    )
             if consumed < required:
                 shortage = required - consumed
                 total_deficit += shortage
@@ -1261,8 +1405,35 @@ class World:
             report["water_deficit"] = total_deficit
             return
 
+        water_yield = self.get_resource_yield_multiplier("Water")
+        scarcity_factor = max(0.0, 1.0 - min(water_yield, 1.0))
+        abundance_factor = max(0.0, water_yield - 1.0)
+        consumption_min = getattr(config, "ENVIRONMENT_CONSUMPTION_MINIMUM", 1)
+        scarcity_scale = getattr(config, "ENVIRONMENT_SCARCITY_CONSUMPTION_SCALE", 0.0)
+        abundance_scale = getattr(config, "ENVIRONMENT_ABUNDANCE_CONSUMPTION_SCALE", 0.0)
+
+        effective_per_capita = per_capita
+        if scarcity_factor > 0:
+            effective_per_capita = max(
+                consumption_min,
+                int(round(per_capita * (1 + scarcity_factor * scarcity_scale))),
+            )
+        elif abundance_factor > 0:
+            effective_per_capita = max(
+                consumption_min,
+                int(round(per_capita * (1 - abundance_factor * abundance_scale))),
+            )
+
+        scarcity_mood = int(round(getattr(config, "ENVIRONMENT_SCARCITY_MOOD_PENALTY", 0) * scarcity_factor))
+        abundance_mood = int(round(getattr(config, "ENVIRONMENT_ABUNDANCE_MOOD_BONUS", 0) * abundance_factor))
+
+        population = len(self.characters)
+        report["water_per_capita"] = effective_per_capita
+        report["water_required"] = effective_per_capita * population
+        report["water_consumption_modifier"] = water_yield
+
         for character in self.characters:
-            required = per_capita
+            required = effective_per_capita
             consumed = self._consume_resource_for_character(character, "Water", required)
             if consumed > 0:
                 total_consumed += consumed
@@ -1272,6 +1443,16 @@ class World:
                 ration_text = "drink" if consumed == 1 else "drinks"
                 character.add_memory(f"Drank {consumed} water {ration_text} with the community.")
                 character.update_mood_score(getattr(config, "MOOD_CHANGE_REPLENISHED_WATER", 3), "Enjoyed fresh water")
+                if scarcity_factor > 0 and scarcity_mood < 0:
+                    character.update_mood_score(
+                        scarcity_mood,
+                        "Cisterns are low; every sip is rationed",
+                    )
+                elif abundance_factor > 0 and abundance_mood > 0:
+                    character.update_mood_score(
+                        abundance_mood,
+                        "Plentiful water kept spirits high",
+                    )
             if consumed < required:
                 shortage = required - consumed
                 if shortage <= 0:

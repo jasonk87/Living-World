@@ -96,17 +96,43 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (hudRationsValue) {
-            const consumed = typeof report.food_consumed === 'number' ? report.food_consumed : '—';
+            const consumed = typeof report.food_consumed === 'number' ? report.food_consumed : null;
+            const required = typeof report.food_required === 'number' ? report.food_required : null;
             const deficit = typeof report.food_deficit === 'number' ? report.food_deficit : 0;
+            const yieldModifier = typeof report.food_consumption_modifier === 'number'
+                ? report.food_consumption_modifier
+                : null;
+
+            let summaryText = '—';
+            if (consumed !== null && required !== null) {
+                summaryText = `${consumed}/${required}`;
+            } else if (consumed !== null) {
+                summaryText = `${consumed}`;
+            }
+
             const deficitText = deficit > 0 ? ` • Short ${deficit}` : '';
-            hudRationsValue.textContent = `${consumed}${deficitText}`;
+            const yieldText = yieldModifier ? ` • Yield ×${yieldModifier.toFixed(2)}` : '';
+            hudRationsValue.textContent = `${summaryText}${deficitText}${yieldText}`;
         }
 
         if (hudHydrationValue) {
-            const waterConsumed = typeof report.water_consumed === 'number' ? report.water_consumed : '—';
+            const waterConsumed = typeof report.water_consumed === 'number' ? report.water_consumed : null;
+            const waterRequired = typeof report.water_required === 'number' ? report.water_required : null;
             const waterDeficit = typeof report.water_deficit === 'number' ? report.water_deficit : 0;
+            const waterYield = typeof report.water_consumption_modifier === 'number'
+                ? report.water_consumption_modifier
+                : null;
+
+            let summaryText = '—';
+            if (waterConsumed !== null && waterRequired !== null) {
+                summaryText = `${waterConsumed}/${waterRequired}`;
+            } else if (waterConsumed !== null) {
+                summaryText = `${waterConsumed}`;
+            }
+
             const deficitText = waterDeficit > 0 ? ` • Short ${waterDeficit}` : '';
-            hudHydrationValue.textContent = `${waterConsumed}${deficitText}`;
+            const yieldText = waterYield ? ` • Flow ×${waterYield.toFixed(2)}` : '';
+            hudHydrationValue.textContent = `${summaryText}${deficitText}${yieldText}`;
         }
 
         if (hudHousingValue) {
