@@ -34,6 +34,7 @@ class World:
         self.weather = "Sunny"
         self.characters: List['Character'] = []
         self.stockpiles: List[Stockpile] = []
+        self.stockpile_tiles: Dict[Tuple[int, int], str] = {}
         self.buildings: List[Building] = [] # Re-added
         # self.furniture: List[Furniture] = [] # Re-added, but keep commented if not used by this test
         self.ledger: Ledger = Ledger()
@@ -116,6 +117,9 @@ class World:
         building_at_loc = self.get_building_at(x, y)
         if building_at_loc:
             return building_at_loc.get_current_map_char()
+
+        if (x, y) in self.stockpile_tiles:
+            return "Stockpile"
 
         # furniture_at_loc = self.get_furniture_at(x,y) # If furniture is re-enabled
         # if furniture_at_loc:
@@ -259,9 +263,11 @@ class World:
                 for c_offset in range(w):
                     tile_x, tile_y = x + c_offset, y + r_offset
                     if 0 <= tile_x < self.grid_size[0] and 0 <= tile_y < self.grid_size[1]:
-                        # Stockpiles are overlays, don't change base self.grid tile like resources do
-                        # The get_tile method will need to account for stockpiles if they have a map char
-                        pass
+                        self.stockpile_tiles[(tile_x, tile_y)] = stockpile.name
+
+            self.add_event_log_message(
+                f"Stockpile '{stockpile.name}' registered at tiles {stockpile.deposit_tiles}."
+            )
 
 
     def get_stockpiles_for_resource(self, resource_name: str) -> List[Stockpile]:
@@ -530,28 +536,23 @@ class World:
 
         # Identify candidates: e.g., Nobles or high Leadership
         candidates: List['Character'] = []
-        for char in self.characters:
-            # Example criteria: Noble Lord rank OR Leadership skill > 3
-            # Exclude current mayor from being a "new" candidate if we want to ensure change, or include for re-election.
-            # For now, simple criteria:
-            is_noble_lord = hasattr(char, 'rank') and char.rank == "Noble Lord"
-            leadership_skill = 0
-            if hasattr(char, 'skills') and char.skills and "Leadership" in char.skills and isinstance(char.skills["Leadership"], dict):
-                leadership_skill = char.skills["Leadership"].get("level",0)
-
-            if is_noble_lord or leadership_skill >= 3: # Min leadership 3 for candidacy
-                if char.job != "Mayor": # Don't add current mayor to candidate list this way, handle re-election separately if needed
-                    candidates.append(char)
-
         current_mayor: Optional['Character'] = None
         for char in self.characters:
             if char.job == "Mayor":
                 current_mayor = char
-                if current_mayor not in candidates: # Allow current mayor to be a candidate
-                    # Add them if they meet criteria (e.g. still a Noble Lord, or if their leadership is high enough)
-                    # For simplicity, if they are mayor, they can run again.
-                    # More complex logic could check if they are eligible for re-election.
-                    pass # current_mayor will be handled below
+
+            is_noble_lord = hasattr(char, 'rank') and char.rank == "Noble Lord"
+            leadership_skill = 0
+            if (
+                hasattr(char, 'skills')
+                and char.skills
+                and "Leadership" in char.skills
+                and isinstance(char.skills["Leadership"], dict)
+            ):
+                leadership_skill = char.skills["Leadership"].get("level", 0)
+
+            if (is_noble_lord or leadership_skill >= 3) and char.job != "Mayor":
+                candidates.append(char)
 
         if not candidates and not current_mayor:
             self.add_event_log_message("No eligible candidates found for Mayor. Election postponed.")

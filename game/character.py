@@ -196,23 +196,16 @@ class Character:
             if self.mood_score >= threshold:
                 current_mood_name = mood_name
                 break
-        # Special case for Neutral, as its threshold is a lower bound of a band
-        if self.mood_score < config.MOOD_LEVELS["Neutral"] and self.mood_score > config.MOOD_LEVELS.get("Displeased", -50): # Check if it's above Displeased but below Neutral's lower bound
-             # This logic ensures that scores between Displeased's threshold and Neutral's threshold are correctly Neutral if not caught by other positive moods.
-             # E.g. if Neutral is -20, Content is 20. A score of 5 should be Content. A score of -10 should be Neutral.
-             # A score of -30 should be Displeased.
-             # The sort order handles positive moods. For negative, we need to ensure Neutral band.
-             if self.mood_score >= config.MOOD_LEVELS["Neutral"]: # Scores from -20 up to Content's threshold (20)
-                 pass # Already correctly assigned by sorted list or will be Neutral if nothing else matches above it
-             elif self.mood_score > config.MOOD_LEVELS.get("Displeased", -50): # e.g. -20 < score < -50
-                 # This means it fell through all positive moods and Content, so it should be Neutral if above Displeased.
-                 # However, the sorted list from highest to lowest should correctly assign "Neutral" for scores like -10.
-                 # Let's re-verify the logic for MOOD_LEVELS["Neutral"] = -20
-                 # If score is 10, "Neutral" is chosen (correct, as it's < 20 for Content)
-                 # If score is -10, "Neutral" is chosen (correct)
-                 # If score is -30, "Displeased" is chosen (correct, as it's < -20 for Neutral and >= -50 for Displeased)
-                 # The initial sort and break should handle this correctly.
-                 pass
+
+        # Ensure scores that fall between Neutral and the first negative tier still read as Neutral
+        neutral_floor = config.MOOD_LEVELS.get("Neutral", 0)
+        displeased_floor = config.MOOD_LEVELS.get("Displeased", neutral_floor - 30)
+        if (
+            self.mood_score < neutral_floor
+            and self.mood_score >= displeased_floor
+            and current_mood_name not in {"Displeased", "Angry", "Furious"}
+        ):
+            current_mood_name = "Neutral"
 
 
         if self.mood != current_mood_name:
@@ -511,6 +504,64 @@ class Character:
         self.current_building_project = None
         self.resource_to_fetch = None # Ensure this is cleared too
 
+    def _process_builder_routine(self, world: 'World') -> bool:
+        """Handle builder duty goals and active build orders."""
+        if self.job != "Builder":
+            return False
+
+        if not self.current_goal:
+            self.current_goal = self.get_default_goal()
+
+        if self.active_build_order_id:
+            if self.current_goal.type != GoalType.EXECUTE_BUILD_ORDER:
+                self.current_goal = Goal(
+                    GoalType.EXECUTE_BUILD_ORDER,
+                    assignee_id=self.name,
+                    originator_id=self.name,
+                    parameters={
+                        "order_id": self.active_build_order_id,
+                        "structure_type": self.current_building_project,
+                        "location": self.building_site_target,
+                    },
+                )
+            self._execute_build_order(world)
+            return True
+
+        if self.current_goal.type != GoalType.PERFORM_BUILDER_DUTIES:
+            return False
+
+        approved_build_orders = world.get_approved_build_orders()
+        if not approved_build_orders:
+            self.add_memory("No build orders available for Builder Duties.")
+            self.current_goal = self.get_default_goal()
+            return True
+
+        order_to_take = approved_build_orders[0]
+        order_to_take.status = "InProgress"
+        order_to_take.assigned_to = self.name
+
+        self._reset_building_state()
+        self.active_build_order_id = order_to_take.order_id
+        details = order_to_take.details or {}
+        self.current_building_project = details.get("structure_type")
+        self.building_site_target = details.get("location")
+        self.materials_gathered_for_build = False
+
+        self.current_goal = Goal(
+            GoalType.EXECUTE_BUILD_ORDER,
+            assignee_id=self.name,
+            originator_id=self.name,
+            parameters={
+                "order_id": self.active_build_order_id,
+                "structure_type": self.current_building_project,
+                "location": self.building_site_target,
+            },
+        )
+        structure_label = self.current_building_project or "a structure"
+        self.add_memory(f"Claimed Build WO {order_to_take.order_id} for {structure_label}.")
+        self._execute_build_order(world)
+        return True
+
     def _reset_crafting_state(self):
         self.active_work_order_id = None; self.materials_gathered_for_wo = False
         self.items_crafted_for_wo = False; self.resource_to_fetch = None
@@ -666,6 +717,28 @@ class Character:
         # print(f"DEBUG {self.name}: Move from ({self.x},{self.y}) to ({new_x},{new_y}) ultimately FAILED.")
         return False
 
+    def _handle_failed_move_attempt(self, dx: int, dy: int, world: 'World') -> None:
+        """Record why a step failed so characters can react to blocked paths."""
+        target_x, target_y = self.x + dx, self.y + dy
+
+        if not (0 <= target_x < world.grid_size[0] and 0 <= target_y < world.grid_size[1]):
+            blocker_desc = "the edge of the map"
+        else:
+            blocking_building = world.get_building_at(target_x, target_y)
+            blocking_chars = [char.name for char in world.get_characters_at_location(target_x, target_y)]
+            if blocking_building:
+                blocker_desc = blocking_building.display_name
+            elif blocking_chars:
+                joined_names = ", ".join(blocking_chars[:3])
+                remainder = "" if len(blocking_chars) <= 3 else " and others"
+                blocker_desc = f"{joined_names}{remainder}"
+            else:
+                blocker_desc = world.get_tile(target_x, target_y)
+
+        memory_entry = f"Route to ({target_x}, {target_y}) blocked by {blocker_desc}."
+        if not self.memory or self.memory[-1] != memory_entry:
+            self.add_memory(memory_entry)
+
     def move_towards(self, target_x: int, target_y: int, world: 'World'):
         dx = target_x - self.x; dy = target_y - self.y
         norm_dx, norm_dy = 0, 0
@@ -724,10 +797,10 @@ class Character:
                         self.move(0, bonus_norm_dy, world)
                 # print(f"DEBUG {self.name}: move_towards success via cardinal y (0,{norm_dy}). New pos: ({self.x},{self.y})")
                 return
-        elif norm_dx != 0 : # Only dx was non-zero, and self.move(norm_dx,0) must have failed if we are here
-             pass # print(f"DEBUG {self.name}: move_towards cardinal x ({norm_dx},0) failed.")
-        elif norm_dy != 0 : # Only dy was non-zero, and self.move(0,norm_dy) must have failed
-             pass # print(f"DEBUG {self.name}: move_towards cardinal y (0,{norm_dy}) failed.")
+        elif norm_dx != 0: # Only dx was non-zero, and self.move(norm_dx,0) must have failed if we are here
+            self._handle_failed_move_attempt(norm_dx, 0, world)
+        elif norm_dy != 0: # Only dy was non-zero, and self.move(0,norm_dy) must have failed
+            self._handle_failed_move_attempt(0, norm_dy, world)
         # print(f"DEBUG {self.name}: move_towards ({target_x},{target_y}) FAILED all attempts from ({self.x},{self.y}).")
 
 
@@ -831,7 +904,52 @@ class Character:
                 target_stockpile.name, target_stockpile.inventory, world.game_time.current_day
             )
         return True
-    def gather_resource(self, resource_name: str, world: 'World'): pass
+    def gather_resource(self, resource_name: str, world: 'World') -> bool:
+        """Generic resource gathering entry point used by dynamic goals."""
+        specialized_handlers = {
+            "Wood": self._execute_gather_wood,
+            "Stone": self._execute_gather_stone,
+            "Herbs": self._execute_gather_herbs,
+        }
+
+        handler = specialized_handlers.get(resource_name)
+        if handler:
+            handler(world)
+            return True
+
+        task_name = None
+        for name, definition in JOB_TASK_DEFINITIONS.items():
+            if definition.get("resource_produced") == resource_name:
+                task_name = name
+                break
+
+        if not task_name:
+            self.add_memory(f"I don't know how to gather {resource_name}.")
+            self.current_goal = self.get_default_goal()
+            return False
+
+        target_location = self.find_task_location(task_name, world)
+        if not target_location:
+            self.add_memory(f"Couldn't locate any {resource_name} to gather.")
+            self.current_goal = self.get_default_goal()
+            return False
+
+        if (self.x, self.y) != target_location:
+            self.move_towards(target_location[0], target_location[1], world)
+            return True
+
+        if not self._execute_generic_task(world, task_name):
+            return True # Tool fetching or prerequisite handling will adjust the goal
+
+        quota = None
+        if self.current_goal and self.current_goal.parameters:
+            quota = self.current_goal.parameters.get("quota")
+
+        if quota is not None and self.inventory.get(resource_name, 0) >= quota:
+            self.add_memory(f"Gathered the requested {quota} {resource_name}.")
+            self.current_goal = self.get_default_goal()
+
+        return True
     def build(self, structure_type: str, world: 'World') -> bool: return False
 
     def job_default_goal_type_str(self) -> str: # Returns a string representing the goal type or job title
@@ -2914,10 +3032,6 @@ class Character:
                 self.add_memory(f"Feeling {self.mood}, I need some time alone.")
                 self.current_goal = Goal(GoalType.WANDER, assignee_id=self.name, originator_id=self.name, details="Seeking solitude due to mood.") # Wander is a simple proxy for solitude
 
-        # If goal changed to Seek Medical Attention, execute that immediately this tick.
-        if self.current_goal.type == GoalType.SEEK_MEDICAL_ATTENTION:
-            pass # Let it fall through to goal execution or _execute_generic_task check
-
         # --- Complex Need-Driven Goal/Action Biases ---
         # These are checked if not already in a critical goal state like SEEK_MEDICAL_ATTENTION or ASK_FOR_HELP
 
@@ -2981,43 +3095,8 @@ class Character:
 
 
         # Builder Logic: Focus on Build Orders
-        if self.job == "Builder":
-            if self.active_build_order_id: # Already has an active build order
-                if self.current_goal.type != GoalType.EXECUTE_BUILD_ORDER:
-                    # self.current_goal = "Execute Build Order"
-                    self.current_goal = Goal(GoalType.EXECUTE_BUILD_ORDER, assignee_id=self.name, originator_id=self.name,
-                                             parameters={"order_id": self.active_build_order_id,
-                                                         "structure_type": self.current_building_project,
-                                                         "location": self.building_site_target})
-                self._execute_build_order(world) # This function will manage its own state and completion
-                return
-            else: # No active build order, try to claim one if duty is to perform builder tasks
-                if self.current_goal.type == GoalType.PERFORM_BUILDER_DUTIES:
-                    approved_build_orders = world.get_approved_build_orders()
-                    if approved_build_orders:
-                        order_to_take = approved_build_orders[0] # Simplistic: take the first one
-
-                        order_to_take.status = "InProgress"
-                        order_to_take.assigned_to = self.name
-
-                        self._reset_building_state() # Clear any old state
-                        self.active_build_order_id = order_to_take.order_id
-                        self.current_building_project = order_to_take.details.get("structure_type")
-                        self.building_site_target = order_to_take.details.get("location")
-                        self.materials_gathered_for_build = False # Reset for new order
-
-                        # self.current_goal = "Execute Build Order"
-                        self.current_goal = Goal(GoalType.EXECUTE_BUILD_ORDER, assignee_id=self.name, originator_id=self.name,
-                                                 parameters={"order_id": self.active_build_order_id,
-                                                             "structure_type": self.current_building_project,
-                                                             "location": self.building_site_target})
-                        self.add_memory(f"Claimed Build WO {order_to_take.order_id} for {self.current_building_project}.")
-                        self._execute_build_order(world) # Start processing immediately
-                        return
-                    else: # No approved build orders
-                        self.add_memory("No build orders available for Builder Duties.")
-                        self.current_goal = self.get_default_goal() # No WOs to perform duties on
-                        # _execute_wander will be called if idle
+        if self._process_builder_routine(world):
+            return
 
         # If current goal was set to Execute Build Order by claiming or was already that
         if self.current_goal.type == GoalType.EXECUTE_BUILD_ORDER:
@@ -3041,7 +3120,9 @@ class Character:
         goal_executed_this_tick = True # Assume a goal will be handled unless specified otherwise
         # Perform <Job> Duties goals often break down into other goals.
         if self.current_goal.type == GoalType.PERFORM_BUILDER_DUTIES: # Already handled by builder logic above or will become IDLE
-            pass # Builder logic sets to EXECUTE_BUILD_ORDER or IDLE
+            if not self._process_builder_routine(world):
+                self._execute_wander(world)
+            return
         elif self.current_goal.type == GoalType.PERFORM_WOODCUTTER_DUTIES: self._execute_perform_woodcutter_duties(world)
         elif self.current_goal.type == GoalType.PERFORM_STONEMASON_DUTIES: self._execute_perform_stonemason_duties(world)
         elif self.current_goal.type == GoalType.PERFORM_FARMER_DUTIES: self._execute_perform_farmer_duties(world)
