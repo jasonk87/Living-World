@@ -64,6 +64,20 @@ document.addEventListener('DOMContentLoaded', () => {
     let viewportZoom = 1;
     let activePointerId = null;
     let lastPointerPosition = { x: 0, y: 0 };
+    let mapTerrainCache = [];
+    let mapOverlayCache = [];
+    let mapRevisionStamp = null;
+
+    const rosterCardCache = new Map();
+    const rosterState = {
+        filtered: [],
+        cardHeight: 0,
+        renderedStart: -1,
+        renderedEnd: -1,
+    };
+    let rosterWindowEl = null;
+    let rosterSpacerTop = null;
+    let rosterSpacerBottom = null;
 
     // --- Utility Helpers ---
     const getTileSize = () => parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--tile-size')) || 48;
@@ -86,6 +100,132 @@ document.addEventListener('DOMContentLoaded', () => {
                 entityDetails.innerHTML = '<p>Click on the map to inspect citizens or structures.</p>';
             }
         }
+    }
+
+    function initCharacterRosterContainer() {
+        if (!characterListDiv || rosterWindowEl) return;
+        characterListDiv.classList.add('virtualized-roster');
+        characterListDiv.classList.remove('character-grid');
+        characterListDiv.innerHTML = '';
+
+        rosterSpacerTop = document.createElement('div');
+        rosterSpacerTop.className = 'roster-spacer roster-spacer-top';
+
+        rosterWindowEl = document.createElement('div');
+        rosterWindowEl.className = 'roster-window character-grid';
+
+        rosterSpacerBottom = document.createElement('div');
+        rosterSpacerBottom.className = 'roster-spacer roster-spacer-bottom';
+
+        characterListDiv.append(rosterSpacerTop, rosterWindowEl, rosterSpacerBottom);
+        characterListDiv.addEventListener('scroll', onRosterScroll);
+        characterListDiv.addEventListener('click', onRosterClick);
+    }
+
+    function onRosterScroll() {
+        updateVirtualizedRoster();
+    }
+
+    function onRosterClick(event) {
+        const card = event.target.closest('.character-card');
+        if (!card) return;
+        const { charName } = card.dataset;
+        if (charName) {
+            handleCharacterSelection(charName);
+        }
+    }
+
+    function getCharacterCard(character) {
+        let card = rosterCardCache.get(character.name);
+        if (!card) {
+            card = document.createElement('article');
+            card.classList.add('character-card');
+            rosterCardCache.set(character.name, card);
+        }
+        return card;
+    }
+
+    function updateCharacterCardElement(card, character) {
+        card.dataset.charName = character.name;
+        const goal = extractGoal(character.current_goal).type;
+        const loadText = typeof character.inventory_load === 'number' ? ` • Load: ${character.inventory_load}` : '';
+        const statusFlags = [];
+        if (character.resting_at_home) statusFlags.push('Resting');
+        if (typeof character.energy === 'number' && character.energy < 40) statusFlags.push('Fatigued');
+        if (typeof character.thirst === 'number' && character.thirst < 40) statusFlags.push('Thirsty');
+        const statusSignature = statusFlags.join(',');
+        const signature = [
+            character.job || 'Unassigned',
+            goal,
+            character.x,
+            character.y,
+            loadText,
+            statusSignature,
+        ].join('|');
+
+        if (card.dataset.signature !== signature) {
+            const statusLine = statusFlags.length
+                ? `<small class="status-flags">${statusFlags.join(' • ')}</small>`
+                : '';
+            card.dataset.signature = signature;
+            card.innerHTML = `
+                <strong>${character.name}</strong>
+                <small>${character.job || 'Unassigned'} • Goal: ${goal}</small>
+                <small>Pos: (${character.x}, ${character.y})${loadText}</small>
+                ${statusLine}
+            `;
+        }
+    }
+
+    function updateVirtualizedRoster(forceMeasure = false) {
+        if (!rosterWindowEl) return;
+        const filtered = rosterState.filtered;
+        if (!filtered.length) return;
+
+        if (forceMeasure) {
+            rosterState.cardHeight = 0;
+        }
+
+        if (!rosterState.cardHeight) {
+            const sampleCharacter = filtered[0];
+            const sampleCard = getCharacterCard(sampleCharacter);
+            updateCharacterCardElement(sampleCard, sampleCharacter);
+            sampleCard.style.position = 'absolute';
+            sampleCard.style.visibility = 'hidden';
+            sampleCard.style.pointerEvents = 'none';
+            sampleCard.style.left = '-9999px';
+            rosterWindowEl.appendChild(sampleCard);
+            rosterState.cardHeight = Math.max(sampleCard.getBoundingClientRect().height, 72);
+            rosterWindowEl.removeChild(sampleCard);
+        }
+
+        const cardHeight = rosterState.cardHeight || 1;
+        const scrollTop = characterListDiv.scrollTop;
+        const viewportHeight = characterListDiv.clientHeight || cardHeight;
+        const buffer = 4;
+        const startIndex = Math.max(0, Math.floor(scrollTop / cardHeight) - buffer);
+        const endIndex = Math.min(
+            filtered.length,
+            startIndex + Math.ceil(viewportHeight / cardHeight) + buffer * 2,
+        );
+
+        rosterState.renderedStart = startIndex;
+        rosterState.renderedEnd = endIndex;
+
+        rosterSpacerTop.style.height = `${startIndex * cardHeight}px`;
+        rosterSpacerBottom.style.height = `${Math.max(0, (filtered.length - endIndex) * cardHeight)}px`;
+
+        const fragment = document.createDocumentFragment();
+        for (let i = startIndex; i < endIndex; i++) {
+            const character = filtered[i];
+            const card = getCharacterCard(character);
+            updateCharacterCardElement(card, character);
+            card.classList.toggle('active', character.name === selectedCharacterName);
+            card.classList.toggle('following', character.name === followedCharacterName);
+            fragment.appendChild(card);
+        }
+
+        rosterWindowEl.replaceChildren(fragment);
     }
 
     function updateEconomyIntel(gameState) {
@@ -529,6 +669,7 @@ document.addEventListener('DOMContentLoaded', () => {
         openPanel('info-panel');
         openPanel('characters-panel');
         loadCharacterDetails(name, { worldPanel: true, characterPanel: true });
+        updateVirtualizedRoster();
     }
 
     function updateFollowedCharacterOverlay(character) {
@@ -685,9 +826,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 updateFollowedCharacterOverlay(match || null);
             }
         }
-        if (latestGameState) {
-            renderCharacterList(latestGameState.characters || []);
-        }
+        updateVirtualizedRoster();
     }
 
     function extractGoal(goal) {
@@ -1010,6 +1149,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!rows || !cols) return;
 
         const needsRebuild = rows !== mapDimensions.rows || cols !== mapDimensions.cols || mapGridDiv.childElementCount === 0;
+        const totalCells = rows * cols;
+
         if (needsRebuild) {
             mapDimensions = { rows, cols };
             mapGridDiv.innerHTML = '';
@@ -1027,6 +1168,14 @@ document.addEventListener('DOMContentLoaded', () => {
             mapGridDiv.appendChild(fragment);
         }
 
+        const incomingRevision = typeof gameState.map_revision === 'number' ? gameState.map_revision : null;
+        const revisionChanged = incomingRevision !== null && incomingRevision !== mapRevisionStamp;
+        if (needsRebuild || revisionChanged || mapTerrainCache.length !== totalCells || mapOverlayCache.length !== totalCells) {
+            mapTerrainCache = new Array(totalCells).fill(null);
+            mapOverlayCache = new Array(totalCells).fill(null);
+        }
+        mapRevisionStamp = incomingRevision;
+
         const tileSize = getTileSize();
         const width = cols * tileSize;
         const height = rows * tileSize;
@@ -1037,40 +1186,94 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const cells = mapGridDiv.children;
         for (let r = 0; r < rows; r++) {
+            const tileRow = gameState.grid[r] || [];
             for (let c = 0; c < cols; c++) {
                 const index = r * cols + c;
                 const cell = cells[index];
                 if (!cell) continue;
-                const tileRow = gameState.grid[r] || [];
                 const tileType = tileRow[c] || 'Unknown';
-                const tileClass = `tile-${tileType.replace(/\s+/g, '-')}`;
-                cell.className = `map-cell ${tileClass}`;
-                cell.title = `${tileType} (${c}, ${r})`;
+                if (mapTerrainCache[index] !== tileType) {
+                    const previousClass = cell.dataset.terrainClass;
+                    if (previousClass) {
+                        cell.classList.remove(previousClass);
+                    }
+                    const tileClass = `tile-${tileType.replace(/\s+/g, '-')}`;
+                    cell.classList.add(tileClass);
+                    cell.dataset.terrainClass = tileClass;
+                    mapTerrainCache[index] = tileType;
+                }
+                cell.dataset.baseTitle = tileType;
+                if (!cell.dataset.buildingName) {
+                    cell.title = `${tileType} (${c}, ${r})`;
+                }
+            }
+        }
+
+        const nextOverlayCache = new Array(totalCells).fill(null);
+        (gameState.buildings || []).forEach(building => {
+            const originX = building.x ?? 0;
+            const originY = building.y ?? 0;
+            const widthCells = building.width ?? 1;
+            const heightCells = building.height ?? 1;
+            const overlayType = building.structure_type === 'Stockpile' ? 'stockpile' : 'building';
+            const label = building.display_name || building.structure_type || 'Structure';
+            const signature = `${overlayType}|${label}|${originX},${originY}`;
+            for (let r = 0; r < heightCells; r++) {
+                for (let c = 0; c < widthCells; c++) {
+                    const x = originX + c;
+                    const y = originY + r;
+                    if (x < 0 || y < 0 || x >= cols || y >= rows) continue;
+                    const index = y * cols + x;
+                    nextOverlayCache[index] = signature;
+                }
+            }
+        });
+
+        for (let index = 0; index < totalCells; index++) {
+            const cell = cells[index];
+            if (!cell) continue;
+            const prevSignature = mapOverlayCache[index];
+            const nextSignature = nextOverlayCache[index];
+            if (prevSignature === nextSignature && !needsRebuild) {
+                continue;
+            }
+
+            if (prevSignature && prevSignature !== nextSignature) {
+                cell.classList.remove('building-cell', 'stockpile-cell');
                 delete cell.dataset.building;
                 delete cell.dataset.buildingOriginX;
                 delete cell.dataset.buildingOriginY;
                 delete cell.dataset.buildingName;
+                const baseTitle = cell.dataset.baseTitle || mapTerrainCache[index] || 'Unknown';
+                const x = index % cols;
+                const y = Math.floor(index / cols);
+                cell.title = `${baseTitle} (${x}, ${y})`;
             }
+
+            if (!nextSignature) {
+                if (!prevSignature && needsRebuild) {
+                    const x = index % cols;
+                    const y = Math.floor(index / cols);
+                    const baseTitle = cell.dataset.baseTitle || mapTerrainCache[index] || 'Unknown';
+                    cell.title = `${baseTitle} (${x}, ${y})`;
+                }
+                continue;
+            }
+
+            const [type, label, origin] = nextSignature.split('|');
+            const [originX, originY] = origin.split(',').map(Number);
+            cell.classList.toggle('stockpile-cell', type === 'stockpile');
+            cell.classList.toggle('building-cell', type !== 'stockpile');
+            cell.dataset.building = 'true';
+            cell.dataset.buildingOriginX = originX;
+            cell.dataset.buildingOriginY = originY;
+            cell.dataset.buildingName = label;
+            const x = index % cols;
+            const y = Math.floor(index / cols);
+            cell.title = `${label} (${x}, ${y})`;
         }
 
-        (gameState.buildings || []).forEach(building => {
-            for (let r = 0; r < building.height; r++) {
-                for (let c = 0; c < building.width; c++) {
-                    const x = building.x + c;
-                    const y = building.y + r;
-                    if (x < 0 || y < 0 || x >= cols || y >= rows) continue;
-                    const index = y * cols + x;
-                    const cell = mapGridDiv.children[index];
-                    if (!cell) continue;
-                    cell.classList.add(building.structure_type === 'Stockpile' ? 'stockpile-cell' : 'building-cell');
-                    cell.dataset.building = 'true';
-                    cell.dataset.buildingOriginX = building.x;
-                    cell.dataset.buildingOriginY = building.y;
-                    cell.dataset.buildingName = building.display_name || building.structure_type;
-                    cell.title = `${building.display_name || building.structure_type} (${x}, ${y})`;
-                }
-            }
-        });
+        mapOverlayCache = nextOverlayCache;
     }
 
     function onMapCellClick(event) {
@@ -1179,46 +1382,37 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function renderCharacterList(characters) {
         if (!characterListDiv || !Array.isArray(characters)) return;
+        initCharacterRosterContainer();
 
         const sortedCharacters = [...characters].sort((a, b) => a.name.localeCompare(b.name));
-        const searchTerm = characterSearchTerm.trim();
+        const searchTerm = characterSearchTerm.trim().toLowerCase();
         const filteredCharacters = sortedCharacters.filter(char => {
             if (!searchTerm) return true;
             const haystack = `${char.name} ${char.job} ${extractGoal(char.current_goal).type}`.toLowerCase();
             return haystack.includes(searchTerm);
         });
 
+        rosterState.filtered = filteredCharacters;
+        rosterState.renderedStart = -1;
+        rosterState.renderedEnd = -1;
+
+        const visibleNames = new Set(filteredCharacters.map(char => char.name));
+        for (const name of rosterCardCache.keys()) {
+            if (!visibleNames.has(name)) {
+                rosterCardCache.delete(name);
+            }
+        }
+
         if (!filteredCharacters.length) {
-            characterListDiv.innerHTML = '<div class="empty-state">No citizens match your search.</div>';
+            rosterWindowEl.innerHTML = '<div class="empty-state">No citizens match your search.</div>';
+            rosterSpacerTop.style.height = '0px';
+            rosterSpacerBottom.style.height = '0px';
+            rosterState.cardHeight = 0;
             return;
         }
 
-        characterListDiv.innerHTML = filteredCharacters.map(char => {
-            const isActive = char.name === selectedCharacterName;
-            const isFollowing = char.name === followedCharacterName;
-            const goal = extractGoal(char.current_goal).type;
-            const loadText = typeof char.inventory_load === 'number' ? ` • Load: ${char.inventory_load}` : '';
-            const statusFlags = [];
-            if (char.resting_at_home) statusFlags.push('Resting');
-            if (typeof char.energy === 'number' && char.energy < 40) statusFlags.push('Fatigued');
-            if (typeof char.thirst === 'number' && char.thirst < 40) statusFlags.push('Thirsty');
-            const statusLine = statusFlags.length ? `<small class="status-flags">${statusFlags.join(' • ')}</small>` : '';
-            return `
-                <article class="character-card ${isActive ? 'active' : ''} ${isFollowing ? 'following' : ''}" data-char-name="${char.name}">
-                    <strong>${char.name}</strong>
-                    <small>${char.job || 'Unassigned'} • Goal: ${goal}</small>
-                    <small>Pos: (${char.x}, ${char.y})${loadText}</small>
-                    ${statusLine}
-                </article>
-            `;
-        }).join('');
-
-        characterListDiv.querySelectorAll('.character-card').forEach(card => {
-            card.addEventListener('click', () => {
-                const name = card.dataset.charName;
-                handleCharacterSelection(name);
-            });
-        });
+        characterListDiv.scrollTop = Math.min(characterListDiv.scrollTop, filteredCharacters.length * (rosterState.cardHeight || 1));
+        updateVirtualizedRoster(true);
     }
 
     function renderMap(gameState) {

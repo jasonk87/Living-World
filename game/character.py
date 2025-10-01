@@ -1,5 +1,6 @@
 # game/character.py
-from typing import TYPE_CHECKING, Optional, Dict, List, Tuple, Any, Set
+from collections import deque
+from typing import TYPE_CHECKING, Optional, Dict, List, Tuple, Any, Set, Deque
 import random
 from .llm_integration import generate_dialogue # Kept as it's used
 # from .stockpile import Stockpile # Not directly used by Character methods
@@ -150,6 +151,9 @@ class Character:
         # Reputation attribute
         self.reputation_score: int = 0 # Initialize reputation
         self.known_rumor_ids: Set[str] = set() # For tracking rumors known by this character
+        self._cached_path: Deque[Tuple[int, int]] = deque()
+        self._cached_path_target: Optional[Tuple[int, int]] = None
+        self._cached_path_revision: Optional[int] = None
 
     def update_reputation(self, change: int, reason: Optional[str] = None, world: Optional['World'] = None):
         """Updates reputation score, clamps it, and logs the change."""
@@ -697,42 +701,20 @@ class Character:
         return True
 
     def move(self, dx: int, dy: int, world: 'World') -> bool:
-        new_x, new_y = self.x + dx, self.y + dy
-        can_move = True
-        # print(f"DEBUG {self.name}: Attempting move from ({self.x},{self.y}) by ({dx},{dy}) to ({new_x},{new_y})")
-        if not (0 <= new_x < world.grid_size[0] and 0 <= new_y < world.grid_size[1]):
-            # print(f"DEBUG {self.name}: Move failed - out of bounds.")
-            can_move = False
-        if can_move:
-            tile_type_at_new_loc = world.get_tile(new_x, new_y) # world.get_tile should give base tile like Grass, or building char
-            # Check against non-traversable terrain types
-            if tile_type_at_new_loc in ["Mountain", "Water"]: # Assuming these are map chars for non-traversable
-                # print(f"DEBUG {self.name}: Move failed - tile type '{tile_type_at_new_loc}' is non-traversable.")
-                can_move = False
-            # Check for existing buildings or furniture at the destination that are not part of this character's current build order site
-            # This needs more sophisticated check if buildings/furniture can be on "Grass"
-            # For now, assume if get_tile returns something other than 'Grass' (or whatever is traversable), it might be an issue.
-            # A better check would be:
-            if world.get_building_at(new_x, new_y) is not None: # or world.get_furniture_at(new_x, new_y) is not None: # Temporarily commented for minimal test
-                 # Allow moving to own build site even if building object exists there (e.g. foundation)
-                if not (self.building_site_target and new_x == self.building_site_target[0] and new_y == self.building_site_target[1]):
-                    # print(f"DEBUG {self.name}: Move failed - location ({new_x},{new_y}) occupied by building/furniture.")
-                    can_move = False
-
-
-            if can_move: # Re-check after tile type and building/furniture checks
-                other_chars_at_new_loc = [char for char in world.get_characters_at_location(new_x, new_y) if char.name != self.name]
-                if other_chars_at_new_loc:
-                    # print(f"DEBUG {self.name}: Move failed - location ({new_x},{new_y}) occupied by another character.")
-                    can_move = False
-
-        if can_move:
-            # print(f"DEBUG {self.name}: Move successful to ({new_x},{new_y}). Old pos: ({self.x},{self.y})")
-            self.x = new_x; self.y = new_y;
+        if dx == 0 and dy == 0:
             return True
 
-        # print(f"DEBUG {self.name}: Move from ({self.x},{self.y}) to ({new_x},{new_y}) ultimately FAILED.")
-        return False
+        new_x, new_y = self.x + dx, self.y + dy
+        if not world.is_walkable(new_x, new_y, ignore_characters={self.name}):
+            return False
+
+        if not world.reserve_tile(self.name, (new_x, new_y)):
+            return False
+
+        self.x, self.y = new_x, new_y
+        world.release_tile(self.name)
+        self._clear_cached_path()
+        return True
 
     def _handle_failed_move_attempt(self, dx: int, dy: int, world: 'World') -> None:
         """Record why a step failed so characters can react to blocked paths."""
@@ -756,16 +738,50 @@ class Character:
         if not self.memory or self.memory[-1] != memory_entry:
             self.add_memory(memory_entry)
 
+    def _clear_cached_path(self) -> None:
+        self._cached_path.clear()
+        self._cached_path_target = None
+        self._cached_path_revision = None
+
+    def _ensure_path_to(self, target: Tuple[int, int], world: 'World') -> bool:
+        current_revision = getattr(world, "map_revision", None)
+        needs_replan = (
+            not self._cached_path and (self.x, self.y) != target
+        ) or self._cached_path_target != target or self._cached_path_revision != current_revision
+
+        if not needs_replan and self._cached_path:
+            next_step = self._cached_path[0]
+            if max(abs(next_step[0] - self.x), abs(next_step[1] - self.y)) > 1:
+                needs_replan = True
+
+        if not needs_replan:
+            return True
+
+        path = world.find_path((self.x, self.y), target, ignore_characters={self.name})
+        if not path:
+            self._clear_cached_path()
+            return False
+
+        if len(path) <= 1:
+            self._cached_path = deque()
+        else:
+            self._cached_path = deque(path[1:])
+        self._cached_path_target = target
+        self._cached_path_revision = current_revision
+        return bool(self._cached_path) or (self.x, self.y) == target
+
     def move_towards(self, target_x: int, target_y: int, world: 'World'):
-        dx = target_x - self.x; dy = target_y - self.y
-        norm_dx, norm_dy = 0, 0
-        if dx > 0: norm_dx = 1
-        elif dx < 0: norm_dx = -1
-        if dy > 0: norm_dy = 1
-        elif dy < 0: norm_dy = -1
-        if norm_dx == 0 and norm_dy == 0:
-            # print(f"DEBUG {self.name}: move_towards target ({target_x},{target_y}) reached.")
-            return
+        target = (target_x, target_y)
+        if (self.x, self.y) == target:
+            self._clear_cached_path()
+            return True
+
+        if not self._ensure_path_to(target, world):
+            failure_dx = 1 if target_x > self.x else -1 if target_x < self.x else 0
+            failure_dy = 1 if target_y > self.y else -1 if target_y < self.y else 0
+            if failure_dx != 0 or failure_dy != 0:
+                self._handle_failed_move_attempt(failure_dx, failure_dy, world)
+            return False
 
         speed_modifier = 1.0
         if hasattr(world, "get_travel_speed_modifier"):
@@ -775,49 +791,42 @@ class Character:
             if random.random() < 0.15:
                 weather_desc = getattr(world, "weather", "difficult").lower()
                 self.add_memory(f"Travel slowed by {weather_desc} conditions.")
-            return
+            return False
 
-        # print(f"DEBUG {self.name}: move_towards ({target_x},{target_y}). Current: ({self.x},{self.y}). Trying ({norm_dx},{norm_dy}) first.")
-        if self.move(norm_dx, norm_dy, world):
-            # print(f"DEBUG {self.name}: move_towards success via diagonal/direct ({norm_dx},{norm_dy}). New pos: ({self.x},{self.y})")
-            if speed_modifier > 1.0:
-                bonus_chance = min(speed_modifier - 1.0, 1.0)
-                if random.random() < bonus_chance:
-                    bonus_dx = target_x - self.x
-                    bonus_dy = target_y - self.y
-                    bonus_norm_dx = 0
-                    bonus_norm_dy = 0
-                    if bonus_dx > 0: bonus_norm_dx = 1
-                    elif bonus_dx < 0: bonus_norm_dx = -1
-                    if bonus_dy > 0: bonus_norm_dy = 1
-                    elif bonus_dy < 0: bonus_norm_dy = -1
-                    if bonus_norm_dx != 0 or bonus_norm_dy != 0:
-                        self.move(bonus_norm_dx, bonus_norm_dy, world)
-            return
+        steps_to_take = 1
+        if speed_modifier > 1.0:
+            bonus_chance = min(speed_modifier - 1.0, 1.0)
+            if random.random() < bonus_chance:
+                steps_to_take += 1
 
-        if norm_dx != 0 and norm_dy != 0: # If diagonal failed, try cardinal
-            # print(f"DEBUG {self.name}: move_towards diagonal failed. Trying cardinal x ({norm_dx},0).")
-            if self.move(norm_dx, 0, world):
-                if speed_modifier > 1.0 and random.random() < min(speed_modifier - 1.0, 1.0):
-                    bonus_dx = target_x - self.x
-                    if bonus_dx != 0:
-                        bonus_norm_dx = 1 if bonus_dx > 0 else -1
-                        self.move(bonus_norm_dx, 0, world)
-                # print(f"DEBUG {self.name}: move_towards success via cardinal x ({norm_dx},0). New pos: ({self.x},{self.y})")
-                return
-            # print(f"DEBUG {self.name}: move_towards cardinal x failed. Trying cardinal y (0,{norm_dy}).")
-            if self.move(0, norm_dy, world):
-                if speed_modifier > 1.0 and random.random() < min(speed_modifier - 1.0, 1.0):
-                    bonus_dy = target_y - self.y
-                    if bonus_dy != 0:
-                        bonus_norm_dy = 1 if bonus_dy > 0 else -1
-                        self.move(0, bonus_norm_dy, world)
-                # print(f"DEBUG {self.name}: move_towards success via cardinal y (0,{norm_dy}). New pos: ({self.x},{self.y})")
-                return
-        elif norm_dx != 0: # Only dx was non-zero, and self.move(norm_dx,0) must have failed if we are here
-            self._handle_failed_move_attempt(norm_dx, 0, world)
-        elif norm_dy != 0: # Only dy was non-zero, and self.move(0,norm_dy) must have failed
-            self._handle_failed_move_attempt(0, norm_dy, world)
+        moved = False
+        for _ in range(steps_to_take):
+            if not self._cached_path:
+                break
+
+            next_step = self._cached_path[0]
+            if not world.is_walkable(next_step[0], next_step[1], ignore_characters={self.name}):
+                self._clear_cached_path()
+                failure_dx = 1 if target_x > self.x else -1 if target_x < self.x else 0
+                failure_dy = 1 if target_y > self.y else -1 if target_y < self.y else 0
+                if failure_dx != 0 or failure_dy != 0:
+                    self._handle_failed_move_attempt(failure_dx, failure_dy, world)
+                return moved and (self.x, self.y) == target
+
+            if not world.reserve_tile(self.name, next_step):
+                self._clear_cached_path()
+                return moved and (self.x, self.y) == target
+
+            self._cached_path.popleft()
+            self.x, self.y = next_step
+            world.release_tile(self.name)
+            moved = True
+
+            if (self.x, self.y) == target:
+                self._clear_cached_path()
+                return True
+
+        return moved and (self.x, self.y) == target
         # print(f"DEBUG {self.name}: move_towards ({target_x},{target_y}) FAILED all attempts from ({self.x},{self.y}).")
 
 

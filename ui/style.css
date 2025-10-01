@@ -577,7 +577,12 @@ button:focus-visible {
     display: grid;
     grid-template-columns: 1fr;
     gap: 1.1rem;
-    overflow: hidden auto;
+    max-height: calc(var(--panel-max-height) - 140px);
+}
+
+#character-list {
+    position: relative;
+    overflow-y: auto;
     max-height: calc(var(--panel-max-height) - 140px);
     padding-right: 0.2rem;
 }
@@ -586,6 +591,18 @@ button:focus-visible {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
     gap: 0.75rem;
+}
+
+#character-list.virtualized-roster {
+    display: block;
+}
+
+#character-list.virtualized-roster .roster-window {
+    width: 100%;
+}
+
+#character-list.virtualized-roster .roster-spacer {
+    width: 100%;
 }
 
 .character-card {

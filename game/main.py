@@ -389,6 +389,7 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "weather": game_world.weather,
                     "grid_size": game_world.grid_size,
                     "grid": grid_repr,
+                    "map_revision": getattr(game_world, 'map_revision', 0),
                     "characters": characters_repr,
                     "event_log": event_log_repr,
                     "is_paused": game_paused,

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import random
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from .stockpile import Stockpile
 from .ledger import Ledger
@@ -22,6 +22,7 @@ from .data import (
 from .rumor import Rumor
 from . import config
 from .goal import Goal, GoalType
+from .pathfinding import Pathfinder
 
 if TYPE_CHECKING:
     from .character import Character
@@ -101,6 +102,10 @@ class World:
         self.demographic_history: List[Dict[str, Any]] = []
         self._last_population_event_day: Optional[int] = None
         self._resident_registry: Dict[str, Dict[str, Any]] = {}
+        self.map_revision: int = 0
+        self._tile_reservations: Dict[Tuple[int, int], str] = {}
+        self._reservation_by_character: Dict[str, Tuple[int, int]] = {}
+        self._pathfinder = Pathfinder()
 
     def update_rumors_daily(self):
         """Decays strength of all rumors and removes very weak ones."""
@@ -157,11 +162,84 @@ class World:
 
         return self.grid[x][y]
 
+    def is_walkable(
+        self,
+        x: int,
+        y: int,
+        *,
+        ignore_characters: Optional[Iterable[str]] = None,
+        goal: Optional[Tuple[int, int]] = None,
+    ) -> bool:
+        if not (0 <= x < self.grid_size[0] and 0 <= y < self.grid_size[1]):
+            return False
+
+        ignore_set: Set[str] = set(ignore_characters or [])
+        goal_override = goal == (x, y)
+
+        tile_type = self.grid[x][y]
+        if tile_type in config.IMPASSABLE_TERRAINS and not goal_override:
+            return False
+
+        reservation_holder = self._tile_reservations.get((x, y))
+        if reservation_holder and reservation_holder not in ignore_set and not goal_override:
+            return False
+
+        for char in self.characters:
+            if char.name in ignore_set:
+                continue
+            if (char.x, char.y) == (x, y):
+                if goal_override:
+                    continue
+                return False
+
+        return True
+
+    def reserve_tile(self, character_name: str, coords: Tuple[int, int]) -> bool:
+        current_holder = self._tile_reservations.get(coords)
+        if current_holder and current_holder != character_name:
+            return False
+
+        previous = self._reservation_by_character.get(character_name)
+        if previous == coords:
+            return True
+
+        if previous is not None and self._tile_reservations.get(previous) == character_name:
+            del self._tile_reservations[previous]
+
+        self._tile_reservations[coords] = character_name
+        self._reservation_by_character[character_name] = coords
+        return True
+
+    def release_tile(self, character_name: str, coords: Optional[Tuple[int, int]] = None) -> None:
+        if coords is None:
+            coords = self._reservation_by_character.pop(character_name, None)
+        else:
+            stored = self._reservation_by_character.get(character_name)
+            if stored == coords:
+                self._reservation_by_character.pop(character_name, None)
+
+        if coords and self._tile_reservations.get(coords) == character_name:
+            del self._tile_reservations[coords]
+
+    def clear_reservations_for_character(self, character_name: str) -> None:
+        self.release_tile(character_name)
+
+    def find_path(
+        self,
+        start: Tuple[int, int],
+        goal: Tuple[int, int],
+        *,
+        ignore_characters: Optional[Iterable[str]] = None,
+    ) -> List[Tuple[int, int]]:
+        return self._pathfinder.find_path(self, start, goal, ignore_characters=ignore_characters)
+
     def set_tile(self, x: int, y: int, tile_type: str):
         if 0 <= x < self.grid_size[0] and 0 <= y < self.grid_size[1]:
             is_building_tile = any((x,y) in b.get_tiles_occupied() for b in self.buildings)
             if not is_building_tile: # Only change base grid if no building is there
-                 self.grid[x][y] = tile_type
+                if self.grid[x][y] != tile_type:
+                    self.grid[x][y] = tile_type
+                    self.map_revision += 1
 
     def add_building(self, building: Building):
         if building not in self.buildings:
@@ -176,12 +254,14 @@ class World:
                         return
             self.buildings.append(building)
             print(f"Building: {building.display_name} added at {building.location} to world model.")
+            self.map_revision += 1
 
 
     def remove_building(self, building: Building):
         if building in self.buildings:
             self.buildings.remove(building)
             print(f"Removed building: {building.display_name} from {building.location}.")
+            self.map_revision += 1
 
     def get_building_at(self, x: int, y: int) -> Optional[Building]:
         for building in self.buildings:
@@ -686,6 +766,7 @@ class World:
         if character in self.characters:
             return
         self.characters.append(character)
+        self.clear_reservations_for_character(character.name)
         if hasattr(character, "arrival_day") and character.arrival_day is None and self.game_time:
             character.arrival_day = self.game_time.current_day
         self._register_character_demographics(character)
@@ -695,6 +776,7 @@ class World:
         if character not in self.characters:
             return
         self.characters.remove(character)
+        self.clear_reservations_for_character(character.name)
         if character.name in self._resident_registry:
             del self._resident_registry[character.name]
         self._update_population_stats(delta=-1)
@@ -760,6 +842,7 @@ class World:
             self.add_event_log_message(
                 f"Stockpile '{stockpile.name}' registered at tiles {stockpile.deposit_tiles}."
             )
+            self.map_revision += 1
 
 
     def get_stockpiles_for_resource(self, resource_name: str) -> List[Stockpile]:

@@ -10,6 +10,9 @@ TICKS_PER_DAY = 10
 DAYS_PER_SEASON = 10 # Example, can be adjusted
 MAX_SIMULATION_DAYS = 20 # Max days the simulation runs for in headless/test mode.
 
+# Navigation & movement
+IMPASSABLE_TERRAINS = {"Mountain", "Water", "DeepWater", "Chasm", "Void"}
+
 # Day & Night Phases
 DAY_PHASE_CONFIG = [
     {"key": "dawn", "name": "Dawn Preparations", "start_tick": 0, "description": "Citizens rise, stretch, and ready for the day."},
