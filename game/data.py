@@ -72,6 +72,72 @@ BLUEPRINTS = {
     # Add other items as needed, e.g., "Wooden Shield", "Stone Hammer"
 }
 
+# --- Demographic Pools & Archetypes ---
+
+CITIZEN_NAME_POOL = {
+    "given": [
+        "Aldric", "Bryn", "Calla", "Dain", "Eira", "Fen", "Galen", "Helena", "Ivor", "Jora",
+        "Kael", "Lysa", "Merrit", "Nia", "Oren", "Perrin", "Quinn", "Rowan", "Sera", "Tavin",
+        "Ulric", "Vela", "Wren", "Yorik", "Zara",
+    ],
+    "surnames": [
+        "Stonebrook", "Ironvale", "Thornfield", "Riverwynd", "Oakenshield", "Stormwatch",
+        "Ashgrove", "Frostmere", "Goldbarrow", "Nightbloom",
+    ],
+}
+
+CITIZEN_PERSONALITY_POOL = [
+    "Optimistic",
+    "Stoic",
+    "Pragmatic",
+    "Cheerful",
+    "Introspective",
+    "Ambitious",
+]
+
+CITIZEN_TRAIT_POOL = [
+    "Diligent",
+    "Curious",
+    "Compassionate",
+    "Organized",
+    "Tough",
+    "Patient",
+    "Resourceful",
+]
+
+MIGRANT_ARCHETYPES = [
+    {
+        "job": "Farmer",
+        "personality": "Steadfast",
+        "traits": ["Diligent", "Patient"],
+        "skills": {"Farming": 2},
+    },
+    {
+        "job": "Woodcutter",
+        "personality": "Pragmatic",
+        "traits": ["Tough", "Resourceful"],
+        "skills": {"Woodcutting": 2},
+    },
+    {
+        "job": "Hunter",
+        "personality": "Observant",
+        "traits": ["Curious", "Resourceful"],
+        "skills": {"Hunting": 2},
+    },
+    {
+        "job": "Stonemason",
+        "personality": "Methodical",
+        "traits": ["Organized", "Patient"],
+        "skills": {"Stonemasonry": 2},
+    },
+    {
+        "job": "Herbalist",
+        "personality": "Gentle",
+        "traits": ["Compassionate", "Curious"],
+        "skills": {"Herbalism": 2},
+    },
+]
+
 # Defines tasks that may require tools, the skill they use, and what they produce.
 # This helps decouple the action (e.g., "Chop Wood") from the specific tool item (e.g., "Stone Axe").
 JOB_TASK_DEFINITIONS = {

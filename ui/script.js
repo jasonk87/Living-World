@@ -19,6 +19,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const hudPopulationValue = document.getElementById('hud-population-value');
     const hudSeasonValue = document.getElementById('hud-season-value');
     const hudWeatherValue = document.getElementById('hud-weather-value');
+    const hudPhaseValue = document.getElementById('hud-phase-value');
     const hudTravelValue = document.getElementById('hud-travel-value');
     const hudElectionValue = document.getElementById('hud-election-value');
     const hudTreasuryValue = document.getElementById('hud-treasury-value');
@@ -33,6 +34,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const environmentModifierList = document.getElementById('environment-modifier-list');
     const rumorFeedList = document.getElementById('rumor-feed-list');
     const housingStatusList = document.getElementById('housing-status-list');
+    const resourceNodeList = document.getElementById('resource-node-list');
+    const populationEventList = document.getElementById('population-event-list');
+    const weatherEventNote = document.getElementById('environment-weather-event');
     const characterSearchInput = document.getElementById('character-search');
     const infoPanel = document.getElementById('info-panel');
 
@@ -89,6 +93,29 @@ document.addEventListener('DOMContentLoaded', () => {
         const report = gameState.daily_economy_report || {};
         const environment = gameState.environment_effects || report.environment || {};
         const housingSnapshot = gameState.housing || report.housing || {};
+        const populationSnapshot = gameState.population || report.population_snapshot || {};
+
+        if (hudPopulationValue) {
+            const totalPopulation = typeof populationSnapshot.population === 'number'
+                ? populationSnapshot.population
+                : Array.isArray(gameState.characters)
+                    ? gameState.characters.length
+                    : null;
+            if (totalPopulation !== null) {
+                const births = populationSnapshot.births_today ?? populationSnapshot.births ?? 0;
+                const migrants = populationSnapshot.migrants_today ?? populationSnapshot.migrants ?? 0;
+                const departures = populationSnapshot.departures_today ?? populationSnapshot.departures ?? 0;
+                const deltas = [];
+                if (births) deltas.push(`+${births} birth${births === 1 ? '' : 's'}`);
+                if (migrants) deltas.push(`+${migrants} arrival${migrants === 1 ? '' : 's'}`);
+                if (departures) deltas.push(`-${departures} departure${departures === 1 ? '' : 's'}`);
+                hudPopulationValue.textContent = deltas.length
+                    ? `${totalPopulation} (${deltas.join(' · ')})`
+                    : `${totalPopulation}`;
+            } else {
+                hudPopulationValue.textContent = '—';
+            }
+        }
 
         if (hudTreasuryValue) {
             const treasury = typeof gameState.treasury === 'number' ? gameState.treasury : null;
@@ -201,6 +228,69 @@ document.addEventListener('DOMContentLoaded', () => {
                             ? ` (Day ${entry.day_incurred})`
                             : '';
                         return `<li><strong>${entry.character}</strong>: ${amount}c for ${reason}${day}</li>`;
+                    })
+                    .join('');
+            }
+        }
+
+        if (weatherEventNote) {
+            const weatherEvent = environment.weather_event || gameState.active_weather_event;
+            if (weatherEvent && weatherEvent.name) {
+                const severity = typeof weatherEvent.severity === 'number' ? `Severity ${weatherEvent.severity}` : null;
+                const endDay = typeof weatherEvent.end_day === 'number' ? `Ends Day ${weatherEvent.end_day}` : null;
+                const details = [severity, endDay].filter(Boolean).join(' · ');
+                weatherEventNote.textContent = details ? `${weatherEvent.name} (${details})` : weatherEvent.name;
+                weatherEventNote.classList.remove('muted');
+            } else {
+                weatherEventNote.textContent = 'Calm skies.';
+                weatherEventNote.classList.add('muted');
+            }
+        }
+
+        if (resourceNodeList) {
+            const nodes = Array.isArray(gameState.resource_nodes) ? gameState.resource_nodes : [];
+            if (!nodes.length) {
+                resourceNodeList.innerHTML = '<li class="empty">No tracked nodes.</li>';
+            } else {
+                const sortedNodes = nodes
+                    .slice()
+                    .sort((a, b) => {
+                        if (a.depleted === b.depleted) {
+                            return (b.durability || 0) - (a.durability || 0);
+                        }
+                        return a.depleted ? 1 : -1;
+                    })
+                    .slice(0, 6);
+                resourceNodeList.innerHTML = sortedNodes
+                    .map(node => {
+                        const loc = Array.isArray(node.location) ? node.location.join(',') : '—';
+                        const status = node.depleted
+                            ? `Regrowth ${(node.regrowth_progress * 100 || 0).toFixed(0)}%`
+                            : `${node.durability}/${node.max_durability}`;
+                        return `<li><strong>${node.resource}</strong> @ (${loc}) • ${status}</li>`;
+                    })
+                    .join('');
+            }
+        }
+
+        if (populationEventList) {
+            const popEvents = Array.isArray(report.population_events) ? report.population_events : [];
+            if (!popEvents.length) {
+                populationEventList.innerHTML = '<li class="empty">No changes today.</li>';
+            } else {
+                const recentEvents = popEvents.slice(-5).reverse();
+                populationEventList.innerHTML = recentEvents
+                    .map(event => {
+                        if (event.type === 'birth') {
+                            return `<li>Birth: <strong>${event.name}</strong> (parent ${event.parent || 'unknown'})</li>`;
+                        }
+                        if (event.type === 'arrival') {
+                            return `<li>Arrival: <strong>${event.name}</strong> joins as ${event.job || 'laborer'}.</li>`;
+                        }
+                        if (event.type === 'departure') {
+                            return `<li>Departure: <strong>${event.name}</strong> left (${event.reason || 'unknown'}).</li>`;
+                        }
+                        return `<li>${event.summary || 'Population change recorded.'}</li>`;
                     })
                     .join('');
             }
@@ -508,6 +598,16 @@ document.addEventListener('DOMContentLoaded', () => {
             const weatherText = [weatherLabel, gameState.temperature_label].filter(Boolean).join(' • ');
             hudWeatherValue.textContent = weatherText || weatherLabel || 'Calm';
         }
+        if (hudPhaseValue) {
+            const phase = environment.phase || gameState.current_phase || {};
+            if (phase && (phase.name || phase.key)) {
+                const phaseName = phase.name || String(phase.key).replace(/_/g, ' ');
+                const tickLabel = typeof phase.tick === 'number' ? `Tick ${phase.tick}` : '';
+                hudPhaseValue.textContent = tickLabel ? `${phaseName} (${tickLabel})` : phaseName;
+            } else {
+                hudPhaseValue.textContent = '—';
+            }
+        }
         if (hudTravelValue) {
             const travelSpeed = typeof environment.travel_speed === 'number'
                 ? environment.travel_speed
@@ -536,12 +636,23 @@ document.addEventListener('DOMContentLoaded', () => {
         const buildingsCount = Array.isArray(gameState.buildings) ? gameState.buildings.length : 0;
         const population = Array.isArray(gameState.characters) ? gameState.characters.length : 0;
         const metaParts = [];
+        const phase = (gameState.environment_effects && gameState.environment_effects.phase)
+            || gameState.current_phase
+            || {};
+        if (phase && (phase.name || phase.key)) {
+            metaParts.push(phase.name || String(phase.key).replace(/_/g, ' '));
+        }
         if (gridSize.length === 2) {
             metaParts.push(`${gridSize[0]}×${gridSize[1]} grid`);
         }
         metaParts.push(`${population} citizen${population === 1 ? '' : 's'}`);
         if (buildingsCount) {
             metaParts.push(`${buildingsCount} structure${buildingsCount === 1 ? '' : 's'}`);
+        }
+        const weatherEvent = (gameState.environment_effects && gameState.environment_effects.weather_event)
+            || gameState.active_weather_event;
+        if (weatherEvent && weatherEvent.name) {
+            metaParts.push(`${weatherEvent.name}`);
         }
         mapMeta.textContent = metaParts.join(' • ');
     }

@@ -3,14 +3,22 @@ from __future__ import annotations
 
 import random
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
 
 from .stockpile import Stockpile
 from .ledger import Ledger
 from .time import Time
 from .work_order import WorkOrder
 from .building import Building
-from .data import STRUCTURE_BLUEPRINTS, MARKET_PRICES, BLUEPRINTS
+from .data import (
+    STRUCTURE_BLUEPRINTS,
+    MARKET_PRICES,
+    BLUEPRINTS,
+    CITIZEN_NAME_POOL,
+    CITIZEN_PERSONALITY_POOL,
+    CITIZEN_TRAIT_POOL,
+    MIGRANT_ARCHETYPES,
+)
 from .rumor import Rumor
 from . import config
 from .goal import Goal, GoalType
@@ -28,7 +36,7 @@ class World:
     def __init__(self, grid_size: tuple[int, int] = (10, 10), game_time_ref: Optional[Time] = None):
         self.grid_size = grid_size
         self.grid = [["Grass" for _ in range(grid_size[1])] for _ in range(grid_size[0])]
-        self.resources: Dict[str, List[Tuple[int,int]]] = {}
+        self.resources: Dict[str, List[Dict[str, Any]]] = {}
         self.season_index = 0
         self.season = World.SEASONS[self.season_index]
         self.weather = "Sunny"
@@ -78,6 +86,21 @@ class World:
         self._residential_assignments: Dict[str, Tuple[int, int]] = {}
         self.last_housing_evaluation_day: Optional[int] = None
         self.latest_housing_snapshot: Dict[str, Any] = self.get_housing_snapshot()
+        self.current_phase: Dict[str, Any] = {}
+        self.phase_history: List[Dict[str, Any]] = []
+        self._last_phase_day: Optional[int] = None
+        self.active_weather_event: Optional[Dict[str, Any]] = None
+        self.weather_event_history: List[Dict[str, Any]] = []
+        self.population_stats: Dict[str, Any] = {
+            "population": 0,
+            "births_today": 0,
+            "migrants_today": 0,
+            "departures_today": 0,
+            "last_updated_day": 0,
+        }
+        self.demographic_history: List[Dict[str, Any]] = []
+        self._last_population_event_day: Optional[int] = None
+        self._resident_registry: Dict[str, Dict[str, Any]] = {}
 
     def update_rumors_daily(self):
         """Decays strength of all rumors and removes very weak ones."""
@@ -310,26 +333,344 @@ class World:
     #     return True
 
 
-    def add_resource(self, resource_name: str, location: tuple[int, int], tile_becomes: str = None):
+    def add_resource(
+        self,
+        resource_name: str,
+        location: tuple[int, int],
+        tile_becomes: Optional[str] = None,
+        durability: Optional[int] = None,
+    ):
         x, y = location
-        if not (0 <= x < self.grid_size[0] and 0 <= y < self.grid_size[1]): return
-        if self.get_building_at(x,y): return
-        if resource_name not in self.resources: self.resources[resource_name] = []
-        self.resources[resource_name].append(location)
-        current_tile = self.grid[x][y] # Check base grid before overlaying
-        if tile_becomes:
-            if current_tile != tile_becomes : self.set_tile(x, y, tile_becomes)
-        elif current_tile == "Grass": self.set_tile(x,y, resource_name)
+        if not (0 <= x < self.grid_size[0] and 0 <= y < self.grid_size[1]):
+            return
+        if self.get_building_at(x, y):
+            return
+
+        node_list = self.resources.setdefault(resource_name, [])
+        current_tile = self.grid[x][y]
+        max_durability = durability if durability is not None else config.RESOURCE_NODE_DURABILITY.get(resource_name, 5)
+        node = {
+            "resource": resource_name,
+            "location": (x, y),
+            "durability": max_durability,
+            "max_durability": max_durability,
+            "regrowth_progress": 0.0,
+            "depleted": False,
+            "active_tile": tile_becomes or current_tile,
+            "original_tile": current_tile,
+            "depleted_tile": config.RESOURCE_NODE_DEPLETED_TILES.get(resource_name, current_tile),
+        }
+        node_list.append(node)
+
+        if tile_becomes and current_tile != tile_becomes:
+            self.set_tile(x, y, tile_becomes)
+        elif not tile_becomes and current_tile == "Grass":
+            self.set_tile(x, y, resource_name)
 
 
-    def get_resources(self, resource_name: str) -> List[tuple[int, int]]:
-        return list(self.resources.get(resource_name, []))
+    def get_resources(self, resource_name: str) -> List[Any]:
+        nodes = self.resources.get(resource_name, [])
+        return [node for node in nodes if not node.get("depleted", False)]
+
+    def is_resource_node(self, resource_name: str, location: Tuple[int, int]) -> bool:
+        for node in self.resources.get(resource_name, []):
+            if tuple(node.get("location", ())) == tuple(location):
+                return not node.get("depleted", False)
+        return False
+
+    def record_resource_harvest(self, resource_name: str, location: Tuple[int, int], amount: int = 1) -> None:
+        nodes = self.resources.get(resource_name, [])
+        for node in nodes:
+            if tuple(node.get("location", ())) != tuple(location):
+                continue
+            if node.get("depleted") or node.get("max_durability", 0) >= 999:
+                return
+            node["durability"] = max(0, node.get("durability", 0) - amount)
+            node.setdefault("harvested_today", 0)
+            node["harvested_today"] += amount
+            if node["durability"] <= 0:
+                node["depleted"] = True
+                node["regrowth_progress"] = 0.0
+                depleted_tile = node.get("depleted_tile")
+                if depleted_tile:
+                    self.set_tile(location[0], location[1], depleted_tile)
+                self.add_event_log_message(
+                    f"{resource_name} exhausted at {location}. The area now shows {depleted_tile or 'scars of overuse'}."
+                )
+                self.add_notable_event(
+                    "ResourceDepleted",
+                    {
+                        "summary": f"{resource_name} depleted at {location}",
+                        "resource": resource_name,
+                        "location": location,
+                    },
+                )
+            return
+
+    def _advance_resource_regrowth(self) -> None:
+        for resource_name, nodes in self.resources.items():
+            regrowth_days = config.RESOURCE_NODE_REGROWTH_DAYS.get(resource_name)
+            if not regrowth_days:
+                for node in nodes:
+                    node.pop("harvested_today", None)
+                continue
+            regrowth_increment = 1.0 / max(1, regrowth_days)
+            env_modifier = self.resource_yield_multipliers.get(resource_name, 1.0)
+            env_modifier = max(0.25, env_modifier)
+            for node in nodes:
+                node.pop("harvested_today", None)
+                if not node.get("depleted"):
+                    continue
+                node["regrowth_progress"] += regrowth_increment * env_modifier
+                if node["regrowth_progress"] >= 1.0:
+                    node["regrowth_progress"] = 0.0
+                    node["depleted"] = False
+                    node["durability"] = node.get("max_durability", 1)
+                    active_tile = node.get("active_tile") or node.get("original_tile")
+                    if active_tile:
+                        self.set_tile(node["location"][0], node["location"][1], active_tile)
+                    self.add_event_log_message(
+                        f"{resource_name} has regrown at {node['location']} after a period of rest."
+                    )
+                    self.add_notable_event(
+                        "ResourceRegrowth",
+                        {
+                            "summary": f"{resource_name} regrew at {node['location']}",
+                            "resource": resource_name,
+                            "location": tuple(node["location"]),
+                        },
+                    )
+
+    def get_resource_nodes_snapshot(self) -> List[Dict[str, Any]]:
+        snapshot: List[Dict[str, Any]] = []
+        for resource_name, nodes in self.resources.items():
+            for node in nodes:
+                snapshot.append(
+                    {
+                        "resource": resource_name,
+                        "location": tuple(node.get("location", (0, 0))),
+                        "durability": node.get("durability"),
+                        "max_durability": node.get("max_durability"),
+                        "depleted": node.get("depleted", False),
+                        "regrowth_progress": round(node.get("regrowth_progress", 0.0), 3),
+                    }
+                )
+        return snapshot
 
     def update_weather(self, new_weather: str):
         if self.weather != new_weather:
             self.weather = new_weather
             self.add_event_log_message(f"Weather shifts to {new_weather}.")
             self._recalculate_environment_effects()
+
+    def update_day_phase(self) -> None:
+        if not self.game_time:
+            return
+        phase_info = self.game_time.get_phase()
+        if not isinstance(phase_info, dict):
+            phase_info = {"name": str(phase_info), "key": str(phase_info).lower()}
+        previous_key = self.current_phase.get("key") if self.current_phase else None
+        new_key = phase_info.get("key")
+        if previous_key == new_key and self.current_phase.get("day") == self.game_time.current_day:
+            return
+
+        phase_record = {
+            "name": phase_info.get("name", new_key or "Phase"),
+            "key": new_key,
+            "description": phase_info.get("description"),
+            "day": self.game_time.current_day,
+            "tick": self.game_time.current_tick,
+        }
+        self.current_phase = phase_record
+        self.phase_history.append(phase_record)
+        if len(self.phase_history) > 24:
+            self.phase_history.pop(0)
+
+        description_suffix = f" — {phase_info.get('description')}" if phase_info.get("description") else ""
+        self.add_event_log_message(
+            f"Day phase shifts to {phase_record['name']}{description_suffix}."
+        )
+        self.add_notable_event(
+            "PhaseShift",
+            {
+                "summary": f"Phase changed to {phase_record['name']}",
+                "phase": phase_record,
+            },
+        )
+
+    def get_current_phase(self) -> Dict[str, Any]:
+        return dict(self.current_phase) if self.current_phase else {}
+
+    def _update_weather_event_state(self) -> None:
+        if not self.active_weather_event or not self.game_time:
+            return
+        if self.game_time.current_day <= self.active_weather_event.get("end_day", -1):
+            return
+
+        event = self.active_weather_event
+        effect_key = event.get("effect_key")
+        if effect_key and effect_key in self.active_world_effects:
+            del self.active_world_effects[effect_key]
+            self._recalculate_environment_effects()
+        self.add_event_log_message(f"{event.get('name', 'Severe weather')} has passed.")
+        self.add_notable_event(
+            "WeatherEventEnd",
+            {
+                "summary": f"{event.get('name', 'Weather event')} concluded",
+                "event": event,
+            },
+        )
+        self.weather_event_history.append(event)
+        self.active_weather_event = None
+
+    def _start_weather_event(self, name: str, definition: Dict[str, Any]) -> None:
+        if not self.game_time:
+            return
+        severity_range = definition.get("severity_range", (1, 1))
+        duration_range = definition.get("duration_days", (1, 1))
+        severity = random.randint(severity_range[0], severity_range[1])
+        duration = random.randint(duration_range[0], duration_range[1])
+        end_day = self.game_time.current_day + max(0, duration - 1)
+        effect_key = f"WeatherEvent:{name}"
+
+        resource_bonuses = []
+        for resource, multiplier in definition.get("resource_yield", {}).items():
+            resource_bonuses.append({"resource": resource, "multiplier": multiplier})
+
+        effect_data = {
+            "resource_yield_bonus": resource_bonuses or None,
+            "travel_speed_multiplier": definition.get("travel_speed_multiplier"),
+            "market_price_adjustment": definition.get("market_multipliers", {}),
+            "expires_day": end_day,
+        }
+        # Clean None entries for consistent processing
+        effect_data = {k: v for k, v in effect_data.items() if v}
+
+        if effect_data:
+            self.add_temporary_world_effect(effect_key, effect_data)
+
+        event_instance = {
+            "name": name,
+            "severity": severity,
+            "start_day": self.game_time.current_day,
+            "end_day": end_day,
+            "effect_key": effect_key if effect_data else None,
+            "requires_shelter": definition.get("requires_shelter", False),
+            "hazards": definition.get("hazards", {}),
+        }
+        self.active_weather_event = event_instance
+        self.add_event_log_message(
+            f"{name} sweeps the settlement (severity {severity}) and is expected to last {duration} day{'s' if duration != 1 else ''}."
+        )
+        self.add_notable_event(
+            "WeatherEvent",
+            {
+                "summary": f"{name} in effect (severity {severity})",
+                "event": event_instance,
+            },
+        )
+
+    def _maybe_trigger_weather_event(self) -> None:
+        if self.active_weather_event or not self.game_time:
+            return
+        definitions = getattr(config, "WEATHER_EVENT_DEFINITIONS", {})
+        if not definitions:
+            return
+        candidates = []
+        for name, definition in definitions.items():
+            seasons = definition.get("seasons")
+            if seasons and self.season not in seasons:
+                continue
+            weather_states = definition.get("weather")
+            if weather_states and self.weather not in weather_states:
+                continue
+            chance = definition.get("base_chance", 0.0)
+            if chance <= 0:
+                continue
+            candidates.append((name, definition, chance))
+        random.shuffle(candidates)
+        for name, definition, chance in candidates:
+            if random.random() < chance:
+                self._start_weather_event(name, definition)
+                break
+
+    def get_active_weather_event(self) -> Optional[Dict[str, Any]]:
+        if not self.active_weather_event:
+            return None
+        return deepcopy(self.active_weather_event)
+
+    def _generate_citizen_profile(
+        self,
+        *,
+        job: str = "Unemployed",
+        age: Optional[int] = None,
+        needs: Optional[Dict[str, int]] = None,
+        traits: Optional[List[str]] = None,
+        personality: Optional[str] = None,
+        origin: Optional[str] = None,
+        citizenship: str = "Resident",
+        skills: Optional[Dict[str, int]] = None,
+    ) -> Dict[str, Any]:
+        given = random.choice(CITIZEN_NAME_POOL.get("given", ["Citizen"]))
+        surname = random.choice(CITIZEN_NAME_POOL.get("surnames", ["of Nowhere"]))
+        base_name = f"{given} {surname}"
+        existing_names = {char.name for char in self.characters}
+        name = base_name
+        suffix = 2
+        while name in existing_names:
+            name = f"{base_name} {suffix}"
+            suffix += 1
+
+        if traits is None:
+            traits = random.sample(CITIZEN_TRAIT_POOL, k=min(2, len(CITIZEN_TRAIT_POOL)))
+        if personality is None:
+            personality = random.choice(CITIZEN_PERSONALITY_POOL)
+
+        profile = {
+            "name": name,
+            "job": job,
+            "age": age if age is not None else random.randint(18, 45),
+            "needs": needs,
+            "traits": traits,
+            "personality": personality,
+            "origin": origin or "Local",
+            "citizenship": citizenship,
+            "skills": skills or {},
+        }
+        return profile
+
+    def _spawn_new_citizen(self, profile: Dict[str, Any], *, arrival_reason: str) -> Optional['Character']:
+        from .character import Character
+
+        needs = profile.get("needs")
+        if needs is None:
+            needs = {
+                "Hunger": 85,
+                "Thirst": 85,
+                "Energy": 100,
+                "Social": 75,
+                "Safety": config.NEED_SAFETY_DEFAULT,
+                "Belonging": config.NEED_BELONGING_DEFAULT,
+                "Esteem": config.NEED_ESTEEM_DEFAULT,
+            }
+        character = Character(
+            name=profile["name"],
+            personality=profile.get("personality", "Even-tempered"),
+            traits=list(profile.get("traits", [])),
+            skills=profile.get("skills", {}),
+            x=profile.get("x", self.market_location[0]),
+            y=profile.get("y", self.market_location[1]),
+            needs=needs,
+            job=profile.get("job", "Unemployed"),
+            rank=profile.get("rank", "Worker"),
+            age=profile.get("age"),
+            origin=profile.get("origin"),
+            citizenship=profile.get("citizenship", "Resident"),
+            arrival_day=self.game_time.current_day if self.game_time else None,
+        )
+        self.add_character(character)
+        self.add_event_log_message(arrival_reason)
+        return character
 
     def advance_season(self):
         self.season_index = (self.season_index + 1) % len(World.SEASONS)
@@ -342,10 +683,35 @@ class World:
         self._recalculate_environment_effects()
 
     def add_character(self, character: 'Character'):
-        if character not in self.characters: self.characters.append(character)
+        if character in self.characters:
+            return
+        self.characters.append(character)
+        if hasattr(character, "arrival_day") and character.arrival_day is None and self.game_time:
+            character.arrival_day = self.game_time.current_day
+        self._register_character_demographics(character)
+        self._update_population_stats(delta=1)
 
     def remove_character(self, character: 'Character'):
-        if character in self.characters: self.characters.remove(character)
+        if character not in self.characters:
+            return
+        self.characters.remove(character)
+        if character.name in self._resident_registry:
+            del self._resident_registry[character.name]
+        self._update_population_stats(delta=-1)
+
+    def _register_character_demographics(self, character: 'Character') -> None:
+        record = {
+            "age": getattr(character, "age_years", None),
+            "origin": getattr(character, "origin", "Unknown"),
+            "citizenship": getattr(character, "citizenship_status", "Resident"),
+            "arrival_day": getattr(character, "arrival_day", self.game_time.current_day if self.game_time else None),
+        }
+        self._resident_registry[character.name] = record
+
+    def _update_population_stats(self, delta: int = 0) -> None:
+        self.population_stats["population"] = max(0, len(self.characters))
+        if self.game_time:
+            self.population_stats["last_updated_day"] = self.game_time.current_day
 
     def get_characters_at_location(self, x: int, y: int) -> List['Character']:
         return [char for char in self.characters if char.x == x and char.y == y]
@@ -958,16 +1324,19 @@ class World:
         for effect_key, effect_data in list(self.active_world_effects.items()):
             resource_bonus = effect_data.get("resource_yield_bonus")
             if resource_bonus:
-                res_name = resource_bonus.get("resource")
-                multiplier = resource_bonus.get("multiplier", 1.0)
-                apply_resource(res_name, multiplier, f"Policy: {effect_key}")
+                bonuses = resource_bonus if isinstance(resource_bonus, list) else [resource_bonus]
+                for bonus in bonuses:
+                    res_name = bonus.get("resource")
+                    multiplier = bonus.get("multiplier", 1.0)
+                    if res_name:
+                        apply_resource(res_name, multiplier, f"Effect: {effect_key}")
             travel_bonus = effect_data.get("travel_speed_multiplier")
             if travel_bonus:
-                apply_travel(travel_bonus, f"Policy: {effect_key}")
+                apply_travel(travel_bonus, f"Effect: {effect_key}")
             market_bonus = effect_data.get("market_price_adjustment")
             if market_bonus:
                 for item_name, multiplier in market_bonus.items():
-                    apply_market(item_name, multiplier, f"Policy: {effect_key}")
+                    apply_market(item_name, multiplier, f"Effect: {effect_key}")
 
         # Economic pressures adjust prices slightly
         pressures = self.identify_resource_pressures()
@@ -1005,6 +1374,8 @@ class World:
             "travel_sources": contribution_map.get("travel_sources", []),
             "active_effects": list(self.active_world_effects.keys()),
         }
+        snapshot["phase"] = self.get_current_phase()
+        snapshot["weather_event"] = self.get_active_weather_event()
         self.environment_effect_snapshot = snapshot
 
         if previous_snapshot != snapshot:
@@ -1700,6 +2071,165 @@ class World:
         self.todays_wages_paid += paid_total
         return paid_total
 
+    def evaluate_population_dynamics(
+        self,
+        economy_report: Dict[str, Any],
+        housing_snapshot: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if not self.game_time:
+            return
+
+        day = self.game_time.current_day
+        self.population_stats.update(
+            {
+                "population": len(self.characters),
+                "births_today": 0,
+                "migrants_today": 0,
+                "departures_today": 0,
+                "last_updated_day": day,
+            }
+        )
+
+        for character in list(self.characters):
+            if hasattr(character, "advance_age"):
+                character.advance_age(self)
+                if character.name in self._resident_registry:
+                    self._resident_registry[character.name]["age"] = getattr(character, "age_years", None)
+
+        available_beds = None
+        homeless_names: Set[str] = set()
+        if housing_snapshot:
+            available_beds = housing_snapshot.get("available_beds")
+            homeless_names = set(housing_snapshot.get("homeless_characters", []))
+
+        food_deficit = economy_report.get("food_deficit", 0)
+        water_deficit = economy_report.get("water_deficit", 0)
+        pressures = self.identify_resource_pressures()
+
+        population_events: List[Dict[str, Any]] = []
+
+        birth_threshold = getattr(config, "POPULATION_BELONGING_THRESHOLD_FOR_BIRTH", 60)
+        birth_chance = getattr(config, "POPULATION_BIRTH_BASE_CHANCE", 0.0)
+        if (
+            available_beds
+            and available_beds > 0
+            and food_deficit <= 0
+            and water_deficit <= 0
+            and random.random() < birth_chance
+        ):
+            eligible_parents = [
+                char
+                for char in self.characters
+                if getattr(char, "age_years", 18) >= 18
+                and getattr(char, "age_years", 18) <= 45
+                and char.needs.get("Belonging", 0) >= birth_threshold
+                and not getattr(char, "is_sick", False)
+            ]
+            if eligible_parents:
+                parent = random.choice(eligible_parents)
+                child_profile = self._generate_citizen_profile(
+                    job="Unemployed",
+                    age=0,
+                    needs=dict(config.DEFAULT_CHILD_NEEDS),
+                    traits=["Innocent"],
+                    personality="Curious",
+                    origin=f"Born to {parent.name}",
+                )
+                child_profile["x"], child_profile["y"] = parent.x, parent.y
+                child = self._spawn_new_citizen(
+                    child_profile,
+                    arrival_reason=f"A new child, {child_profile['name']}, is born into {parent.name}'s household.",
+                )
+                if child:
+                    self.population_stats["births_today"] += 1
+                    child.resting_at_home = True
+                    if parent.home_location:
+                        building = self.get_building_by_location(parent.home_location)
+                        if building:
+                            building.add_occupant(child.name)
+                            self._residential_assignments[child.name] = building.location
+                            child.home_location = building.location
+                    population_events.append({"type": "birth", "name": child.name, "parent": parent.name})
+
+        migration_chance = getattr(config, "POPULATION_MIGRATION_BASE_CHANCE", 0.0)
+        surplus_resources = [p for p in pressures if p.get("status") == "surplus"]
+        if (
+            available_beds
+            and available_beds > 0
+            and food_deficit <= 0
+            and water_deficit <= 0
+            and surplus_resources
+            and random.random() < migration_chance
+        ):
+            archetype = random.choice(MIGRANT_ARCHETYPES)
+            migrant_profile = self._generate_citizen_profile(
+                job=archetype.get("job", "Laborer"),
+                traits=archetype.get("traits"),
+                personality=archetype.get("personality"),
+                skills=archetype.get("skills"),
+                origin="Nearby hamlet",
+                citizenship="Immigrant",
+            )
+            migrant = self._spawn_new_citizen(
+                migrant_profile,
+                arrival_reason=f"Migrant {migrant_profile['name']} arrives seeking {migrant_profile['job']} work.",
+            )
+            if migrant:
+                self.population_stats["migrants_today"] += 1
+                self.claim_residential_spot(migrant)
+                population_events.append({"type": "arrival", "name": migrant.name, "job": migrant.job})
+
+        departure_chance = getattr(config, "POPULATION_DEPARTURE_BASE_CHANCE", 0.0)
+        hardship = 0.0
+        if food_deficit > 0:
+            hardship += 0.15
+        if water_deficit > 0:
+            hardship += 0.15
+        if homeless_names:
+            hardship += getattr(config, "POPULATION_DEPARTURE_HOMELESS_WEIGHT", 0.2)
+
+        departure_candidates = [
+            char
+            for char in self.characters
+            if getattr(char, "mood_score", 0) <= getattr(config, "POPULATION_DEPARTURE_MOOD_THRESHOLD", -35)
+            or char.name in homeless_names
+        ]
+        departure_candidates = [
+            char for char in departure_candidates if char.rank not in ["Mayor", "Duke", "Baroness", "Noble Lord"]
+        ]
+        if (
+            departure_candidates
+            and len(self.characters) > 3
+            and random.random() < (departure_chance + hardship)
+        ):
+            leaving = random.choice(departure_candidates)
+            reason = "homelessness" if leaving.name in homeless_names else "hardship"
+            self.add_event_log_message(f"{leaving.name} departs the settlement due to {reason}.")
+            self.add_notable_event(
+                "Departure",
+                {"summary": f"{leaving.name} left because of {reason}.", "name": leaving.name, "reason": reason},
+            )
+            self.remove_character(leaving)
+            self.population_stats["departures_today"] += 1
+            population_events.append({"type": "departure", "name": leaving.name, "reason": reason})
+
+        self.population_stats["population"] = len(self.characters)
+        self.demographic_history.append(
+            {
+                "day": day,
+                "population": self.population_stats["population"],
+                "births": self.population_stats["births_today"],
+                "migrants": self.population_stats["migrants_today"],
+                "departures": self.population_stats["departures_today"],
+            }
+        )
+        if len(self.demographic_history) > 30:
+            self.demographic_history.pop(0)
+
+        if population_events:
+            economy_report.setdefault("population_events", []).extend(population_events)
+        economy_report["population_snapshot"] = dict(self.population_stats)
+
     def process_payment(self, character: 'Character', amount: int, reason: str) -> Tuple[int, int]:
         if amount <= 0:
             return 0, 0
@@ -1765,6 +2295,7 @@ class World:
         self._resolve_theft_attempts(report)
         report["pending_crimes"] = len(self.pending_crimes)
         report["surplus_trades"] = list(self.today_surplus_sales)
+        self.evaluate_population_dynamics(report, housing_snapshot)
 
         summary = (
             f"Economic summary — Treasury {self.treasury_coins}c "
@@ -2041,6 +2572,9 @@ class World:
         if not self.game_time:
             return
 
+        self.update_day_phase()
+        self._update_weather_event_state()
+
         # Advance season at configured interval
         if (
             self.game_time.current_day > 1
@@ -2059,6 +2593,8 @@ class World:
         if random.random() < 0.35:
             self.update_weather(random.choice(current_choices))
 
+        self._maybe_trigger_weather_event()
         self._cleanup_world_effects()
         self.expire_resource_directives()
         self._recalculate_environment_effects()
+        self._advance_resource_regrowth()

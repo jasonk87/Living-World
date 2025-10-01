@@ -142,6 +142,8 @@ def tick_simulation():
 
     if not game_paused and simulation_running:
         new_day = game_time_obj.tick()
+        if hasattr(game_world, "update_day_phase"):
+            game_world.update_day_phase()
         # current_total_ticks +=1 # This was local, can be re-added if needed for other metrics
 
         for char_to_act in list(game_world.characters): # Iterate over a copy if list might change
@@ -346,6 +348,8 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                             "energy": getattr(char, 'needs', {}).get('Energy'),
                             "thirst": getattr(char, 'needs', {}).get('Thirst'),
                             "inventory": getattr(char, 'inventory', {}),
+                            "age": getattr(char, 'age_years', None),
+                            "citizenship": getattr(char, 'citizenship_status', 'Resident'),
                         })
 
                 event_log_repr = game_world.event_log[-20:] if game_world else []
@@ -401,6 +405,10 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "environment_effects": game_world.get_environment_snapshot() if hasattr(game_world, 'get_environment_snapshot') else {},
                     "rumors": game_world.get_rumor_digest() if hasattr(game_world, 'get_rumor_digest') else [],
                     "housing": getattr(game_world, 'latest_housing_snapshot', {}),
+                    "current_phase": game_world.get_current_phase() if hasattr(game_world, 'get_current_phase') else {},
+                    "active_weather_event": game_world.get_active_weather_event() if hasattr(game_world, 'get_active_weather_event') else None,
+                    "resource_nodes": game_world.get_resource_nodes_snapshot() if hasattr(game_world, 'get_resource_nodes_snapshot') else [],
+                    "population": getattr(game_world, 'population_stats', {}),
                 }
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')

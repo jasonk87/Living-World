@@ -10,6 +10,110 @@ TICKS_PER_DAY = 10
 DAYS_PER_SEASON = 10 # Example, can be adjusted
 MAX_SIMULATION_DAYS = 20 # Max days the simulation runs for in headless/test mode.
 
+# Day & Night Phases
+DAY_PHASE_CONFIG = [
+    {"key": "dawn", "name": "Dawn Preparations", "start_tick": 0, "description": "Citizens rise, stretch, and ready for the day."},
+    {"key": "work", "name": "Workday", "start_tick": 2, "description": "Work crews report to duties and production ramps up."},
+    {"key": "supper", "name": "Supper Break", "start_tick": 5, "description": "Communal meal hour where canteens open and rations are shared."},
+    {"key": "evening", "name": "Evening Gatherings", "start_tick": 6, "description": "Leisure and social events blossom around hearths and taverns."},
+    {"key": "night", "name": "Night Rest", "start_tick": 8, "description": "Quiet hours as households settle into their beds."},
+]
+
+PHASE_BEHAVIOR_TWEAKS = {
+    "dawn": {"job_focus": 1, "social_bonus": -0.05},
+    "work": {"job_focus": 2, "social_bonus": -0.1},
+    "supper": {"meal_focus": True, "social_bonus": 0.15},
+    "evening": {"social_bonus": 0.3},
+    "night": {"force_rest": True, "social_bonus": -0.25},
+}
+
+QUIET_HOURS_START_TICK = 8
+COMMUNAL_MEAL_WINDOW = (5, 6)
+
+# Resource Node Durability & Regrowth
+RESOURCE_NODE_DURABILITY = {
+    "Wood": 6,
+    "Stone": 8,
+    "Herbs": 4,
+    "Food": 5,
+    "Water": 999,  # Springs and wells do not deplete under normal circumstances
+}
+
+RESOURCE_NODE_DEPLETED_TILES = {
+    "Wood": "Clearing",
+    "Stone": "Rubble",
+    "Herbs": "Trampled",
+    "Food": "Fallow",
+}
+
+RESOURCE_NODE_REGROWTH_DAYS = {
+    "Wood": 6,
+    "Stone": 12,
+    "Herbs": 3,
+    "Food": 4,
+}
+
+# Weather Event Definitions
+WEATHER_EVENT_DEFINITIONS = {
+    "Blizzard": {
+        "seasons": ["Winter"],
+        "weather": ["Snowy", "Cloudy"],
+        "base_chance": 0.25,
+        "duration_days": (1, 2),
+        "severity_range": (2, 4),
+        "travel_speed_multiplier": 0.6,
+        "resource_yield": {"Wood": 0.75, "Herbs": 0.5},
+        "market_multipliers": {"Wood": 1.15},
+        "requires_shelter": True,
+        "hazards": {"type": "cold", "mood_penalty": -6},
+    },
+    "Heat Wave": {
+        "seasons": ["Summer"],
+        "weather": ["Sunny"],
+        "base_chance": 0.2,
+        "duration_days": (1, 3),
+        "severity_range": (1, 3),
+        "travel_speed_multiplier": 0.8,
+        "resource_yield": {"Water": 0.6, "Food": 0.9},
+        "market_multipliers": {"Water": 1.25},
+        "requires_shelter": True,
+        "hazards": {"type": "heat", "mood_penalty": -8},
+    },
+    "Tempest Storm": {
+        "seasons": ["Spring", "Autumn"],
+        "weather": ["Rainy", "Cloudy"],
+        "base_chance": 0.22,
+        "duration_days": (1, 2),
+        "severity_range": (1, 3),
+        "travel_speed_multiplier": 0.7,
+        "resource_yield": {"Stone": 0.85, "Herbs": 0.9},
+        "market_multipliers": {"Herbs": 1.1},
+        "requires_shelter": False,
+        "hazards": {"type": "storm", "mood_penalty": -4},
+    },
+}
+
+WEATHER_EVENT_MESSAGE_LIMIT = 4
+
+# Population Churn Balancing
+POPULATION_BIRTH_BASE_CHANCE = 0.08
+POPULATION_MIGRATION_BASE_CHANCE = 0.12
+POPULATION_DEPARTURE_BASE_CHANCE = 0.08
+POPULATION_EVENT_COOLDOWN_DAYS = 2
+POPULATION_BELONGING_THRESHOLD_FOR_BIRTH = 60
+POPULATION_SURPLUS_THRESHOLD_FOR_MIGRATION = 6
+POPULATION_DEPARTURE_MOOD_THRESHOLD = -35
+POPULATION_DEPARTURE_HOMELESS_WEIGHT = 0.35
+DEFAULT_CHILD_NEEDS = {
+    "Hunger": 65,
+    "Thirst": 65,
+    "Energy": 100,
+    "Social": 80,
+    "Safety": 55,
+    "Belonging": 85,
+    "Esteem": 45,
+}
+
 # Economy & Survival Balancing
 STARTING_TREASURY_COINS = 350
 DAILY_BASE_TAX_INCOME = 18

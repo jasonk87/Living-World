@@ -542,6 +542,14 @@ button:focus-visible {
     line-height: 1.4;
 }
 
+.mini-note.muted {
+    opacity: 0.8;
+}
+
+.muted {
+    color: var(--text-muted);
+}
+
 /* --- Character roster --- */
 .character-search {
     display: flex;

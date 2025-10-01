@@ -27,7 +27,11 @@ class Character:
                  family_members: Optional[List[str]] = None,
                  liege: Optional[str] = None,
                  vassals: Optional[List[str]] = None,
-                 supervisor_name: Optional[str] = None):
+                 supervisor_name: Optional[str] = None,
+                 age: Optional[int] = None,
+                 origin: Optional[str] = None,
+                 citizenship: str = "Resident",
+                 arrival_day: Optional[int] = None):
         self.name = name; self.personality = personality; self.traits = traits;
         self.money: int = money
         self.family_members: List[str] = family_members if family_members else []
@@ -111,6 +115,15 @@ class Character:
         self.opinions: Dict[str, Dict[str, int]] = {}
         self.dialogue_history: List[Dict[str, Any]] = []
         self.known_events: List[str] = []
+
+        self.age_years: int = age if age is not None else random.randint(18, 45)
+        self.age_in_days: int = 0
+        self.origin: str = origin or "Local"
+        self.citizenship_status: str = citizenship
+        self.arrival_day: Optional[int] = arrival_day
+        self._last_phase_key: Optional[str] = None
+        self._phase_social_bias: float = 0.0
+        self._phase_rest_threshold_bonus: int = 0
 
         if 'Social' not in self.needs: self.needs['Social'] = 70 # Will be reframed as Belonging later or coexist
         if 'Energy' not in self.needs: self.needs['Energy'] = 100
@@ -808,6 +821,96 @@ class Character:
         # print(f"DEBUG {self.name}: move_towards ({target_x},{target_y}) FAILED all attempts from ({self.x},{self.y}).")
 
 
+    def advance_age(self, world: 'World') -> None:
+        """Increment the character's age and celebrate yearly milestones."""
+        days_per_season = getattr(config, "DAYS_PER_SEASON", 10)
+        seasons_per_year = len(getattr(world, "SEASONS", ["Spring", "Summer", "Autumn", "Winter"])) or 4
+        days_per_year = max(1, days_per_season * seasons_per_year)
+
+        self.age_in_days += 1
+        if self.age_in_days >= days_per_year:
+            self.age_in_days -= days_per_year
+            self.age_years += 1
+            birthday_message = f"Celebrated a birthday—now {self.age_years} years old."
+            self.add_memory(birthday_message)
+            if hasattr(world, "add_event_log_message"):
+                world.add_event_log_message(f"{self.name} celebrates a birthday (age {self.age_years}).")
+
+    def _apply_phase_behavior(self, world: 'World', phase_info: Optional[Dict[str, Any]]):
+        """Adjust daily behavior based on the active phase schedule."""
+        self._phase_social_bias = 0.0
+        self._phase_rest_threshold_bonus = 0
+        if not phase_info:
+            return
+
+        phase_key = phase_info.get("key")
+        if phase_key and phase_key != self._last_phase_key:
+            phase_name = phase_info.get("name", phase_key.title())
+            phase_desc = phase_info.get("description")
+            description_suffix = f" — {phase_desc}" if phase_desc else ""
+            self.add_memory(f"{phase_name} begins{description_suffix}.")
+            self._last_phase_key = phase_key
+
+        tweaks = getattr(config, "PHASE_BEHAVIOR_TWEAKS", {}).get(phase_key, {})
+        self._phase_social_bias = tweaks.get("social_bonus", 0.0)
+
+        if tweaks.get("job_focus") and self.current_goal.type in [GoalType.IDLE, GoalType.WANDER]:
+            default_goal = self.get_default_goal()
+            if default_goal and default_goal.type not in [GoalType.IDLE, GoalType.WANDER]:
+                self.add_memory("Duty calls—I should focus on my work this phase.")
+                self.current_goal = default_goal
+
+        if tweaks.get("meal_focus") and self.current_goal.type not in [GoalType.EAT_FOOD, GoalType.SEEK_TO_BUY_ITEM]:
+            if self.inventory.get("Food", 0) > 0 and self.needs.get("Hunger", 100) < config.NEED_SCORE_MAX:
+                self.add_memory("It's the communal meal hour—time to take a break and eat.")
+                self.current_goal = Goal(GoalType.EAT_FOOD, assignee_id=self.name, originator_id=self.name, priority=2)
+
+        if tweaks.get("force_rest"):
+            self._phase_rest_threshold_bonus = 15
+            if self.current_goal.type not in [GoalType.REST_AT_HOME, GoalType.FIND_SHELTER, GoalType.SEEK_MEDICAL_ATTENTION]:
+                if self.current_goal.priority >= 3:
+                    home_building = self._ensure_home_assignment(world)
+                    if home_building:
+                        self.add_memory(f"Quiet hours descend—returning to {home_building.display_name} to rest.")
+                        self.current_goal = Goal(
+                            GoalType.REST_AT_HOME,
+                            assignee_id=self.name,
+                            originator_id=self.name,
+                            parameters={"building_location": home_building.location},
+                            priority=2,
+                        )
+                else:
+                    self.add_memory("Quiet hours begin but duty keeps me occupied.")
+        else:
+            self._phase_rest_threshold_bonus = tweaks.get("rest_threshold_bonus", 0)
+
+    def _should_seek_weather_shelter(self, weather_event: Dict[str, Any]) -> bool:
+        severity = weather_event.get("severity", 1)
+        requires_shelter = weather_event.get("requires_shelter", False)
+        if requires_shelter and self.current_goal.priority >= 2:
+            return True
+        if severity >= 3 and self.current_goal.priority >= 3:
+            return True
+        return False
+
+    def _seek_weather_shelter(self, world: 'World', weather_event: Dict[str, Any]):
+        if self.current_goal.type in [GoalType.REST_AT_HOME, GoalType.FIND_SHELTER]:
+            return
+        home_building = self._ensure_home_assignment(world)
+        event_name = weather_event.get("name", "severe weather")
+        if home_building:
+            self.add_memory(f"{event_name} forces me indoors at {home_building.display_name}.")
+            self.current_goal = Goal(
+                GoalType.REST_AT_HOME,
+                assignee_id=self.name,
+                originator_id=self.name,
+                parameters={"building_location": home_building.location, "reason": event_name},
+                priority=2,
+            )
+        else:
+            self.add_memory(f"{event_name} rages—I must find shelter fast.")
+            self.current_goal = Goal(GoalType.FIND_SHELTER, assignee_id=self.name, originator_id=self.name, priority=2)
+
     def equip_tool(self, tool_item_name: str) -> bool:
         if self.equipped_tool and self.equipped_tool["name"] == tool_item_name: return True
         if self.equipped_tool: self.unequip_tool()
@@ -830,14 +933,22 @@ class Character:
         if resource_name:
             resource_nodes = world.get_resources(resource_name)
             if resource_nodes:
-                # Prefer the closest known node to reduce travel churn
+                def _node_location(entry: Any) -> Tuple[int, int]:
+                    if isinstance(entry, dict):
+                        loc = entry.get("location") or entry.get("coord")
+                        if loc:
+                            return tuple(loc)
+                        return (0, 0)
+                    return tuple(entry)
+
                 sorted_nodes = sorted(
                     resource_nodes,
-                    key=lambda loc: abs(loc[0] - self.x) + abs(loc[1] - self.y),
+                    key=lambda node: abs(_node_location(node)[0] - self.x) + abs(_node_location(node)[1] - self.y),
                 )
                 for node in sorted_nodes:
-                    if world.get_tile(*node) != "OutOfBounds":
-                        return node
+                    node_loc = _node_location(node)
+                    if world.get_tile(*node_loc) != "OutOfBounds" and world.is_resource_node(resource_name, node_loc):
+                        return node_loc
 
         tile_preferences = {
             "Wood": ["Forest"],
@@ -1151,6 +1262,9 @@ class Character:
             tool_name_mem = self.equipped_tool['name'] if self.equipped_tool else 'hands'
             self.add_memory(f"Task '{task_name}': got {actual_yield_taken} {res_prod} (base: {base_yield_amount}) with {tool_name_mem}.")
             print(f"{self.name} task '{task_name}' yielded {actual_yield_taken} {res_prod} (base: {base_yield_amount}).")
+
+            if hasattr(world, "record_resource_harvest") and world.is_resource_node(res_prod, (self.x, self.y)):
+                world.record_resource_harvest(res_prod, (self.x, self.y), actual_yield_taken)
 
             self.task_work_progress -= task_def.get("base_time_per_yield", 1) # Subtract cost of one yield
 
@@ -3003,6 +3117,12 @@ class Character:
             self.current_goal = self.get_default_goal()
             return
 
+        phase_info = world.get_current_phase() if hasattr(world, "get_current_phase") else world.game_time.get_phase()
+        self._apply_phase_behavior(world, phase_info)
+        active_weather_event = world.get_active_weather_event() if hasattr(world, "get_active_weather_event") else None
+        if active_weather_event and self._should_seek_weather_shelter(active_weather_event):
+            self._seek_weather_shelter(world, active_weather_event)
+
         # Update mood based on critical complex needs
         self._update_mood_from_critical_needs()
 
@@ -3026,7 +3146,8 @@ class Character:
             self._rest_ticks = 0
 
         energy_level = self.needs.get("Energy", 100)
-        if energy_level < getattr(config, "ENERGY_THRESHOLD_REST", 40) and self.current_goal.type not in [GoalType.REST_AT_HOME, GoalType.FIND_SHELTER, GoalType.SEEK_MEDICAL_ATTENTION]:
+        rest_threshold = getattr(config, "ENERGY_THRESHOLD_REST", 40) + getattr(self, "_phase_rest_threshold_bonus", 0)
+        if energy_level < rest_threshold and self.current_goal.type not in [GoalType.REST_AT_HOME, GoalType.FIND_SHELTER, GoalType.SEEK_MEDICAL_ATTENTION]:
             home_building = self._ensure_home_assignment(world)
             if home_building:
                 self.add_memory(f"Exhausted—heading to {home_building.display_name} to rest.")
@@ -3278,6 +3399,10 @@ class Character:
             # Mood influence on general social interaction chance
             mood_social_mod = config.MOOD_EFFECT_SOCIAL_SUCCESS_MOD.get(self.mood, 0.0)
             current_social_interaction_chance += mood_social_mod # Additive, can be negative
+            current_social_interaction_chance += getattr(self, "_phase_social_bias", 0.0)
+            if active_weather_event and active_weather_event.get("requires_shelter"):
+                current_social_interaction_chance -= 0.15
+            current_social_interaction_chance = max(0.0, min(1.0, current_social_interaction_chance))
             current_social_interaction_chance = max(0.01, min(0.95, current_social_interaction_chance)) # Clamp
 
             if random.random() < current_social_interaction_chance:
