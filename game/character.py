@@ -1,5 +1,6 @@
 # game/character.py
-from typing import TYPE_CHECKING, Optional, Dict, List, Tuple, Any
+from collections import deque
+from typing import TYPE_CHECKING, Optional, Dict, List, Tuple, Any, Set, Deque
 import random
 from .llm_integration import generate_dialogue # Kept as it's used
 # from .stockpile import Stockpile # Not directly used by Character methods
@@ -26,7 +27,12 @@ class Character:
                  money: int = 10,
                  family_members: Optional[List[str]] = None,
                  liege: Optional[str] = None,
-                 vassals: Optional[List[str]] = None):
+                 vassals: Optional[List[str]] = None,
+                 supervisor_name: Optional[str] = None,
+                 age: Optional[int] = None,
+                 origin: Optional[str] = None,
+                 citizenship: str = "Resident",
+                 arrival_day: Optional[int] = None):
         self.name = name; self.personality = personality; self.traits = traits;
         self.money: int = money
         self.family_members: List[str] = family_members if family_members else []
@@ -70,7 +76,7 @@ class Character:
         self.max_inventory_items = max_inventory_items
         # self.hauling_info attribute is fully removed. Logic relies on current_goal.parameters.
         # self.counting_target_stockpile_name: Optional[str] = None # Attribute removed.
-        self.supervisor_name: Optional[str] = None; self.subordinates_names: List[str] = []
+        self.supervisor_name: Optional[str] = supervisor_name; self.subordinates_names: List[str] = []
         self.managed_item_targets: Dict[str, int] = {}; self.order_cooldown: Dict[str, int] = {}
         self.active_work_order_id: Optional[str] = None; self.crafting_progress: int = 0
         self.materials_gathered_for_wo: bool = False; self.items_crafted_for_wo: bool = False
@@ -78,7 +84,7 @@ class Character:
         self.rank: str = rank
         self.liege: Optional[str] = liege
         self.vassals: List[str] = vassals if vassals is not None else []
-        self.assigned_tasks: List[Dict] = [] # TODO: Re-evaluate if this is needed with Goal objects
+        self.assigned_tasks: List[Dict] = [] # Historical record of manager-assigned tasks for performance reviews
         self.performance_rating: str = "Not Evaluated"
         self.last_performance_review_day: Optional[int] = None
         self.warning_count: int = 0
@@ -91,6 +97,14 @@ class Character:
         self.goal_before_fetching_tool: Optional[Goal] = None # Store previous Goal object
         self.current_task_def_name: Optional[str] = None # For _execute_generic_task, could be part of GATHER_RESOURCE params
         self._mc_item_check_idx: int = 0
+        self.active_crime_assignment: Optional[str] = None
+        self.crime_investigation_focus: Optional[Dict[str, Any]] = None
+        self.last_estate_review_day: Optional[int] = None
+        self.active_estate_orders: List[Dict[str, Any]] = []
+        self.last_high_court_day: Optional[int] = None
+        self.last_campaign_speech_day: Optional[int] = None
+        self._comfort_cooldowns: Dict[str, int] = {}
+        self._argument_cooldowns: Dict[str, int] = {}
 
         self.is_sick: bool = False
         self.sickness_severity: int = 0
@@ -102,6 +116,15 @@ class Character:
         self.opinions: Dict[str, Dict[str, int]] = {}
         self.dialogue_history: List[Dict[str, Any]] = []
         self.known_events: List[str] = []
+
+        self.age_years: int = age if age is not None else random.randint(18, 45)
+        self.age_in_days: int = 0
+        self.origin: str = origin or "Local"
+        self.citizenship_status: str = citizenship
+        self.arrival_day: Optional[int] = arrival_day
+        self._last_phase_key: Optional[str] = None
+        self._phase_social_bias: float = 0.0
+        self._phase_rest_threshold_bonus: int = 0
 
         if 'Social' not in self.needs: self.needs['Social'] = 70 # Will be reframed as Belonging later or coexist
         if 'Energy' not in self.needs: self.needs['Energy'] = 100
@@ -115,6 +138,9 @@ class Character:
         self.materials_gathered_for_build: bool = False
         self.building_site_target: Optional[Tuple[int, int]] = None # Parameter for EXECUTE_BUILD_ORDER
         self.current_building_project: Optional[str] = None # Blueprint key, parameter for EXECUTE_BUILD_ORDER
+        self.home_location: Optional[Tuple[int, int]] = None
+        self.resting_at_home: bool = False
+        self._rest_ticks: int = 0
 
         # Mood related attributes
         self.mood_score: int = config.MOOD_SCORE_NEUTRAL_START
@@ -125,8 +151,11 @@ class Character:
         # Reputation attribute
         self.reputation_score: int = 0 # Initialize reputation
         self.known_rumor_ids: Set[str] = set() # For tracking rumors known by this character
+        self._cached_path: Deque[Tuple[int, int]] = deque()
+        self._cached_path_target: Optional[Tuple[int, int]] = None
+        self._cached_path_revision: Optional[int] = None
 
-    def update_reputation(self, change: int, reason: Optional[str] = None):
+    def update_reputation(self, change: int, reason: Optional[str] = None, world: Optional['World'] = None):
         """Updates reputation score, clamps it, and logs the change."""
         old_score = self.reputation_score
         self.reputation_score += change
@@ -136,38 +165,46 @@ class Character:
             log_message = f"Reputation score changed by {change} to {self.reputation_score}. Reason: {reason}"
             self.add_memory(log_message)
             print(f"LOG: {self.name}'s {log_message}")
-
-            # Attempt to generate a rumor if the change is significant
-            # This requires access to the world object, which update_reputation doesn't have directly.
-            # This logic might be better placed in the methods that CALL update_reputation,
-            # or update_reputation needs a world parameter.
-            # For now, let's assume a world parameter is passed or this is refactored.
-            # This is a placeholder and will be addressed in the actual integration step.
-            # if world and abs(change) >= config.REPUTATION_FOR_RUMOR_THRESHOLD:
-            #     self._try_generate_rumor_from_reputation(change, reason, world)
+            if world and abs(change) >= config.REPUTATION_FOR_RUMOR_THRESHOLD:
+                self._try_generate_rumor_from_reputation(change, reason, world)
 
 
-    # def _try_generate_rumor_from_reputation(self, rep_change: int, reason: str, world: 'World'):
-    #     # This method would be called by update_reputation or the methods calling it.
-    #     # Simplified content key generation from reason
-    #     content_key_base = reason.lower().replace(" ", "_").split_by("(",1)[0].strip() # basic parse
-    #     is_positive = rep_change > 0
-    #     content_key = f"{content_key_base}_{'positive' if is_positive else 'negative'}"
+    def _try_generate_rumor_from_reputation(self, rep_change: int, reason: str, world: 'World'):
+        if not world.game_time:
+            return
 
-    #     initial_strength = config.RUMOR_INITIAL_STRENGTH_SMALL_EVENT
-    #     if abs(rep_change) > (config.REPUTATION_FOR_RUMOR_THRESHOLD * 2): # More significant change
-    #         initial_strength = config.RUMOR_INITIAL_STRENGTH_SIGNIFICANT_EVENT
+        normalized_reason = reason.lower().replace(" ", "_")
+        normalized_reason = normalized_reason.split("(")[0].strip()
+        if not normalized_reason:
+            normalized_reason = "reputation_shift"
 
-    #     rumor = Rumor(
-    #         subject_char_id=self.name,
-    #         content_key=content_key,
-    #         initial_strength=initial_strength,
-    #         creation_day=world.game_time.current_day,
-    #         is_positive=is_positive,
-    #         original_source_char_id=self.name # Or could be another involved party if available
-    #     )
-    #     world.add_rumor(rumor)
-    #     self.add_memory(f"A rumor might be starting about me: {content_key}")
+        is_positive = rep_change > 0
+        sentiment_suffix = "positive" if is_positive else "negative"
+        content_key = f"{normalized_reason}_{sentiment_suffix}"
+
+        initial_strength = config.RUMOR_INITIAL_STRENGTH_SMALL_EVENT
+        if abs(rep_change) >= config.REPUTATION_FOR_RUMOR_THRESHOLD * 2:
+            initial_strength = config.RUMOR_INITIAL_STRENGTH_SIGNIFICANT_EVENT
+
+        rumor = Rumor(
+            subject_char_id=self.name,
+            content_key=content_key,
+            initial_strength=initial_strength,
+            creation_day=world.game_time.current_day,
+            is_positive=is_positive,
+            original_source_char_id=self.name,
+        )
+        world.add_rumor(rumor)
+        self.known_rumor_ids.add(rumor.rumor_id)
+        world.add_notable_event(
+            "ReputationRumor",
+            {
+                "summary": f"Rumor about {self.name}'s reputation change ({sentiment_suffix}).",
+                "subject": self.name,
+                "sentiment": sentiment_suffix,
+            },
+        )
+        self.add_memory(f"Word may spread ({rumor.rumor_id[:4]}) about me: {content_key}.")
 
 
     def _determine_mood_level(self) -> str:
@@ -180,23 +217,16 @@ class Character:
             if self.mood_score >= threshold:
                 current_mood_name = mood_name
                 break
-        # Special case for Neutral, as its threshold is a lower bound of a band
-        if self.mood_score < config.MOOD_LEVELS["Neutral"] and self.mood_score > config.MOOD_LEVELS.get("Displeased", -50): # Check if it's above Displeased but below Neutral's lower bound
-             # This logic ensures that scores between Displeased's threshold and Neutral's threshold are correctly Neutral if not caught by other positive moods.
-             # E.g. if Neutral is -20, Content is 20. A score of 5 should be Content. A score of -10 should be Neutral.
-             # A score of -30 should be Displeased.
-             # The sort order handles positive moods. For negative, we need to ensure Neutral band.
-             if self.mood_score >= config.MOOD_LEVELS["Neutral"]: # Scores from -20 up to Content's threshold (20)
-                 pass # Already correctly assigned by sorted list or will be Neutral if nothing else matches above it
-             elif self.mood_score > config.MOOD_LEVELS.get("Displeased", -50): # e.g. -20 < score < -50
-                 # This means it fell through all positive moods and Content, so it should be Neutral if above Displeased.
-                 # However, the sorted list from highest to lowest should correctly assign "Neutral" for scores like -10.
-                 # Let's re-verify the logic for MOOD_LEVELS["Neutral"] = -20
-                 # If score is 10, "Neutral" is chosen (correct, as it's < 20 for Content)
-                 # If score is -10, "Neutral" is chosen (correct)
-                 # If score is -30, "Displeased" is chosen (correct, as it's < -20 for Neutral and >= -50 for Displeased)
-                 # The initial sort and break should handle this correctly.
-                 pass
+
+        # Ensure scores that fall between Neutral and the first negative tier still read as Neutral
+        neutral_floor = config.MOOD_LEVELS.get("Neutral", 0)
+        displeased_floor = config.MOOD_LEVELS.get("Displeased", neutral_floor - 30)
+        if (
+            self.mood_score < neutral_floor
+            and self.mood_score >= displeased_floor
+            and current_mood_name not in {"Displeased", "Angry", "Furious"}
+        ):
+            current_mood_name = "Neutral"
 
 
         if self.mood != current_mood_name:
@@ -468,7 +498,7 @@ class Character:
                     self.update_mood_score(config.MOOD_CHANGE_SUCCESSFUL_TASK_MAJOR, f"Completed building {target_building.display_name}")
                     self.needs['Esteem'] = min(config.NEED_SCORE_MAX, self.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) + 10) # Completing a whole building is a major esteem boost
                     self.add_memory(f"Completing the building {target_building.display_name} greatly boosted my esteem. Esteem: {self.needs['Esteem']}")
-                    self._receive_payment(JOB_SALARIES.get("Execute Build Order", 25), f"completing {target_building.display_name}")
+                    self._receive_payment(JOB_SALARIES.get("Execute Build Order", 25), f"completing {target_building.display_name}", world)
                     self._reset_building_state()
                     self.current_goal = self.get_default_goal() # Changed from create_goal_from_job
                     return
@@ -494,6 +524,64 @@ class Character:
         self.building_site_target = None
         self.current_building_project = None
         self.resource_to_fetch = None # Ensure this is cleared too
+
+    def _process_builder_routine(self, world: 'World') -> bool:
+        """Handle builder duty goals and active build orders."""
+        if self.job != "Builder":
+            return False
+
+        if not self.current_goal:
+            self.current_goal = self.get_default_goal()
+
+        if self.active_build_order_id:
+            if self.current_goal.type != GoalType.EXECUTE_BUILD_ORDER:
+                self.current_goal = Goal(
+                    GoalType.EXECUTE_BUILD_ORDER,
+                    assignee_id=self.name,
+                    originator_id=self.name,
+                    parameters={
+                        "order_id": self.active_build_order_id,
+                        "structure_type": self.current_building_project,
+                        "location": self.building_site_target,
+                    },
+                )
+            self._execute_build_order(world)
+            return True
+
+        if self.current_goal.type != GoalType.PERFORM_BUILDER_DUTIES:
+            return False
+
+        approved_build_orders = world.get_approved_build_orders()
+        if not approved_build_orders:
+            self.add_memory("No build orders available for Builder Duties.")
+            self.current_goal = self.get_default_goal()
+            return True
+
+        order_to_take = approved_build_orders[0]
+        order_to_take.status = "InProgress"
+        order_to_take.assigned_to = self.name
+
+        self._reset_building_state()
+        self.active_build_order_id = order_to_take.order_id
+        details = order_to_take.details or {}
+        self.current_building_project = details.get("structure_type")
+        self.building_site_target = details.get("location")
+        self.materials_gathered_for_build = False
+
+        self.current_goal = Goal(
+            GoalType.EXECUTE_BUILD_ORDER,
+            assignee_id=self.name,
+            originator_id=self.name,
+            parameters={
+                "order_id": self.active_build_order_id,
+                "structure_type": self.current_building_project,
+                "location": self.building_site_target,
+            },
+        )
+        structure_label = self.current_building_project or "a structure"
+        self.add_memory(f"Claimed Build WO {order_to_take.order_id} for {structure_label}.")
+        self._execute_build_order(world)
+        return True
 
     def _reset_crafting_state(self):
         self.active_work_order_id = None; self.materials_gathered_for_wo = False
@@ -549,85 +637,288 @@ class Character:
     def get_inventory_load(self) -> int: return sum(self.inventory.values())
     def add_memory(self, e: str): self.memory.append(e); self.memory=self.memory[-20:]
 
-    def _receive_payment(self, amount: int, reason: str):
-        """Increases character's money and adds a memory."""
+    def _receive_payment(self, amount: int, reason: str, world: Optional['World'] = None):
+        """Handles wages, routing through the world's treasury when available."""
         if amount <= 0:
             return
-        self.money += amount
-        self.add_memory(f"Received {amount} coins for {reason}.")
-        self.update_mood_score(config.MOOD_CHANGE_GOT_PAID, f"Got paid for {reason}")
 
-    def interact(self, o: 'OtherCharacter', w: 'World'): pass
+        paid_amount, owed_amount = amount, 0
+        if world:
+            paid_amount, owed_amount = world.process_payment(self, amount, reason)
+        else:
+            self.money += amount
+
+        if paid_amount > 0:
+            self.add_memory(f"Received {paid_amount} coins for {reason}.")
+            self.update_mood_score(config.MOOD_CHANGE_GOT_PAID, f"Got paid for {reason}")
+        if owed_amount > 0:
+            self.add_memory(f"Still owed {owed_amount} coins for {reason}.")
+            self.update_mood_score(getattr(config, "MOOD_CHANGE_PAYMENT_DELAY", -5), "Wages delayed")
+
+    def interact(self, other: 'Character', world: 'World') -> bool:
+        """Trigger a lightweight social interaction with another character."""
+        if other is None or world is None:
+            return False
+        if other.name == self.name:
+            return False
+
+        if not self.current_goal or self.current_goal.type not in {
+            GoalType.IDLE,
+            GoalType.WANDER,
+            GoalType.SMALL_TALK,
+            GoalType.INTRODUCE_SELF_TO_STRANGER,
+        }:
+            return False
+
+        distance = abs(self.x - other.x) + abs(self.y - other.y)
+        knows_other = other.name in self.known_characters
+
+        if knows_other:
+            new_goal = Goal(
+                GoalType.SMALL_TALK,
+                assignee_id=self.name,
+                originator_id=self.name,
+                parameters={"target_char_name": other.name},
+            )
+            interaction_desc = "small talk"
+        else:
+            new_goal = Goal(
+                GoalType.INTRODUCE_SELF_TO_STRANGER,
+                assignee_id=self.name,
+                originator_id=self.name,
+                parameters={"target_char_name": other.name},
+            )
+            interaction_desc = "an introduction"
+
+        self.current_goal = new_goal
+
+        if distance > 1:
+            self.add_memory(f"Heading toward {other.name} for {interaction_desc}.")
+            self.move_towards(other.x, other.y, world)
+        else:
+            self.add_memory(f"Initiating {interaction_desc} with {other.name}.")
+
+        return True
 
     def move(self, dx: int, dy: int, world: 'World') -> bool:
-        new_x, new_y = self.x + dx, self.y + dy
-        can_move = True
-        # print(f"DEBUG {self.name}: Attempting move from ({self.x},{self.y}) by ({dx},{dy}) to ({new_x},{new_y})")
-        if not (0 <= new_x < world.grid_size[0] and 0 <= new_y < world.grid_size[1]):
-            # print(f"DEBUG {self.name}: Move failed - out of bounds.")
-            can_move = False
-        if can_move:
-            tile_type_at_new_loc = world.get_tile(new_x, new_y) # world.get_tile should give base tile like Grass, or building char
-            # Check against non-traversable terrain types
-            if tile_type_at_new_loc in ["Mountain", "Water"]: # Assuming these are map chars for non-traversable
-                # print(f"DEBUG {self.name}: Move failed - tile type '{tile_type_at_new_loc}' is non-traversable.")
-                can_move = False
-            # Check for existing buildings or furniture at the destination that are not part of this character's current build order site
-            # This needs more sophisticated check if buildings/furniture can be on "Grass"
-            # For now, assume if get_tile returns something other than 'Grass' (or whatever is traversable), it might be an issue.
-            # A better check would be:
-            if world.get_building_at(new_x, new_y) is not None: # or world.get_furniture_at(new_x, new_y) is not None: # Temporarily commented for minimal test
-                 # Allow moving to own build site even if building object exists there (e.g. foundation)
-                if not (self.building_site_target and new_x == self.building_site_target[0] and new_y == self.building_site_target[1]):
-                    # print(f"DEBUG {self.name}: Move failed - location ({new_x},{new_y}) occupied by building/furniture.")
-                    can_move = False
-
-
-            if can_move: # Re-check after tile type and building/furniture checks
-                other_chars_at_new_loc = [char for char in world.get_characters_at_location(new_x, new_y) if char.name != self.name]
-                if other_chars_at_new_loc:
-                    # print(f"DEBUG {self.name}: Move failed - location ({new_x},{new_y}) occupied by another character.")
-                    can_move = False
-
-        if can_move:
-            # print(f"DEBUG {self.name}: Move successful to ({new_x},{new_y}). Old pos: ({self.x},{self.y})")
-            self.x = new_x; self.y = new_y;
+        if dx == 0 and dy == 0:
             return True
 
-        # print(f"DEBUG {self.name}: Move from ({self.x},{self.y}) to ({new_x},{new_y}) ultimately FAILED.")
-        return False
+        new_x, new_y = self.x + dx, self.y + dy
+        if not world.is_walkable(new_x, new_y, ignore_characters={self.name}):
+            return False
+
+        if not world.reserve_tile(self.name, (new_x, new_y)):
+            return False
+
+        self.x, self.y = new_x, new_y
+        world.release_tile(self.name)
+        self._clear_cached_path()
+        return True
+
+    def _handle_failed_move_attempt(self, dx: int, dy: int, world: 'World') -> None:
+        """Record why a step failed so characters can react to blocked paths."""
+        target_x, target_y = self.x + dx, self.y + dy
+
+        if not (0 <= target_x < world.grid_size[0] and 0 <= target_y < world.grid_size[1]):
+            blocker_desc = "the edge of the map"
+        else:
+            blocking_building = world.get_building_at(target_x, target_y)
+            blocking_chars = [char.name for char in world.get_characters_at_location(target_x, target_y)]
+            if blocking_building:
+                blocker_desc = blocking_building.display_name
+            elif blocking_chars:
+                joined_names = ", ".join(blocking_chars[:3])
+                remainder = "" if len(blocking_chars) <= 3 else " and others"
+                blocker_desc = f"{joined_names}{remainder}"
+            else:
+                blocker_desc = world.get_tile(target_x, target_y)
+
+        memory_entry = f"Route to ({target_x}, {target_y}) blocked by {blocker_desc}."
+        if not self.memory or self.memory[-1] != memory_entry:
+            self.add_memory(memory_entry)
+
+    def _clear_cached_path(self) -> None:
+        self._cached_path.clear()
+        self._cached_path_target = None
+        self._cached_path_revision = None
+
+    def _ensure_path_to(self, target: Tuple[int, int], world: 'World') -> bool:
+        current_revision = getattr(world, "map_revision", None)
+        needs_replan = (
+            not self._cached_path and (self.x, self.y) != target
+        ) or self._cached_path_target != target or self._cached_path_revision != current_revision
+
+        if not needs_replan and self._cached_path:
+            next_step = self._cached_path[0]
+            if max(abs(next_step[0] - self.x), abs(next_step[1] - self.y)) > 1:
+                needs_replan = True
+
+        if not needs_replan:
+            return True
+
+        path = world.find_path((self.x, self.y), target, ignore_characters={self.name})
+        if not path:
+            self._clear_cached_path()
+            return False
+
+        if len(path) <= 1:
+            self._cached_path = deque()
+        else:
+            self._cached_path = deque(path[1:])
+        self._cached_path_target = target
+        self._cached_path_revision = current_revision
+        return bool(self._cached_path) or (self.x, self.y) == target
 
     def move_towards(self, target_x: int, target_y: int, world: 'World'):
-        dx = target_x - self.x; dy = target_y - self.y
-        norm_dx, norm_dy = 0, 0
-        if dx > 0: norm_dx = 1
-        elif dx < 0: norm_dx = -1
-        if dy > 0: norm_dy = 1
-        elif dy < 0: norm_dy = -1
-        if norm_dx == 0 and norm_dy == 0:
-            # print(f"DEBUG {self.name}: move_towards target ({target_x},{target_y}) reached.")
-            return
+        target = (target_x, target_y)
+        if (self.x, self.y) == target:
+            self._clear_cached_path()
+            return True
 
-        # print(f"DEBUG {self.name}: move_towards ({target_x},{target_y}). Current: ({self.x},{self.y}). Trying ({norm_dx},{norm_dy}) first.")
-        if self.move(norm_dx, norm_dy, world):
-            # print(f"DEBUG {self.name}: move_towards success via diagonal/direct ({norm_dx},{norm_dy}). New pos: ({self.x},{self.y})")
-            return
+        if not self._ensure_path_to(target, world):
+            failure_dx = 1 if target_x > self.x else -1 if target_x < self.x else 0
+            failure_dy = 1 if target_y > self.y else -1 if target_y < self.y else 0
+            if failure_dx != 0 or failure_dy != 0:
+                self._handle_failed_move_attempt(failure_dx, failure_dy, world)
+            return False
 
-        if norm_dx != 0 and norm_dy != 0: # If diagonal failed, try cardinal
-            # print(f"DEBUG {self.name}: move_towards diagonal failed. Trying cardinal x ({norm_dx},0).")
-            if self.move(norm_dx, 0, world):
-                # print(f"DEBUG {self.name}: move_towards success via cardinal x ({norm_dx},0). New pos: ({self.x},{self.y})")
-                return
-            # print(f"DEBUG {self.name}: move_towards cardinal x failed. Trying cardinal y (0,{norm_dy}).")
-            if self.move(0, norm_dy, world):
-                # print(f"DEBUG {self.name}: move_towards success via cardinal y (0,{norm_dy}). New pos: ({self.x},{self.y})")
-                return
-        elif norm_dx != 0 : # Only dx was non-zero, and self.move(norm_dx,0) must have failed if we are here
-             pass # print(f"DEBUG {self.name}: move_towards cardinal x ({norm_dx},0) failed.")
-        elif norm_dy != 0 : # Only dy was non-zero, and self.move(0,norm_dy) must have failed
-             pass # print(f"DEBUG {self.name}: move_towards cardinal y (0,{norm_dy}) failed.")
+        speed_modifier = 1.0
+        if hasattr(world, "get_travel_speed_modifier"):
+            speed_modifier = world.get_travel_speed_modifier()
+
+        if speed_modifier < 1.0 and random.random() > speed_modifier:
+            if random.random() < 0.15:
+                weather_desc = getattr(world, "weather", "difficult").lower()
+                self.add_memory(f"Travel slowed by {weather_desc} conditions.")
+            return False
+
+        steps_to_take = 1
+        if speed_modifier > 1.0:
+            bonus_chance = min(speed_modifier - 1.0, 1.0)
+            if random.random() < bonus_chance:
+                steps_to_take += 1
+
+        moved = False
+        for _ in range(steps_to_take):
+            if not self._cached_path:
+                break
+
+            next_step = self._cached_path[0]
+            if not world.is_walkable(next_step[0], next_step[1], ignore_characters={self.name}):
+                self._clear_cached_path()
+                failure_dx = 1 if target_x > self.x else -1 if target_x < self.x else 0
+                failure_dy = 1 if target_y > self.y else -1 if target_y < self.y else 0
+                if failure_dx != 0 or failure_dy != 0:
+                    self._handle_failed_move_attempt(failure_dx, failure_dy, world)
+                return moved and (self.x, self.y) == target
+
+            if not world.reserve_tile(self.name, next_step):
+                self._clear_cached_path()
+                return moved and (self.x, self.y) == target
+
+            self._cached_path.popleft()
+            self.x, self.y = next_step
+            world.release_tile(self.name)
+            moved = True
+
+            if (self.x, self.y) == target:
+                self._clear_cached_path()
+                return True
+
+        return moved and (self.x, self.y) == target
         # print(f"DEBUG {self.name}: move_towards ({target_x},{target_y}) FAILED all attempts from ({self.x},{self.y}).")
 
+
+    def advance_age(self, world: 'World') -> None:
+        """Increment the character's age and celebrate yearly milestones."""
+        days_per_season = getattr(config, "DAYS_PER_SEASON", 10)
+        seasons_per_year = len(getattr(world, "SEASONS", ["Spring", "Summer", "Autumn", "Winter"])) or 4
+        days_per_year = max(1, days_per_season * seasons_per_year)
+
+        self.age_in_days += 1
+        if self.age_in_days >= days_per_year:
+            self.age_in_days -= days_per_year
+            self.age_years += 1
+            birthday_message = f"Celebrated a birthday—now {self.age_years} years old."
+            self.add_memory(birthday_message)
+            if hasattr(world, "add_event_log_message"):
+                world.add_event_log_message(f"{self.name} celebrates a birthday (age {self.age_years}).")
+
+    def _apply_phase_behavior(self, world: 'World', phase_info: Optional[Dict[str, Any]]):
+        """Adjust daily behavior based on the active phase schedule."""
+        self._phase_social_bias = 0.0
+        self._phase_rest_threshold_bonus = 0
+        if not phase_info:
+            return
+
+        phase_key = phase_info.get("key")
+        if phase_key and phase_key != self._last_phase_key:
+            phase_name = phase_info.get("name", phase_key.title())
+            phase_desc = phase_info.get("description")
+            description_suffix = f" — {phase_desc}" if phase_desc else ""
+            self.add_memory(f"{phase_name} begins{description_suffix}.")
+            self._last_phase_key = phase_key
+
+        tweaks = getattr(config, "PHASE_BEHAVIOR_TWEAKS", {}).get(phase_key, {})
+        self._phase_social_bias = tweaks.get("social_bonus", 0.0)
+
+        if tweaks.get("job_focus") and self.current_goal.type in [GoalType.IDLE, GoalType.WANDER]:
+            default_goal = self.get_default_goal()
+            if default_goal and default_goal.type not in [GoalType.IDLE, GoalType.WANDER]:
+                self.add_memory("Duty calls—I should focus on my work this phase.")
+                self.current_goal = default_goal
+
+        if tweaks.get("meal_focus") and self.current_goal.type not in [GoalType.EAT_FOOD, GoalType.SEEK_TO_BUY_ITEM]:
+            if self.inventory.get("Food", 0) > 0 and self.needs.get("Hunger", 100) < config.NEED_SCORE_MAX:
+                self.add_memory("It's the communal meal hour—time to take a break and eat.")
+                self.current_goal = Goal(GoalType.EAT_FOOD, assignee_id=self.name, originator_id=self.name, priority=2)
+
+        if tweaks.get("force_rest"):
+            self._phase_rest_threshold_bonus = 15
+            if self.current_goal.type not in [GoalType.REST_AT_HOME, GoalType.FIND_SHELTER, GoalType.SEEK_MEDICAL_ATTENTION]:
+                if self.current_goal.priority >= 3:
+                    home_building = self._ensure_home_assignment(world)
+                    if home_building:
+                        self.add_memory(f"Quiet hours descend—returning to {home_building.display_name} to rest.")
+                        self.current_goal = Goal(
+                            GoalType.REST_AT_HOME,
+                            assignee_id=self.name,
+                            originator_id=self.name,
+                            parameters={"building_location": home_building.location},
+                            priority=2,
+                        )
+                else:
+                    self.add_memory("Quiet hours begin but duty keeps me occupied.")
+        else:
+            self._phase_rest_threshold_bonus = tweaks.get("rest_threshold_bonus", 0)
+
+    def _should_seek_weather_shelter(self, weather_event: Dict[str, Any]) -> bool:
+        severity = weather_event.get("severity", 1)
+        requires_shelter = weather_event.get("requires_shelter", False)
+        if requires_shelter and self.current_goal.priority >= 2:
+            return True
+        if severity >= 3 and self.current_goal.priority >= 3:
+            return True
+        return False
+
+    def _seek_weather_shelter(self, world: 'World', weather_event: Dict[str, Any]):
+        if self.current_goal.type in [GoalType.REST_AT_HOME, GoalType.FIND_SHELTER]:
+            return
+        home_building = self._ensure_home_assignment(world)
+        event_name = weather_event.get("name", "severe weather")
+        if home_building:
+            self.add_memory(f"{event_name} forces me indoors at {home_building.display_name}.")
+            self.current_goal = Goal(
+                GoalType.REST_AT_HOME,
+                assignee_id=self.name,
+                originator_id=self.name,
+                parameters={"building_location": home_building.location, "reason": event_name},
+                priority=2,
+            )
+        else:
+            self.add_memory(f"{event_name} rages—I must find shelter fast.")
+            self.current_goal = Goal(GoalType.FIND_SHELTER, assignee_id=self.name, originator_id=self.name, priority=2)
 
     def equip_tool(self, tool_item_name: str) -> bool:
         if self.equipped_tool and self.equipped_tool["name"] == tool_item_name: return True
@@ -643,25 +934,155 @@ class Character:
         if self.equipped_tool: self.add_memory(f"Unequipped {self.equipped_tool['name']}."); print(f"{self.name} unequipped {self.equipped_tool['name']}."); self.equipped_tool = None
 
     def find_task_location(self, task_name: str, world: 'World') -> Optional[Tuple[int,int]]:
-        task_def = JOB_TASK_DEFINITIONS.get(task_name);
-        if not task_def: return None
-        res_prod = task_def.get("resource_produced"); tile_to_find = None
-        if res_prod == "Wood": tile_to_find = "Forest"
-        elif res_prod == "Stone": tile_to_find = "Rocks"
-        elif res_prod == "Iron Ore": tile_to_find = "Rocks"
-        else: return None
+        task_def = JOB_TASK_DEFINITIONS.get(task_name)
+        if not task_def:
+            return None
+
+        resource_name = task_def.get("resource_produced")
+        if resource_name:
+            resource_nodes = world.get_resources(resource_name)
+            if resource_nodes:
+                def _node_location(entry: Any) -> Tuple[int, int]:
+                    if isinstance(entry, dict):
+                        loc = entry.get("location") or entry.get("coord")
+                        if loc:
+                            return tuple(loc)
+                        return (0, 0)
+                    return tuple(entry)
+
+                sorted_nodes = sorted(
+                    resource_nodes,
+                    key=lambda node: abs(_node_location(node)[0] - self.x) + abs(_node_location(node)[1] - self.y),
+                )
+                for node in sorted_nodes:
+                    node_loc = _node_location(node)
+                    if world.get_tile(*node_loc) != "OutOfBounds" and world.is_resource_node(resource_name, node_loc):
+                        return node_loc
+
+        tile_preferences = {
+            "Wood": ["Forest"],
+            "Stone": ["Rocks", "Mountain"],
+            "Iron Ore": ["Rocks", "Mountain"],
+            "Herbs": ["Forest", "Meadow", "Grass"],
+            "Food": ["Fields", "Meadow", "Grass"],
+            "Water": ["Water", "River", "Stream", "Well"],
+        }
+        tiles_to_scan = tile_preferences.get(resource_name, [])
+        if not tiles_to_scan:
+            return None
+
+        closest_match: Optional[Tuple[int, int]] = None
+        closest_distance = float("inf")
         for r_idx in range(world.grid_size[0]):
             for c_idx in range(world.grid_size[1]):
-                if world.get_tile(r_idx,c_idx) == tile_to_find:
-                    if res_prod in world.resources and (r_idx,c_idx) in world.resources.get(res_prod,[]): return (r_idx,c_idx)
-                    elif res_prod not in world.resources and not task_def.get("needs_specific_resource_item", True) : return (r_idx,c_idx)
-        return None
-    def gather_resource(self, resource_name: str, world: 'World'): pass
+                tile = world.get_tile(r_idx, c_idx)
+                if tile not in tiles_to_scan:
+                    continue
+                distance = abs(r_idx - self.x) + abs(c_idx - self.y)
+                if distance < closest_distance:
+                    closest_distance = distance
+                    closest_match = (r_idx, c_idx)
+        return closest_match
+
+    def _deposit_resource_to_nearest_stockpile(
+        self, resource_name: str, world: 'World', amount: Optional[int] = None
+    ) -> bool:
+        available = self.inventory.get(resource_name, 0)
+        if available <= 0:
+            return True
+
+        stockpiles = world.get_stockpiles_for_resource(resource_name)
+        if not stockpiles:
+            self.add_memory(f"No stockpile is configured to accept {resource_name} right now.")
+            return True
+
+        def closest_distance(sp):
+            return min(abs(pt[0] - self.x) + abs(pt[1] - self.y) for pt in sp.access_points)
+
+        target_stockpile = min(stockpiles, key=closest_distance)
+        access_point = min(
+            target_stockpile.access_points,
+            key=lambda loc: abs(loc[0] - self.x) + abs(loc[1] - self.y),
+        )
+
+        if (self.x, self.y) != access_point:
+            self.move_towards(access_point[0], access_point[1], world)
+            return False
+
+        deposit_amount = available if amount is None else min(amount, available)
+        success, added = target_stockpile.add_item(resource_name, deposit_amount)
+        if not success or added <= 0:
+            self.add_memory(f"{target_stockpile.name} has no space for additional {resource_name}.")
+            return True
+
+        remaining = available - added
+        if remaining > 0:
+            self.inventory[resource_name] = remaining
+        else:
+            self.inventory.pop(resource_name, None)
+
+        world.add_event_log_message(
+            f"{self.name} stores {added} {resource_name} in {target_stockpile.name}."
+        )
+        if world.game_time:
+            world.ledger.update_stockpile_record(
+                target_stockpile.name, target_stockpile.inventory, world.game_time.current_day
+            )
+        return True
+    def gather_resource(self, resource_name: str, world: 'World') -> bool:
+        """Generic resource gathering entry point used by dynamic goals."""
+        specialized_handlers = {
+            "Wood": self._execute_gather_wood,
+            "Stone": self._execute_gather_stone,
+            "Herbs": self._execute_gather_herbs,
+        }
+
+        handler = specialized_handlers.get(resource_name)
+        if handler:
+            handler(world)
+            return True
+
+        task_name = None
+        for name, definition in JOB_TASK_DEFINITIONS.items():
+            if definition.get("resource_produced") == resource_name:
+                task_name = name
+                break
+
+        if not task_name:
+            self.add_memory(f"I don't know how to gather {resource_name}.")
+            self.current_goal = self.get_default_goal()
+            return False
+
+        target_location = self.find_task_location(task_name, world)
+        if not target_location:
+            self.add_memory(f"Couldn't locate any {resource_name} to gather.")
+            self.current_goal = self.get_default_goal()
+            return False
+
+        if (self.x, self.y) != target_location:
+            self.move_towards(target_location[0], target_location[1], world)
+            return True
+
+        if not self._execute_generic_task(world, task_name):
+            return True # Tool fetching or prerequisite handling will adjust the goal
+
+        quota = None
+        if self.current_goal and self.current_goal.parameters:
+            quota = self.current_goal.parameters.get("quota")
+
+        if quota is not None and self.inventory.get(resource_name, 0) >= quota:
+            self.add_memory(f"Gathered the requested {quota} {resource_name}.")
+            self.current_goal = self.get_default_goal()
+
+        return True
     def build(self, structure_type: str, world: 'World') -> bool: return False
 
     def job_default_goal_type_str(self) -> str: # Returns a string representing the goal type or job title
         if self.job == "Woodcutter": return "Perform Woodcutter Duties"
         if self.job == "Stonemason": return "Perform Stonemason Duties"
+        if self.job == "Farmer": return "Perform Farmer Duties"
+        if self.job == "Hunter": return "Perform Hunter Duties"
+        if self.job == "Fletcher": return "Perform Fletcher Duties"
         if self.job == "Master Craftsman": return "Assess Production Needs"
         if self.job == "Manager": return "Manage Subordinates"
         if self.job == "Bookkeeper": return "Maintain Ledger"
@@ -671,6 +1092,8 @@ class Character:
         if self.job == "Medic": return "Provide Medical Care"
         if self.job == "Sheriff": return "Maintain Peace in Settlement"
         if self.job == "Deputy": return "Patrol Area"
+        if self.job == "Scout": return "Patrol Area"
+        if self.job == "Militia Soldier": return "Patrol Area"
         if self.job == "Reeve": return "Manage Estate"
         if self.job == "Bailiff": return "Assist Reeve"
         if self.rank in ["Noble Lord", "Baron"] and not self.subordinates_names:
@@ -709,9 +1132,11 @@ class Character:
             # NEW: Check market if no tool is available
             # Find a tool of the required type from the market prices
             tool_to_buy = None
-            for item_name, price in world.market_prices.items():
+            market_items = getattr(world, "market_prices", {})
+            for item_name in market_items.keys():
+                price = world.get_market_price(item_name) if hasattr(world, "get_market_price") else market_items.get(item_name)
                 if item_name in BLUEPRINTS and BLUEPRINTS[item_name].get("tool_type") == self.tool_to_fetch_type:
-                    if self.money >= price:
+                    if price is not None and self.money >= price:
                         tool_to_buy = item_name
                         break
 
@@ -820,6 +1245,20 @@ class Character:
                     final_yield_amount += 1
                     self.add_memory(f"Put my strength into '{task_name}' and got a bit extra {res_prod}.")
 
+            if res_prod:
+                env_multiplier = 1.0
+                if hasattr(world, "get_resource_yield_multiplier"):
+                    env_multiplier = world.get_resource_yield_multiplier(res_prod)
+                if env_multiplier != 1.0:
+                    adjusted_amount = int(round(final_yield_amount * env_multiplier))
+                    if final_yield_amount > 0 and adjusted_amount == 0 and env_multiplier > 0:
+                        adjusted_amount = 1
+                    final_yield_amount = max(0, adjusted_amount)
+                    weather_desc = getattr(world, "weather", "steady")
+                    self.add_memory(
+                        f"Environmental conditions ({weather_desc}, {world.season}) adjusted {res_prod} yield x{env_multiplier:.2f}."
+                    )
+
             can_add_to_inv = self.max_inventory_items - self.get_inventory_load()
             actual_yield_taken = min(final_yield_amount, can_add_to_inv)
 
@@ -832,6 +1271,9 @@ class Character:
             tool_name_mem = self.equipped_tool['name'] if self.equipped_tool else 'hands'
             self.add_memory(f"Task '{task_name}': got {actual_yield_taken} {res_prod} (base: {base_yield_amount}) with {tool_name_mem}.")
             print(f"{self.name} task '{task_name}' yielded {actual_yield_taken} {res_prod} (base: {base_yield_amount}).")
+
+            if hasattr(world, "record_resource_harvest") and world.is_resource_node(res_prod, (self.x, self.y)):
+                world.record_resource_harvest(res_prod, (self.x, self.y), actual_yield_taken)
 
             self.task_work_progress -= task_def.get("base_time_per_yield", 1) # Subtract cost of one yield
 
@@ -970,16 +1412,16 @@ class Character:
                 self.current_goal = Goal(GoalType.INITIATE_HAULING, assignee_id=self.name, originator_id=self.name, parameters=haul_params)
                 return
             else: # All items crafted AND all items hauled (inventory of this item is 0)
-                 order.status = "Completed"
-                 self.add_memory(f"Completed and Stocked all items for WO {order.order_id} ({item_name}).")
-                 print(f"{self.name} COMPLETED/STOCKED WO {order.order_id} ({item_name}).")
-                 self.update_mood_score(config.MOOD_CHANGE_SUCCESSFUL_TASK_MAJOR, f"Fully completed WO {order.order_id}")
-                 self.needs['Esteem'] = min(config.NEED_SCORE_MAX, self.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) + 8) # Fully completing a WO is a major esteem boost
-                 self.add_memory(f"Fully completing and stocking WO {order.order_id} gave a major boost to my esteem. Esteem: {self.needs['Esteem']}")
-                 self._receive_payment(JOB_SALARIES.get("Execute Craft Order", 10), f"completing WO for {item_name}")
-                 self._reset_crafting_state()
-                 self.current_goal = self.get_default_goal()
-                 return
+                order.status = "Completed"
+                self.add_memory(f"Completed and Stocked all items for WO {order.order_id} ({item_name}).")
+                print(f"{self.name} COMPLETED/STOCKED WO {order.order_id} ({item_name}).")
+                self.update_mood_score(config.MOOD_CHANGE_SUCCESSFUL_TASK_MAJOR, f"Fully completed WO {order.order_id}")
+                self.needs['Esteem'] = min(config.NEED_SCORE_MAX, self.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) + 8) # Fully completing a WO is a major esteem boost
+                self.add_memory(f"Fully completing and stocking WO {order.order_id} gave a major boost to my esteem. Esteem: {self.needs['Esteem']}")
+                self._receive_payment(JOB_SALARIES.get("Execute Craft Order", 10), f"completing WO for {item_name}", world)
+                self._reset_crafting_state()
+                self.current_goal = self.get_default_goal()
+                return
 
     def _execute_fetch_resource_for_wo(self, world:'World', blueprint:Dict):
         if not self.resource_to_fetch: return
@@ -1035,7 +1477,7 @@ class Character:
                 new_order = WorkOrder(order_type="CraftItem", details=order_details, creation_day=world.game_time.current_day, priority=2)
                 world.add_work_order(new_order); self.order_cooldown[item_name] = world.game_time.current_day
                 self.add_memory(f"Generated WO for {qty_to_order} {item_name}."); print(f"{self.name} (MC) generated WO for {qty_to_order} {item_name}(s).")
-                self._receive_payment(JOB_SALARIES.get("Assess Production Needs", 10), f"creating WO for {item_name}")
+                self._receive_payment(JOB_SALARIES.get("Assess Production Needs", 10), f"creating WO for {item_name}", world)
                 item_processed_this_tick = True; self._mc_item_check_idx = (current_idx + 1) % len(target_item_names); break
         if not item_processed_this_tick:
             self.current_goal = self.get_default_goal()
@@ -1170,10 +1612,10 @@ class Character:
         elif stale_concerns: print(f"{self.name} (Manager) notes stale data for {order_to_process.order_id}, proceeding with caution.")
         if can_approve:
             order_to_process.status = "Approved"; order_to_process.approved_by = self.name; order_to_process.approval_day = world.game_time.current_day; self.add_memory(f"Approved WO {order_to_process.order_id}"); print(f"{self.name} (Manager) APPROVED {order_to_process.order_id[:8]}.")
-            self._receive_payment(JOB_SALARIES.get("Manage Subordinates", 3), f"reviewing WO {order_to_process.order_id[:4]}")
+            self._receive_payment(JOB_SALARIES.get("Manage Subordinates", 3), f"reviewing WO {order_to_process.order_id[:4]}", world)
         else:
             order_to_process.status = "Denied"; order_to_process.denied_by = self.name; order_to_process.denial_reason = f"Insuff: {', '.join(missing_notes) or 'stale data'}"; self.add_memory(f"Denied WO {order_to_process.order_id}"); print(f"{self.name} (Manager) DENIED {order_to_process.order_id[:8]}. Reason: {order_to_process.denial_reason}")
-            self._receive_payment(JOB_SALARIES.get("Manage Subordinates", 3), f"reviewing WO {order_to_process.order_id[:4]}")
+            self._receive_payment(JOB_SALARIES.get("Manage Subordinates", 3), f"reviewing WO {order_to_process.order_id[:4]}", world)
     def _execute_maintain_ledger(self, world: 'World'):
         if self.job != "Bookkeeper":
             self.current_goal = self.get_default_goal()
@@ -1231,7 +1673,7 @@ class Character:
 
             world.ledger.update_stockpile_record(target_stockpile_name, recorded_inventory, world.game_time.current_day)
             self.add_memory(f"Counted {target_stockpile_name}"); print(f"{self.name} (Bookkeeper) finished counting {target_stockpile_name}. Ledger updated with: {recorded_inventory}. Day: {world.game_time.current_day}.")
-            self._receive_payment(JOB_SALARIES.get("Maintain Ledger", 4), f"counting {target_stockpile_name}")
+            self._receive_payment(JOB_SALARIES.get("Maintain Ledger", 4), f"counting {target_stockpile_name}", world)
             self.current_goal = create_goal_from_job("Maintain Ledger", self.name) or self.get_default_goal()
             self.decide_action(world)
             return
@@ -1286,6 +1728,138 @@ class Character:
             # self.current_goal = self.get_default_goal() # This line was an error and removed
             self.decide_action(world) # Process new goal
         # If no next_goal_type, means current logic is fine, or it's already Idle/Wander - or if the above didn't set a new goal, it implies current one continues or becomes default via decide_action
+
+    def _execute_perform_farmer_duties(self, world: 'World'):
+        if self.job != "Farmer":
+            self.current_goal = self.get_default_goal()
+            return
+
+        params = self.current_goal.parameters
+        params.setdefault("phase", "gather")
+        deliver_threshold = max(3, min(self.max_inventory_items, 6))
+
+        if params.get("phase") == "deliver" or self.inventory.get("Food", 0) >= deliver_threshold:
+            params["phase"] = "deliver"
+            if self._deposit_resource_to_nearest_stockpile("Food", world):
+                params["phase"] = "gather"
+                self.current_goal = self.get_default_goal()
+            return
+
+        field_location = self.find_task_location("Tend Fields", world)
+        if not field_location:
+            self.add_memory("No open fields to tend today; shifting to other duties.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        if (self.x, self.y) != field_location:
+            self.move_towards(field_location[0], field_location[1], world)
+            return
+
+        if not self._execute_generic_task(world, "Tend Fields"):
+            return
+
+        if self.inventory.get("Food", 0) >= deliver_threshold:
+            params["phase"] = "deliver"
+
+    def _execute_perform_hunter_duties(self, world: 'World'):
+        if self.job != "Hunter":
+            self.current_goal = self.get_default_goal()
+            return
+
+        params = self.current_goal.parameters
+        params.setdefault("phase", "stalk")
+        deliver_threshold = max(2, min(self.max_inventory_items, 5))
+
+        if params.get("phase") == "deliver" or self.inventory.get("Food", 0) >= deliver_threshold:
+            params["phase"] = "deliver"
+            if self._deposit_resource_to_nearest_stockpile("Food", world):
+                params["phase"] = "stalk"
+                self.current_goal = self.get_default_goal()
+            return
+
+        hunt_location = self.find_task_location("Hunt Game", world)
+        if not hunt_location:
+            self.add_memory("Couldn't find promising hunting grounds today.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        if (self.x, self.y) != hunt_location:
+            self.move_towards(hunt_location[0], hunt_location[1], world)
+            return
+
+        if not self._execute_generic_task(world, "Hunt Game"):
+            return
+
+        if self.inventory.get("Food", 0) >= deliver_threshold:
+            params["phase"] = "deliver"
+
+    def _execute_perform_fletcher_duties(self, world: 'World'):
+        if self.job != "Fletcher":
+            self.current_goal = self.get_default_goal()
+            return
+
+        params = self.current_goal.parameters
+        params.setdefault("phase", "craft")
+        bundle_threshold = max(2, min(self.max_inventory_items, 4))
+
+        if params.get("phase") == "deliver" or self.inventory.get("Arrow Bundle", 0) >= bundle_threshold:
+            params["phase"] = "deliver"
+            if self._deposit_resource_to_nearest_stockpile("Arrow Bundle", world):
+                params["phase"] = "craft"
+                self.current_goal = self.get_default_goal()
+            return
+
+        if self.inventory.get("Wood", 0) < 2:
+            stockpiles = world.get_stockpiles_for_resource("Wood")
+            if not stockpiles:
+                self.add_memory("No wood available for fletching.")
+                self.current_goal = self.get_default_goal()
+                return
+            target_stockpile = min(
+                stockpiles,
+                key=lambda sp: min(abs(pt[0] - self.x) + abs(pt[1] - self.y) for pt in sp.access_points),
+            )
+            access_point = min(
+                target_stockpile.access_points,
+                key=lambda loc: abs(loc[0] - self.x) + abs(loc[1] - self.y),
+            )
+            if (self.x, self.y) != access_point:
+                self.move_towards(access_point[0], access_point[1], world)
+                return
+            success, removed = target_stockpile.remove_item("Wood", 3)
+            if not success or removed <= 0:
+                self.add_memory(f"{target_stockpile.name} had no wood for fletching today.")
+                return
+            self.inventory["Wood"] = self.inventory.get("Wood", 0) + removed
+            if world.game_time:
+                world.ledger.update_stockpile_record(
+                    target_stockpile.name, target_stockpile.inventory, world.game_time.current_day
+                )
+            world.add_event_log_message(
+                f"{self.name} withdrew {removed} Wood from {target_stockpile.name} for arrow crafting."
+            )
+            return
+
+        starting_arrows = self.inventory.get("Arrow Bundle", 0)
+        if not self._execute_generic_task(world, "Fletch Arrows"):
+            return
+        produced = self.inventory.get("Arrow Bundle", 0) - starting_arrows
+        if produced > 0:
+            wood_used = produced * 2
+            current_wood = self.inventory.get("Wood", 0)
+            if current_wood >= wood_used:
+                current_wood -= wood_used
+                if current_wood > 0:
+                    self.inventory["Wood"] = current_wood
+                else:
+                    self.inventory.pop("Wood", None)
+            else:
+                self.inventory.pop("Wood", None)
+            self.add_memory(f"Crafted {produced} arrow bundles for the militia.")
+            self.update_mood_score(config.MOOD_CHANGE_SUCCESSFUL_TASK_MINOR, "Finished an arrow batch")
+
+        if self.inventory.get("Arrow Bundle", 0) >= bundle_threshold:
+            params["phase"] = "deliver"
 
     def _execute_initiate_hauling(self, world: 'World'):
         # Parameters should be in self.current_goal.parameters
@@ -1360,9 +1934,9 @@ class Character:
 
             # Pay for hauling if it's a primary job duty
             if self.job == "Woodcutter" and res == "Wood":
-                self._receive_payment(JOB_SALARIES.get("Perform Woodcutter Duties", 5), f"hauling {res}")
+                self._receive_payment(JOB_SALARIES.get("Perform Woodcutter Duties", 5), f"hauling {res}", world)
             elif self.job == "Stonemason" and res == "Stone":
-                self._receive_payment(JOB_SALARIES.get("Perform Stonemason Duties", 5), f"hauling {res}")
+                self._receive_payment(JOB_SALARIES.get("Perform Stonemason Duties", 5), f"hauling {res}", world)
 
             self.current_goal = self.get_default_goal()
         else:
@@ -1384,6 +1958,15 @@ class Character:
         # Default job quota, could be overridden by goal parameters if a specific amount is requested
         job_quota = self.current_goal.parameters.get("quota", self.needs.get("Wood",5) if self.job == "Woodcutter" else float('inf'))
 
+        directive = world.get_resource_directive("Wood") if hasattr(world, "get_resource_directive") else None
+        if directive:
+            job_quota = max(job_quota, directive.get("per_trip_quota", job_quota))
+            if world.game_time and directive.get("last_reminded_day") != world.game_time.current_day:
+                directive["last_reminded_day"] = world.game_time.current_day
+                self.add_memory(
+                    f"Following directive to bring back at least {directive['per_trip_quota']} Wood (set by {directive.get('originator', 'leadership')})."
+                )
+
         if self.get_inventory_load()>=self.max_inventory_items or inv_wood >= job_quota :
             # self.current_goal = "Perform Woodcutter Duties" # old
             self.current_goal = create_goal_from_job("Perform Woodcutter Duties", self.name) or self.get_default_goal()
@@ -1404,57 +1987,46 @@ class Character:
         inv_stone = self.inventory.get("Stone",0)
         job_quota = self.current_goal.parameters.get("quota", self.needs.get("Stone",5) if self.job == "Stonemason" else float('inf'))
 
+        directive = world.get_resource_directive("Stone") if hasattr(world, "get_resource_directive") else None
+        if directive:
+            job_quota = max(job_quota, directive.get("per_trip_quota", job_quota))
+            if world.game_time and directive.get("last_reminded_day") != world.game_time.current_day:
+                directive["last_reminded_day"] = world.game_time.current_day
+                self.add_memory(
+                    f"Settlement directive urges gathering {directive['per_trip_quota']} Stone before returning."
+                )
+
         if self.get_inventory_load()>=self.max_inventory_items or inv_stone >= job_quota:
             # self.current_goal = "Perform Stonemason Duties" # old
             self.current_goal = create_goal_from_job("Perform Stonemason Duties", self.name) or self.get_default_goal()
 
 
     def _execute_gather_herbs(self, world: 'World'): # Assumes current_goal is GATHER_RESOURCE for Herbs
-        # For now, assume herbs can be found in "Forest" tiles, similar to wood.
-        # This would need adjustment if a specific "Meadow" tile or herb resource node is implemented.
-        # The find_task_location would also need to be updated to support "Herbs" if it's tied to a specific tile.
-        # For this initial pass, we'll directly use "Gather Herbs" task if a location can be found.
-
-        # Temporary: find_task_location doesn't support "Herbs" yet.
-        # We'll assume a generic "Forest" location for gathering if the task is "Gather Herbs".
-        # This part needs refinement based on how herb locations are defined in the world.
-        task_loc = self.find_task_location("Gather Herbs", world) # This will currently fail as "Gather Herbs" doesn't map to a known tile in find_task_location
-
-        # Fallback: If find_task_location doesn't work for herbs yet, try finding any Forest tile.
-        # This is a placeholder until find_task_location is updated or herb sources are better defined.
-        if not task_loc:
-            self.add_memory("No specific herb location found, trying generic Forest.")
-            # Simplified search for any Forest tile for now
-            found_forest_tile = None
-            for r_idx in range(world.grid_size[0]):
-                for c_idx in range(world.grid_size[1]):
-                    if world.get_tile(r_idx, c_idx) == "Forest":
-                        # Check if this forest tile actually has herbs - future enhancement
-                        # For now, any forest tile is a potential spot.
-                        found_forest_tile = (r_idx, c_idx)
-                        break
-                if found_forest_tile:
-                    break
-            task_loc = found_forest_tile
+        task_loc = self.find_task_location("Gather Herbs", world)
 
         if not task_loc:
-            self.add_memory(f"Cannot find a location to gather herbs (e.g., Forest).")
-            self.current_goal = self.get_default_goal() # Or back to a job default goal
+            self.add_memory("I couldn't find any herb patches in the surrounding woods.")
+            self.current_goal = self.get_default_goal()
             return
 
         if (self.x, self.y) != task_loc:
             self.move_towards(task_loc[0], task_loc[1], world)
             return
 
-        # Execute the generic task for gathering
         if not self._execute_generic_task(world, "Gather Herbs"):
-            # This could mean a tool is needed (if defined for "Gather Herbs" later)
-            # or some other precondition failed.
             return
 
-        # Check if inventory is full or if a personal quota is met (if any)
-        # For now, just gather until inventory is full.
-        if self.get_inventory_load() >= self.max_inventory_items:
+        directive = world.get_resource_directive("Herbs") if hasattr(world, "get_resource_directive") else None
+        per_trip_quota = directive.get("per_trip_quota") if directive else None
+        if directive and world.game_time and directive.get("last_reminded_day") != world.game_time.current_day:
+            directive["last_reminded_day"] = world.game_time.current_day
+            self.add_memory(
+                f"Clinic request: return with at least {per_trip_quota} Herbs to support medicine."
+            )
+
+        if self.get_inventory_load() >= self.max_inventory_items or (
+            per_trip_quota is not None and self.inventory.get("Herbs", 0) >= per_trip_quota
+        ):
             self.add_memory("Inventory full of herbs.")
             # Decide what to do next, e.g., haul herbs or return to duties.
             # For a Medic/CMO, this might be returning to the clinic or seeking patients.
@@ -1583,7 +2155,7 @@ class Character:
 
         if treatment_successful_this_tick:
             self._grant_skill_experience("Medicine", 1.5, world) # More XP for successful application
-            self._receive_payment(JOB_SALARIES.get("Provide Medical Care", 8), f"treating {target_patient.name}")
+            self._receive_payment(JOB_SALARIES.get("Provide Medical Care", 8), f"treating {target_patient.name}", world)
         else:
             self._grant_skill_experience("Medicine", 0.2, world) # Minor XP for attempt
 
@@ -1604,6 +2176,9 @@ class Character:
         if self.job != "Mayor":
             self.current_goal = self.get_default_goal()
             return
+
+        if hasattr(world, "fulfill_campaign_promises"):
+            world.fulfill_campaign_promises(self)
 
         self.add_memory(f"{self.name} the Mayor is assessing the overall resource status of the settlement.")
 
@@ -1780,27 +2355,44 @@ class Character:
             self.current_goal = self.get_default_goal()
             return
 
-        self.add_memory(f"Sheriff {self.name} is maintaining peace in the settlement.")
+        if self.active_crime_assignment:
+            if self.current_goal.type != GoalType.INVESTIGATE_DISTURBANCE:
+                self.current_goal = Goal(
+                    GoalType.INVESTIGATE_DISTURBANCE,
+                    assignee_id=self.name,
+                    originator_id=self.name,
+                    parameters={"crime_id": self.active_crime_assignment},
+                )
+            return
 
-        # Initial simple behavior: Log surveying and occasionally move to a central point or wander.
+        incident = world.claim_next_crime(self.name) if hasattr(world, "claim_next_crime") else None
+        if incident:
+            self.active_crime_assignment = incident.get("id")
+            self.crime_investigation_focus = incident.copy()
+            suspect_name = incident.get("suspect", "unknown party")
+            self.add_memory(
+                f"Responding to theft report involving {suspect_name} at {incident.get('location_label', 'unknown site')}.")
+            self.current_goal = Goal(
+                GoalType.INVESTIGATE_DISTURBANCE,
+                assignee_id=self.name,
+                originator_id=self.name,
+                parameters={
+                    "crime_id": incident.get("id"),
+                    "suspect": incident.get("suspect"),
+                    "location": incident.get("location"),
+                },
+            )
+            return
+
+        self.add_memory(f"Sheriff {self.name} is maintaining peace in the settlement.")
         if random.random() < 0.2:
             self.add_memory("Surveying the surroundings for any disturbances.")
-
-        # Placeholder for patrolling movement: move towards a conceptual "town_center" or just wander slightly.
-        # If world had defined key locations, Sheriff could move between them.
-        # For now, a simple wander-like behavior if not actively doing something else.
-        if random.random() < 0.1: # Low chance to decide to move to a different spot
-            # Simple wander to simulate being present in different areas.
-            # This could be replaced with movement to specific patrol points if defined.
+        if random.random() < 0.1:
             dx = random.choice([-1, 0, 1])
             dy = random.choice([-1, 0, 1])
             if dx != 0 or dy != 0:
                 self.add_memory(f"Sheriff {self.name} moves to a new vantage point.")
-                self.move(dx, dy, world) # move will handle collisions/boundaries
-
-        # Future: Scan for incidents, characters with "Troublemaker" trait, etc.
-        # For now, the Sheriff's presence is the primary function.
-        # Goal remains "Maintain Peace in Settlement" unless an incident changes it.
+                self.move(dx, dy, world)
         return
 
     def _execute_patrol_area(self, world: 'World'): # For Deputy
@@ -1808,26 +2400,161 @@ class Character:
             self.current_goal = self.get_default_goal()
             return
 
-        self.add_memory(f"Deputy {self.name} is patrolling their assigned area.")
+        if self.active_crime_assignment:
+            if self.current_goal.type != GoalType.INVESTIGATE_DISTURBANCE:
+                self.current_goal = Goal(
+                    GoalType.INVESTIGATE_DISTURBANCE,
+                    assignee_id=self.name,
+                    originator_id=self.name,
+                    parameters={"crime_id": self.active_crime_assignment},
+                )
+            return
 
-        # Simple patrolling behavior: move randomly or towards predefined points.
-        # For now, just a random move.
-        if random.random() < 0.3: # Chance to move each tick while patrolling
+        incident = world.claim_next_crime(self.name) if hasattr(world, "claim_next_crime") else None
+        if incident:
+            self.active_crime_assignment = incident.get("id")
+            self.crime_investigation_focus = incident.copy()
+            self.add_memory(
+                f"Deputy {self.name} takes over patrol case {incident.get('id')} near {incident.get('location_label', 'the yards')}.")
+            self.current_goal = Goal(
+                GoalType.INVESTIGATE_DISTURBANCE,
+                assignee_id=self.name,
+                originator_id=self.name,
+                parameters={
+                    "crime_id": incident.get("id"),
+                    "suspect": incident.get("suspect"),
+                    "location": incident.get("location"),
+                },
+            )
+            return
+
+        self.add_memory(f"Deputy {self.name} is patrolling their assigned area.")
+        if random.random() < 0.3:
             dx = random.choice([-1, 0, 1])
             dy = random.choice([-1, 0, 1])
-            if dx != 0 or dy != 0: # Ensure there's an actual move attempt
+            if dx != 0 or dy != 0:
                 if self.move(dx, dy, world):
                     self.add_memory(f"Patrolling... moved to ({self.x},{self.y}).")
                 else:
-                    self.add_memory(f"Patrolling... tried to move but was blocked.")
+                    self.add_memory("Patrolling... tried to move but was blocked.")
             else:
                 self.add_memory("Patrolling... surveying current location.")
         else:
             self.add_memory("Patrolling... observing the area.")
-
-        # Goal remains "Patrol Area". Deputies would continuously patrol.
-        # Could add logic to return to a "Guardhouse" or report to Sheriff periodically.
         return
+
+    def _execute_investigate_disturbance(self, world: 'World'):
+        goal_params = self.current_goal.parameters if self.current_goal else {}
+        crime_id = goal_params.get("crime_id") or self.active_crime_assignment
+        if not crime_id:
+            self.active_crime_assignment = None
+            self.crime_investigation_focus = None
+            self.current_goal = self.get_default_goal()
+            return
+
+        incident = world.get_crime_by_id(crime_id) if hasattr(world, "get_crime_by_id") else None
+        if not incident or incident.get("status") == "resolved":
+            self.active_crime_assignment = None
+            self.crime_investigation_focus = None
+            self.current_goal = self.get_default_goal()
+            return
+
+        suspect_name = incident.get("suspect")
+        suspect = world.get_character_by_name(suspect_name) if suspect_name else None
+        location_data = incident.get("location") or goal_params.get("location")
+        location_coords: Optional[Tuple[int, int]] = None
+        if isinstance(location_data, dict):
+            coords = location_data.get("coords")
+            if coords:
+                location_coords = (coords[0], coords[1])
+        if suspect:
+            location_coords = (suspect.x, suspect.y)
+
+        if location_coords and (self.x, self.y) != location_coords:
+            self.move_towards(location_coords[0], location_coords[1], world)
+            if suspect:
+                self.add_memory(f"Closing in on {suspect_name} regarding case {crime_id}.")
+            else:
+                self.add_memory(
+                    f"Investigating disturbance near {incident.get('location_label', 'the reported site')} for case {crime_id}."
+                )
+            return
+
+        security_skill = self.skills.get("Security", {}).get("level", 0)
+        success_chance = min(0.95, 0.45 + 0.08 * security_skill + (0.05 if suspect else 0.0))
+        investigation_success = random.random() < success_chance
+
+        if investigation_success and suspect:
+            recovered_amount = 0
+            stolen_resource = incident.get("resource")
+            if stolen_resource:
+                available = suspect.inventory.get(stolen_resource, 0)
+                if available > 0:
+                    recovered_amount = min(available, incident.get("amount", available))
+                    suspect.inventory[stolen_resource] = available - recovered_amount
+                    if suspect.inventory[stolen_resource] <= 0:
+                        suspect.inventory.pop(stolen_resource, None)
+                    target_stockpile = None
+                    if isinstance(location_data, dict):
+                        target_stockpile = world.get_stockpile_by_name(location_data.get("stockpile"))
+                    if target_stockpile and target_stockpile.is_allowed(stolen_resource):
+                        added, actual = target_stockpile.add_item(stolen_resource, recovered_amount)
+                        if added:
+                            recovered_amount = actual
+                            if world.game_time:
+                                world.ledger.update_stockpile_record(
+                                    target_stockpile.name,
+                                    target_stockpile.inventory,
+                                    world.game_time.current_day,
+                                )
+                    if recovered_amount > 0 and (not target_stockpile or not target_stockpile.is_allowed(stolen_resource)):
+                        self.inventory[stolen_resource] = self.inventory.get(stolen_resource, 0) + recovered_amount
+
+            suspect.update_reputation(-5, f"Apprehended for theft by {self.name}", world)
+            suspect.update_mood_score(
+                getattr(config, "MOOD_CHANGE_CAUGHT_STEALING", -15), "Apprehended for theft"
+            )
+            suspect.add_memory(f"Apprehended by {self.name} for theft case {crime_id}.")
+            self.add_memory(f"Detained {suspect_name} and resolved case {crime_id}.")
+            notes = (
+                f"Suspect detained; recovered {recovered_amount} {incident.get('resource', 'goods')}"
+                if recovered_amount
+                else "Suspect detained"
+            )
+            if hasattr(world, "resolve_crime_outcome"):
+                world.resolve_crime_outcome(
+                    crime_id,
+                    "apprehended",
+                    self.name,
+                    caught=True,
+                    notes=notes,
+                )
+        elif investigation_success:
+            self.add_memory(f"Secured the scene of case {crime_id}; suspect not present.")
+            if hasattr(world, "resolve_crime_outcome"):
+                world.resolve_crime_outcome(
+                    crime_id,
+                    "scene_secured",
+                    self.name,
+                    caught=False,
+                    notes="Scene secured",
+                    requeue=False,
+                )
+        else:
+            self.add_memory(f"Lost the trail for case {crime_id}; will revisit once new leads appear.")
+            if hasattr(world, "resolve_crime_outcome"):
+                world.resolve_crime_outcome(
+                    crime_id,
+                    "lost_trail",
+                    self.name,
+                    caught=False,
+                    notes="Lead went cold",
+                    requeue=True,
+                )
+
+        self.active_crime_assignment = None
+        self.crime_investigation_focus = None
+        self.current_goal = self.get_default_goal()
 
     def _execute_seek_medical_attention(self, world: 'World'):
         self.add_memory("Feeling unwell, seeking medical attention.")
@@ -1903,12 +2630,202 @@ class Character:
         self.current_goal = self.get_default_goal()
 
     def _execute_manage_estate(self, world: 'World'):
-        self.add_memory("Managing the estate. (Placeholder)")
+        if self.job != "Reeve":
+            self.current_goal = self.get_default_goal()
+            return
+
+        if not world.game_time:
+            self.add_memory("I need the calendar to judge estate duties properly.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        today = world.game_time.current_day
+        if self.last_estate_review_day == today:
+            self.add_memory("Estate review already completed today; returning to other duties.")
+            self.current_goal.set_completed()
+            self.current_goal = self.get_default_goal()
+            return
+
+        focus_resources = self.current_goal.parameters.get("focus_resources", ["Food", "Wood", "Stone", "Herbs"])
+        low_threshold = getattr(config, "MAYOR_RESOURCE_LOW_THRESHOLD", 20)
+        high_threshold = getattr(config, "MAYOR_RESOURCE_HIGH_THRESHOLD", 150)
+
+        summary_chunks: List[str] = []
+        directives_issued: List[str] = []
+        surplus_tasks: List[Dict[str, Any]] = []
+
+        for resource in focus_resources:
+            total_qty = world.get_total_resource_quantity(resource)
+            summary_chunks.append(f"{resource}:{total_qty}")
+            if total_qty < low_threshold:
+                existing = world.resource_collection_directives.get(resource)
+                if not existing or existing.get("expires_day", -1) <= today:
+                    directive = world.set_resource_collection_directive(
+                        resource,
+                        max(3, low_threshold - total_qty),
+                        duration_days=3,
+                        reason=f"Estate shortage flagged by {self.name}",
+                        originator=self.name,
+                    )
+                    directives_issued.append(f"Gather {directive['per_trip_quota']} {resource}")
+                else:
+                    directives_issued.append(f"Existing directive for {resource} remains in force")
+            elif total_qty > high_threshold:
+                severity = total_qty - high_threshold
+                quantity_to_collect = max(1, min(10, severity // 2))
+                surplus_tasks.append(
+                    {
+                        "resource": resource,
+                        "quantity": quantity_to_collect,
+                        "reason": f"Collect tithe from {resource} surplus",
+                    }
+                )
+
+        bailiff_names = [name for name in self.subordinates_names if name]
+        bailiffs = [world.get_character_by_name(name) for name in bailiff_names]
+        bailiffs = [b for b in bailiffs if b and b.job == "Bailiff"]
+
+        delegated = 0
+        if surplus_tasks and bailiffs:
+            for task in surplus_tasks:
+                if not bailiffs:
+                    break
+                bailiff = bailiffs.pop(0)
+                bailiff_goal = Goal(
+                    GoalType.ASSIST_REEVE,
+                    assignee_id=bailiff.name,
+                    originator_id=self.name,
+                    priority=3,
+                    parameters={"estate_task": task.copy()},
+                )
+                bailiff.current_goal = bailiff_goal
+                bailiff.add_memory(
+                    f"{self.name} ordered me to collect {task['quantity']} {task['resource']} for estate tithe."
+                )
+                delegated += 1
+
+        summary_text = ", ".join(summary_chunks) if summary_chunks else "no tracked resources"
+        directive_text = "; ".join(directives_issued) if directives_issued else "no directives needed"
+        world.add_event_log_message(
+            f"{self.name} reviews the estate (resources: {summary_text}; directives: {directive_text};"
+            f" bailiff tasks: {delegated})."
+        )
+        self.add_memory(
+            f"Estate managed. Resources checked ({summary_text}). Directives noted: {directive_text}."
+        )
+        self.last_estate_review_day = today
+        self.active_estate_orders = surplus_tasks
+        self.current_goal.set_completed()
         self.current_goal = self.get_default_goal()
 
     def _execute_assist_reeve(self, world: 'World'):
-        self.add_memory("Assisting the reeve. (Placeholder)")
-        self.current_goal = self.get_default_goal()
+        if self.job != "Bailiff":
+            self.current_goal = self.get_default_goal()
+            return
+
+        estate_task = self.current_goal.parameters.get("estate_task")
+        if not estate_task:
+            self.add_memory("No estate task provided; returning to patrol duties.")
+            self.current_goal.set_completed()
+            self.current_goal = self.get_default_goal()
+            return
+
+        resource_name = estate_task.get("resource")
+        quantity_target = max(1, int(estate_task.get("quantity", 1)))
+        carried = self.inventory.get(resource_name, 0)
+
+        if carried >= quantity_target:
+            supervisor = world.get_character_by_name(self.supervisor_name) if self.supervisor_name else None
+            if supervisor:
+                if abs(self.x - supervisor.x) + abs(self.y - supervisor.y) > 1:
+                    self.move_towards(supervisor.x, supervisor.y, world)
+                    return
+                self.inventory[resource_name] -= quantity_target
+                if self.inventory[resource_name] <= 0:
+                    del self.inventory[resource_name]
+                unit_price = world.get_market_price(resource_name)
+                revenue = unit_price * quantity_target
+                world.treasury_coins += revenue
+                supervisor.add_memory(
+                    f"{self.name} delivered {quantity_target} {resource_name} for the estate tithe."
+                )
+                self.add_memory(
+                    f"Delivered {quantity_target} {resource_name} to {supervisor.name}; treasury received {revenue} coins."
+                )
+                world.add_event_log_message(
+                    f"{self.name} turns over {quantity_target} {resource_name} to {supervisor.name} for {revenue} coins of tithe."
+                )
+            else:
+                stockpiles = world.get_stockpiles_for_resource(resource_name)
+                if stockpiles:
+                    deposit_target = min(
+                        stockpiles,
+                        key=lambda sp: min(abs(pt[0] - self.x) + abs(pt[1] - self.y) for pt in sp.access_points),
+                    )
+                    access_point = min(
+                        deposit_target.access_points,
+                        key=lambda loc: abs(loc[0] - self.x) + abs(loc[1] - self.y),
+                    )
+                    if (self.x, self.y) != access_point:
+                        self.move_towards(access_point[0], access_point[1], world)
+                        return
+                    success, added = deposit_target.add_item(resource_name, carried)
+                    if success and added:
+                        self.inventory.pop(resource_name, None)
+                        world.add_event_log_message(
+                            f"{self.name} stores {added} {resource_name} in {deposit_target.name} awaiting tithe pickup."
+                        )
+                        if world.game_time:
+                            world.ledger.update_stockpile_record(
+                                deposit_target.name, deposit_target.inventory, world.game_time.current_day
+                            )
+                else:
+                    self.add_memory("No stockpile available to hold the collected tithe.")
+
+            self.current_goal.parameters["estate_task_completed"] = True
+            self.current_goal.set_completed()
+            self.current_goal = self.get_default_goal()
+            return
+
+        exhausted = self.current_goal.parameters.setdefault("exhausted_stockpiles", [])
+        stockpiles = [sp for sp in world.get_stockpiles_for_resource(resource_name) if sp.name not in exhausted]
+        if not stockpiles:
+            self.add_memory(f"All stockpiles are empty of {resource_name}; reporting back to the reeve.")
+            self.current_goal.set_failed(reason="No stockpile could fulfil the tithe request.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        target_stockpile = min(
+            stockpiles,
+            key=lambda sp: min(abs(pt[0] - self.x) + abs(pt[1] - self.y) for pt in sp.access_points),
+        )
+        access_point = min(
+            target_stockpile.access_points,
+            key=lambda loc: abs(loc[0] - self.x) + abs(loc[1] - self.y),
+        )
+
+        if (self.x, self.y) != access_point:
+            self.move_towards(access_point[0], access_point[1], world)
+            return
+
+        needed = quantity_target - carried
+        success, removed = target_stockpile.remove_item(resource_name, needed)
+        if not success or removed <= 0:
+            exhausted.append(target_stockpile.name)
+            self.add_memory(
+                f"{target_stockpile.name} had no spare {resource_name}; trying a different store."
+            )
+            return
+
+        self.inventory[resource_name] = self.inventory.get(resource_name, 0) + removed
+        if world.game_time:
+            world.ledger.update_stockpile_record(
+                target_stockpile.name, target_stockpile.inventory, world.game_time.current_day
+            )
+        world.add_event_log_message(
+            f"{self.name} withdraws {removed} {resource_name} from {target_stockpile.name} for estate tithe."
+        )
+        self.add_memory(f"Collected {removed} {resource_name} from {target_stockpile.name} for the reeve.")
 
     def _execute_hold_high_court(self, world: 'World'):
         if not self.vassals:
@@ -1948,15 +2865,70 @@ class Character:
                 break
 
         if all_vassals_present:
+            today = world.game_time.current_day if world.game_time else None
+            if today is not None and self.last_high_court_day == today:
+                self.add_memory("The high court already convened today; dismissing the gathering.")
+                self.current_goal.set_completed()
+                self.current_goal = self.get_default_goal()
+                return
+
             self.add_memory("All my vassals are present. The high court is now in session.")
-            # The "court" itself is a placeholder action for now.
-            world.add_event_log_message(f"{self.name} holds high court with their vassals.")
-            # Relationship boosts for all involved.
+            pressures = world.identify_resource_pressures()
+            shortage_reports = [p for p in pressures if p["status"] == "shortage"]
+            surplus_reports = [p for p in pressures if p["status"] == "surplus"]
+            crime_count = len(world.pending_crimes)
+
+            discussion_points = []
+            if shortage_reports:
+                focus = shortage_reports[0]
+                discussion_points.append(
+                    f"shortage of {focus['resource']} (only {focus['quantity']})"
+                )
+                world.set_resource_collection_directive(
+                    focus["resource"],
+                    max(3, focus["threshold"] - focus["quantity"]),
+                    duration_days=3,
+                    reason=f"High court decree by {self.name}",
+                    originator=self.name,
+                )
+            if surplus_reports:
+                focus = surplus_reports[0]
+                discussion_points.append(
+                    f"surplus {focus['resource']} (stocked at {focus['quantity']})"
+                )
+            if crime_count:
+                discussion_points.append(f"{crime_count} unresolved crimes")
+
+            summary = "; ".join(discussion_points) if discussion_points else "routine matters"
+            world.add_event_log_message(
+                f"{self.name} holds high court ({summary})."
+            )
+            world.add_notable_event(
+                "HighCourt",
+                {
+                    "summary": f"{self.name}'s court addressed {summary}.",
+                    "liege": self.name,
+                    "vassal_count": len(self.vassals),
+                },
+            )
+
             for vassal_name in self.vassals:
                 vassal = world.get_character_by_name(vassal_name)
-                if vassal:
-                    self.modify_relationship(vassal_name, 3, world, reason="They attended my high court.")
-                    vassal.modify_relationship(self.name, 2, world, reason="I attended their high court as a loyal vassal.")
+                if not vassal:
+                    continue
+                relation_bonus = 2
+                mood_bonus = 3
+                if shortage_reports:
+                    relation_bonus -= 1
+                    vassal.update_mood_score(-2, "Court revealed shortages to address")
+                if surplus_reports:
+                    mood_bonus += 2
+                self.modify_relationship(vassal_name, relation_bonus, world, reason="They attended my high court.")
+                vassal.modify_relationship(self.name, relation_bonus - 1, world, reason="Attended their liege's court.")
+                vassal.update_mood_score(mood_bonus, f"Participated in high court with {self.name}")
+
+            if today is not None:
+                self.last_high_court_day = today
 
             self.current_goal.set_completed()
             self.current_goal = self.get_default_goal()
@@ -1997,28 +2969,136 @@ class Character:
             return
 
         speech_topic = "the general state of the settlement and future prospects"
-        # Basic LLM integration placeholder
-        generated_speech_snippet = ""
-        if config.USE_LLM:
-            # Simple prompt, can be greatly expanded
-            prompt = (f"You are {self.name}, the Mayor of a small, developing settlement. "
-                      f"Your personality is {self.personality} and you have traits: {', '.join(self.traits)}. "
-                      f"Briefly generate a snippet of a speech you are giving to your populace about {speech_topic}. "
-                      f"Keep it under 50 words.")
-            generated_speech_snippet = generate_dialogue(prompt, self.name) # Assuming generate_dialogue can be used for this
+        campaign_promises = getattr(world, "campaign_promises", {}).get(self.name, [])
+        if campaign_promises:
+            relevant_promises = [p for p in campaign_promises if p.get("status") in ("pledged", "enacted")]
+            if relevant_promises:
+                chosen_promise = random.choice(relevant_promises)
+                resource_focus = chosen_promise.get("resource")
+                if resource_focus:
+                    if chosen_promise.get("status") == "pledged":
+                        speech_topic = f"my pledge to strengthen our {resource_focus} supplies"
+                    else:
+                        speech_topic = f"progress delivering stronger {resource_focus} stores"
+                elif chosen_promise.get("type") == "community_event":
+                    speech_topic = "keeping community spirit high"
+        economic_report = getattr(world, "last_daily_economic_report", {}) or {}
+        taxes = economic_report.get("tax_collected", 0)
+        wages_paid = economic_report.get("wages_paid", 0)
+        pressures = world.identify_resource_pressures()
+        shortage = next((p for p in pressures if p["status"] == "shortage"), None)
+        surplus = next((p for p in pressures if p["status"] == "surplus"), None)
 
-        if generated_speech_snippet:
-            self.add_memory(f"Gave a speech: \"{generated_speech_snippet}\"")
-            world.add_event_log_message(f"Mayor {self.name} addresses the populace: \"{generated_speech_snippet}\"")
-        else:
-            self.add_memory(f"Practiced a speech about {speech_topic}.")
-            world.add_event_log_message(f"Mayor {self.name} clears their throat, preparing a speech about {speech_topic}.")
+        speech_segments = [
+            f"Citizens, {speech_topic}.",
+            f"Our treasury stands at {world.treasury_coins} coins",
+        ]
 
-        # Future: This action could affect world morale, NPC opinions of the Mayor, etc.
-        # For now, it's just a logged action.
+        if taxes:
+            speech_segments.append(f"tax collection brought in {taxes} coins yesterday")
+        if wages_paid:
+            speech_segments.append(f"and we met {wages_paid} coins of wages")
+        if shortage:
+            speech_segments.append(
+                f"we must rally gatherers to raise {shortage['resource']} above {shortage['threshold']} units"
+            )
+        elif surplus:
+            speech_segments.append(
+                f"our surplus of {surplus['resource']} now reaches {surplus['quantity']} units—let's invest it wisely"
+            )
+        speech_segments.append(f"The weather is {world.weather.lower()}, yet our resolve stays bright.")
+        speech_segments.append("Together we will keep the settlement thriving.")
+
+        generated_speech_snippet = " ".join(speech_segments)
+
+        self.add_memory(f"Gave a speech: \"{generated_speech_snippet}\"")
+        world.add_event_log_message(f"Mayor {self.name} addresses the populace: \"{generated_speech_snippet}\"")
 
         self.current_goal = self.get_default_goal() # Return to overseeing or default state
         return
+
+    def _execute_campaign_speech(self, world: 'World'):
+        if not world.game_time:
+            self.current_goal = self.get_default_goal()
+            return
+
+        rally_point = getattr(world, "market_location", (self.x, self.y))
+        if abs(self.x - rally_point[0]) + abs(self.y - rally_point[1]) > 2:
+            self.add_memory("Heading to the square to address voters.")
+            self.move_towards(rally_point[0], rally_point[1], world)
+            return
+
+        parameters = self.current_goal.parameters or {}
+        focus_summary = parameters.get("focus_summary") or "our settlement's future"
+        pledges = world.campaign_promises.get(self.name, [])
+        active_pledges = [p for p in pledges if p.get("status") == "pledged"]
+
+        env_snapshot = {}
+        if hasattr(world, "get_environment_snapshot") and callable(world.get_environment_snapshot):
+            env_snapshot = world.get_environment_snapshot() or {}
+        travel_speed = env_snapshot.get("travel_speed") or world.get_travel_speed_modifier()
+        resource_notes = []
+        for resource_name, entries in (env_snapshot.get("resource_multipliers") or {}).items():
+            combined = 1.0
+            for entry in entries:
+                combined *= entry.get("multiplier", 1.0)
+            if abs(combined - 1.0) > 0.01:
+                resource_notes.append(f"{resource_name} x{combined:.2f}")
+
+        speech_lines = [
+            f"Citizens, I stand before you to talk about {focus_summary}.",
+            f"Travel runs at {travel_speed:.2f}× pace—an edge we should seize.",
+        ]
+        if resource_notes:
+            snippet = ", ".join(resource_notes[: config.ENVIRONMENT_TRAVEL_SNIPPET_LIMIT])
+            speech_lines.append(f"Key yields today: {snippet}.")
+        if active_pledges:
+            leading = active_pledges[0]
+            summary = leading.get("summary", "our goals")
+            deadline = leading.get("deadline_day")
+            if deadline:
+                speech_lines.append(f"I will deliver on {summary} by day {deadline}.")
+            else:
+                speech_lines.append(f"I remain committed to {summary}.")
+        elif pledges:
+            speech_lines.append("Every promise kept strengthens our community.")
+        else:
+            speech_lines.append("Support me so we can keep prosperity flowing.")
+
+        speech_excerpt = " ".join(speech_lines)
+        self.add_memory(f"Campaign speech delivered: {speech_excerpt}")
+
+        listeners = [
+            char for char in world.get_nearby_characters(self, radius=4)
+            if char.name != self.name
+        ]
+        for listener in listeners:
+            relation_bonus = 2 + (1 if active_pledges else 0)
+            listener.modify_relationship(self.name, relation_bonus, world, reason="Attended campaign speech")
+            self.modify_relationship(listener.name, 1, world, reason="They attended my rally")
+            listener.update_mood_score(2, f"Motivated by {self.name}'s campaign rally")
+
+        if pledges:
+            self.update_reputation(2, "Campaign speech reinforced pledges", world)
+        else:
+            self.update_reputation(1, "Campaign speech rallied citizens", world)
+
+        audience_size = len(listeners)
+        world.add_event_log_message(
+            f"{self.name} campaigns about {focus_summary} for {audience_size} citizen{'s' if audience_size != 1 else ''}."
+        )
+        world.add_notable_event(
+            "CampaignSpeech",
+            {
+                "summary": f"{self.name} rallied {audience_size} citizens about {focus_summary}.",
+                "candidate": self.name,
+                "audience": audience_size,
+            },
+        )
+
+        self.last_campaign_speech_day = world.game_time.current_day
+        self.current_goal.set_completed()
+        self.current_goal = self.get_default_goal()
 
     def _execute_wander(self, world: 'World'): # Assumes current_goal is WANDER
         moves = []
@@ -2046,6 +3126,12 @@ class Character:
             self.current_goal = self.get_default_goal()
             return
 
+        phase_info = world.get_current_phase() if hasattr(world, "get_current_phase") else world.game_time.get_phase()
+        self._apply_phase_behavior(world, phase_info)
+        active_weather_event = world.get_active_weather_event() if hasattr(world, "get_active_weather_event") else None
+        if active_weather_event and self._should_seek_weather_shelter(active_weather_event):
+            self._seek_weather_shelter(world, active_weather_event)
+
         # Update mood based on critical complex needs
         self._update_mood_from_critical_needs()
 
@@ -2061,6 +3147,41 @@ class Character:
                 self.add_memory(f"Badly injured (Severity: {self.injury_severity}). Need medical attention.")
                 self.update_mood_score(config.MOOD_CHANGE_NEED_CRITICAL * 2, f"Severely injured (severity: {self.injury_severity})") # Larger mood hit
                 self.current_goal = Goal(GoalType.SEEK_MEDICAL_ATTENTION, assignee_id=self.name, originator_id=self.name)
+
+        if self.resting_at_home and self.current_goal.type not in [GoalType.REST_AT_HOME, GoalType.FIND_SHELTER]:
+            if hasattr(world, "release_residential_spot"):
+                world.release_residential_spot(self)
+            self.resting_at_home = False
+            self._rest_ticks = 0
+
+        energy_level = self.needs.get("Energy", 100)
+        rest_threshold = getattr(config, "ENERGY_THRESHOLD_REST", 40) + getattr(self, "_phase_rest_threshold_bonus", 0)
+        if energy_level < rest_threshold and self.current_goal.type not in [GoalType.REST_AT_HOME, GoalType.FIND_SHELTER, GoalType.SEEK_MEDICAL_ATTENTION]:
+            home_building = self._ensure_home_assignment(world)
+            if home_building:
+                self.add_memory(f"Exhausted—heading to {home_building.display_name} to rest.")
+                self.current_goal = Goal(
+                    GoalType.REST_AT_HOME,
+                    assignee_id=self.name,
+                    originator_id=self.name,
+                    parameters={"building_location": home_building.location},
+                    priority=2,
+                )
+            else:
+                self.add_memory("I am exhausted but have no bed. I need to find shelter.")
+                self.current_goal = Goal(GoalType.FIND_SHELTER, assignee_id=self.name, originator_id=self.name, priority=3)
+
+        thirst_level = self.needs.get("Thirst", 100)
+        if thirst_level < getattr(config, "THIRST_THRESHOLD_DRINK", 55) and self.current_goal.type not in [GoalType.DRINK_WATER, GoalType.GATHER_WATER, GoalType.SEEK_TO_BUY_ITEM]:
+            if self.inventory.get("Water", 0) > 0:
+                self.add_memory("Feeling parched—I have water on hand to drink.")
+                self.current_goal = Goal(GoalType.DRINK_WATER, assignee_id=self.name, originator_id=self.name, priority=2)
+            elif world.get_total_resource_quantity("Water") > 0:
+                self.add_memory("Thirsty—I'll check communal stores for water.")
+                self.current_goal = Goal(GoalType.DRINK_WATER, assignee_id=self.name, originator_id=self.name, priority=2)
+            else:
+                self.add_memory("No water anywhere. I'll gather some fresh supplies.")
+                self.current_goal = Goal(GoalType.GATHER_WATER, assignee_id=self.name, originator_id=self.name, priority=2)
 
         # Hunger check: If hungry, character will prioritize eating or getting food.
         if self.needs.get('Hunger', 100) < config.HUNGER_THRESHOLD_EAT and self.current_goal.type not in [GoalType.EAT_FOOD, GoalType.SEEK_TO_BUY_ITEM]:
@@ -2078,11 +3199,17 @@ class Character:
                 # For now, SEEK_SOLITUDE will just make them Wander.
                 # A more complex implementation could make them avoid others or go to a quiet spot.
                 self.add_memory(f"Feeling {self.mood}, I need some time alone.")
-                self.current_goal = Goal(GoalType.WANDER, assignee_id=self.name, originator_id=self.name, details="Seeking solitude due to mood.") # Wander is a simple proxy for solitude
+                self.current_goal = Goal(
+                    GoalType.WANDER,
+                    assignee_id=self.name,
+                    originator_id=self.name,
+                    parameters={"reason": "Seeking solitude due to mood."},
+                )  # Wander is a simple proxy for solitude
 
-        # If goal changed to Seek Medical Attention, execute that immediately this tick.
-        if self.current_goal.type == GoalType.SEEK_MEDICAL_ATTENTION:
-            pass # Let it fall through to goal execution or _execute_generic_task check
+        if self.current_goal.type in [GoalType.IDLE, GoalType.WANDER] and energy_level < config.NEED_SCORE_MAX:
+            passive_gain = getattr(config, "ENERGY_PASSIVE_RECOVERY_WHILE_IDLE", 0)
+            if passive_gain > 0:
+                self.needs["Energy"] = min(config.NEED_SCORE_MAX, energy_level + passive_gain)
 
         # --- Complex Need-Driven Goal/Action Biases ---
         # These are checked if not already in a critical goal state like SEEK_MEDICAL_ATTENTION or ASK_FOR_HELP
@@ -2147,43 +3274,8 @@ class Character:
 
 
         # Builder Logic: Focus on Build Orders
-        if self.job == "Builder":
-            if self.active_build_order_id: # Already has an active build order
-                if self.current_goal.type != GoalType.EXECUTE_BUILD_ORDER:
-                    # self.current_goal = "Execute Build Order"
-                    self.current_goal = Goal(GoalType.EXECUTE_BUILD_ORDER, assignee_id=self.name, originator_id=self.name,
-                                             parameters={"order_id": self.active_build_order_id,
-                                                         "structure_type": self.current_building_project,
-                                                         "location": self.building_site_target})
-                self._execute_build_order(world) # This function will manage its own state and completion
-                return
-            else: # No active build order, try to claim one if duty is to perform builder tasks
-                if self.current_goal.type == GoalType.PERFORM_BUILDER_DUTIES:
-                    approved_build_orders = world.get_approved_build_orders()
-                    if approved_build_orders:
-                        order_to_take = approved_build_orders[0] # Simplistic: take the first one
-
-                        order_to_take.status = "InProgress"
-                        order_to_take.assigned_to = self.name
-
-                        self._reset_building_state() # Clear any old state
-                        self.active_build_order_id = order_to_take.order_id
-                        self.current_building_project = order_to_take.details.get("structure_type")
-                        self.building_site_target = order_to_take.details.get("location")
-                        self.materials_gathered_for_build = False # Reset for new order
-
-                        # self.current_goal = "Execute Build Order"
-                        self.current_goal = Goal(GoalType.EXECUTE_BUILD_ORDER, assignee_id=self.name, originator_id=self.name,
-                                                 parameters={"order_id": self.active_build_order_id,
-                                                             "structure_type": self.current_building_project,
-                                                             "location": self.building_site_target})
-                        self.add_memory(f"Claimed Build WO {order_to_take.order_id} for {self.current_building_project}.")
-                        self._execute_build_order(world) # Start processing immediately
-                        return
-                    else: # No approved build orders
-                        self.add_memory("No build orders available for Builder Duties.")
-                        self.current_goal = self.get_default_goal() # No WOs to perform duties on
-                        # _execute_wander will be called if idle
+        if self._process_builder_routine(world):
+            return
 
         # If current goal was set to Execute Build Order by claiming or was already that
         if self.current_goal.type == GoalType.EXECUTE_BUILD_ORDER:
@@ -2207,9 +3299,14 @@ class Character:
         goal_executed_this_tick = True # Assume a goal will be handled unless specified otherwise
         # Perform <Job> Duties goals often break down into other goals.
         if self.current_goal.type == GoalType.PERFORM_BUILDER_DUTIES: # Already handled by builder logic above or will become IDLE
-            pass # Builder logic sets to EXECUTE_BUILD_ORDER or IDLE
+            if not self._process_builder_routine(world):
+                self._execute_wander(world)
+            return
         elif self.current_goal.type == GoalType.PERFORM_WOODCUTTER_DUTIES: self._execute_perform_woodcutter_duties(world)
         elif self.current_goal.type == GoalType.PERFORM_STONEMASON_DUTIES: self._execute_perform_stonemason_duties(world)
+        elif self.current_goal.type == GoalType.PERFORM_FARMER_DUTIES: self._execute_perform_farmer_duties(world)
+        elif self.current_goal.type == GoalType.PERFORM_HUNTER_DUTIES: self._execute_perform_hunter_duties(world)
+        elif self.current_goal.type == GoalType.PERFORM_FLETCHER_DUTIES: self._execute_perform_fletcher_duties(world)
         # Add other "Perform <Job> Duties" here, they typically set a more specific goal and call decide_action or return
 
         # Specific Action Goals
@@ -2221,6 +3318,7 @@ class Character:
             if resource_name == "Wood": self._execute_gather_wood(world)
             elif resource_name == "Stone": self._execute_gather_stone(world)
             elif resource_name == "Herbs": self._execute_gather_herbs(world)
+            elif resource_name == "Water": self._execute_gather_water(world)
             else: self.current_goal = self.get_default_goal() # Unknown resource
         elif self.current_goal.type == GoalType.INITIATE_HAULING: self._execute_initiate_hauling(world)
         elif self.current_goal.type == GoalType.HAUL_RESOURCE_TO_STOCKPILE: self._execute_haul_resource(world)
@@ -2235,7 +3333,9 @@ class Character:
         elif self.current_goal.type == GoalType.PROVIDE_MEDICAL_CARE: self._execute_provide_medical_care(world)
         elif self.current_goal.type == GoalType.MAINTAIN_PEACE_IN_SETTLEMENT: self._execute_maintain_peace(world)
         elif self.current_goal.type == GoalType.PATROL_AREA: self._execute_patrol_area(world)
+        elif self.current_goal.type == GoalType.INVESTIGATE_DISTURBANCE: self._execute_investigate_disturbance(world)
         elif self.current_goal.type == GoalType.GIVE_SPEECH: self._execute_give_speech(world)
+        elif self.current_goal.type == GoalType.CAMPAIGN_SPEECH: self._execute_campaign_speech(world)
         elif self.current_goal.type == GoalType.SEEK_MEDICAL_ATTENTION: self._execute_seek_medical_attention(world)
         elif self.current_goal.type == GoalType.REPORT_TO_LIEGE: self._execute_report_to_liege(world)
         elif self.current_goal.type == GoalType.MANAGE_ESTATE: self._execute_manage_estate(world)
@@ -2259,6 +3359,10 @@ class Character:
 
         # Need-Driven Goals
         elif self.current_goal.type == GoalType.EAT_FOOD: self._execute_eat_food(world)
+        elif self.current_goal.type == GoalType.DRINK_WATER: self._execute_drink_water(world)
+        elif self.current_goal.type == GoalType.FIND_SHELTER: self._execute_find_shelter(world)
+        elif self.current_goal.type == GoalType.REST_AT_HOME: self._execute_rest_at_home(world)
+        elif self.current_goal.type == GoalType.GATHER_WATER: self._execute_gather_water(world)
         elif self.current_goal.type == GoalType.SEEK_RECOGNITION: self._execute_seek_recognition(world)
         elif self.current_goal.type == GoalType.MAKE_NEW_FRIEND: self._execute_make_new_friend(world)
         elif self.current_goal.type == GoalType.IMPROVE_DWELLING: self._execute_improve_dwelling(world)
@@ -2304,6 +3408,10 @@ class Character:
             # Mood influence on general social interaction chance
             mood_social_mod = config.MOOD_EFFECT_SOCIAL_SUCCESS_MOD.get(self.mood, 0.0)
             current_social_interaction_chance += mood_social_mod # Additive, can be negative
+            current_social_interaction_chance += getattr(self, "_phase_social_bias", 0.0)
+            if active_weather_event and active_weather_event.get("requires_shelter"):
+                current_social_interaction_chance -= 0.15
+            current_social_interaction_chance = max(0.0, min(1.0, current_social_interaction_chance))
             current_social_interaction_chance = max(0.01, min(0.95, current_social_interaction_chance)) # Clamp
 
             if random.random() < current_social_interaction_chance:
@@ -2441,51 +3549,106 @@ class Character:
         if self.current_goal.type not in non_interruptible_social_goals :
             # --- Offer Comfort Check ---
             comfort_chance_modifier = 0.0
-            if "Kind" in self.traits: comfort_chance_modifier += 0.3
-            if "Compassionate" in self.traits: comfort_chance_modifier += 0.4
+            if "Kind" in self.traits:
+                comfort_chance_modifier += 0.3
+            if "Compassionate" in self.traits:
+                comfort_chance_modifier += 0.4
+
+            absolute_tick = None
+            if world.game_time:
+                absolute_tick = (
+                    world.game_time.current_day * world.game_time.ticks_per_day
+                    + world.game_time.current_tick
+                )
 
             if random.random() < (config.REACTIVE_SOCIAL_BASE_CHANCE + comfort_chance_modifier):
-                target_for_comfort: Optional[Character] = None
-                # Similar logic to find distressed character...
-                # (Assuming logic from the original block for finding char_in_need)
-                # Simplified for brevity:
-                for char_in_need in world.characters: # Placeholder for actual distress check logic
-                    if char_in_need.name != self.name and char_in_need.name in self.known_characters and \
-                       (char_in_need.mood in ["Sad", "Stressed"] or char_in_need.is_sick or char_in_need.is_injured) and \
-                       abs(self.x - char_in_need.x) + abs(self.y - char_in_need.y) <= 4:
-                        # Check if already comforted recently
-                        recently_interacted = False
-                        for entry in reversed(self.dialogue_history[-3:]):
-                             if entry.get("target") == char_in_need.name and entry.get("type") == "offer_comfort" and \
-                                world.game_time and (world.game_time.current_day - entry.get("day", -100)) < 1:
-                                 recently_interacted = True; break
-                        if not recently_interacted:
-                            target_for_comfort = char_in_need; break
+                distressed_candidates: List[Tuple[float, Character]] = []
+                for candidate in world.get_nearby_characters(self, radius=4):
+                    if candidate.name == self.name or candidate.name not in self.known_characters:
+                        continue
+                    distress_score = 0.0
+                    if candidate.mood in ["Sad", "Stressed", "Furious"]:
+                        distress_score += 15
+                    if candidate.is_sick:
+                        distress_score += 10 + candidate.sickness_severity * 2
+                    if candidate.is_injured:
+                        distress_score += 8 + candidate.injury_severity * 2
+                    belonging = candidate.needs.get('Belonging', config.NEED_BELONGING_DEFAULT)
+                    esteem = candidate.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT)
+                    distress_score += max(0, config.NEED_BELONGING_CRITICAL_THRESHOLD - belonging)
+                    distress_score += 0.5 * max(0, config.NEED_ESTEEM_CRITICAL_THRESHOLD - esteem)
+                    if candidate.needs.get('Hunger', 100) < config.CRITICAL_NEED_THRESHOLD_FOR_HELP:
+                        distress_score += 5
+                    if candidate.needs.get('Safety', config.NEED_SAFETY_DEFAULT) < config.NEED_SAFETY_CRITICAL_THRESHOLD:
+                        distress_score += 7
 
-                if target_for_comfort:
-                    self.current_goal = Goal(GoalType.OFFER_COMFORT, assignee_id=self.name, originator_id=self.name, parameters={"target_char_name": target_for_comfort.name})
-                    self.add_memory(f"Noticed {target_for_comfort.name} seems distressed. Decided to offer comfort.")
-                    # Goal set, dispatcher will handle.
+                    if distress_score < config.SOCIAL_DISTRESS_THRESHOLD:
+                        continue
+
+                    if absolute_tick is not None:
+                        last_tick = self._comfort_cooldowns.get(candidate.name)
+                        if last_tick is not None and absolute_tick - last_tick < config.ARGUMENT_RECENT_HISTORY_TICKS:
+                            continue
+
+                    distressed_candidates.append((distress_score, candidate))
+
+                if distressed_candidates:
+                    distressed_candidates.sort(key=lambda item: item[0], reverse=True)
+                    _, target_for_comfort = distressed_candidates[0]
+                    self.current_goal = Goal(
+                        GoalType.OFFER_COMFORT,
+                        assignee_id=self.name,
+                        originator_id=self.name,
+                        parameters={"target_char_name": target_for_comfort.name},
+                    )
+                    self.add_memory(
+                        f"Noticed {target_for_comfort.name} struggling (distress {distressed_candidates[0][0]:.1f}). Offering comfort."
+                    )
+                    if absolute_tick is not None:
+                        self._comfort_cooldowns[target_for_comfort.name] = absolute_tick
 
             # --- Potential for Argument Check ---
-            if self.current_goal.type not in non_interruptible_social_goals: # Re-check, Offer Comfort might have set goal
-                argue_chance_modifier = 0.0
-                if "Hot-headed" in self.traits: argue_chance_modifier += 0.15
-                # Similar logic to find target to argue with...
-                # Simplified for brevity:
-                for other_char in world.characters: # Placeholder for actual argument trigger logic
-                    if other_char.name != self.name and other_char.name in self.known_characters and \
-                       (self.get_relationship_score(other_char.name) < -40 or ("Hot-headed" in self.traits and "Hot-headed" in other_char.traits)) and \
-                       abs(self.x - other_char.x) + abs(self.y - other_char.y) <= 2:
-                        recently_interacted = False
-                        for entry in reversed(self.dialogue_history[-2:]):
-                             if entry.get("target") == other_char.name and entry.get("type") == "argue" and \
-                                world.game_time and (world.game_time.current_day - entry.get("day", -100)) < 1:
-                                 recently_interacted = True; break
-                        if not recently_interacted:
-                            self.current_goal = Goal(GoalType.ARGUE, assignee_id=self.name, originator_id=self.name, parameters={"target_char_name": other_char.name})
-                            self.add_memory(f"Feeling confrontational towards {other_char.name}. Decided to argue.")
-                            break # Found someone to argue with
+            if self.current_goal.type not in non_interruptible_social_goals:
+                argument_candidates: List[Tuple[float, Character]] = []
+                for other_char in world.get_nearby_characters(self, radius=3):
+                    if other_char.name == self.name or other_char.name not in self.known_characters:
+                        continue
+                    relationship_score = self.get_relationship_score(other_char.name)
+                    if relationship_score > config.ARGUMENT_RELATIONSHIP_THRESHOLD:
+                        continue
+
+                    tension_score = abs(relationship_score)
+                    if self.mood in ["Furious", "Stressed"]:
+                        tension_score += 10
+                    if other_char.mood in ["Furious", "Stressed"]:
+                        tension_score += 8
+                    if "Hot-headed" in self.traits:
+                        tension_score += 5
+                    if "Hot-headed" in other_char.traits:
+                        tension_score += 5
+
+                    if absolute_tick is not None:
+                        last_tick = self._argument_cooldowns.get(other_char.name)
+                        if last_tick is not None and absolute_tick - last_tick < config.ARGUMENT_RECENT_HISTORY_TICKS:
+                            continue
+
+                    argument_candidates.append((tension_score, other_char))
+
+                if argument_candidates:
+                    argument_candidates.sort(key=lambda item: item[0], reverse=True)
+                    top_score, target_char = argument_candidates[0]
+                    if top_score > abs(config.ARGUMENT_RELATIONSHIP_THRESHOLD):
+                        self.current_goal = Goal(
+                            GoalType.ARGUE,
+                            assignee_id=self.name,
+                            originator_id=self.name,
+                            parameters={"target_char_name": target_char.name},
+                        )
+                        self.add_memory(
+                            f"Frustrations with {target_char.name} boiled over (tension {top_score:.1f}). Confronting them."
+                        )
+                        if absolute_tick is not None:
+                            self._argument_cooldowns[target_char.name] = absolute_tick
 
             # --- Potential for Formal Apology ---
             if self.current_goal.type not in non_interruptible_social_goals: # Re-check again
@@ -2989,7 +4152,7 @@ class Character:
         subordinate.add_memory(f"Being fired crushed my esteem. Esteem: {subordinate.needs['Esteem']}")
 
         rep_change_reason = f"Was fired from job as {original_job} by {self.name}"
-        subordinate.update_reputation(config.REPUTATION_CHANGE_FIRED, rep_change_reason)
+        subordinate.update_reputation(config.REPUTATION_CHANGE_FIRED, rep_change_reason, world=world)
         if abs(config.REPUTATION_CHANGE_FIRED) >= config.REPUTATION_FOR_RUMOR_THRESHOLD and world.game_time:
             rumor_content_key = "was_fired_negative"
             # Firing is often a more significant event
@@ -3371,7 +4534,7 @@ class Character:
             target_char.add_memory(f"Accepting {self.name}'s apology made me feel more connected. Belonging: {target_char.needs['Belonging']}")
 
             rep_change_reason = f"Successfully apologized to {target_name}"
-            self.update_reputation(config.REPUTATION_CHANGE_APOLOGY_ACCEPTED, rep_change_reason)
+            self.update_reputation(config.REPUTATION_CHANGE_APOLOGY_ACCEPTED, rep_change_reason, world=world)
             if abs(config.REPUTATION_CHANGE_APOLOGY_ACCEPTED) >= config.REPUTATION_FOR_RUMOR_THRESHOLD and world.game_time:
                 rumor_content_key = "apology_accepted_positive"
                 rumor_strength = config.RUMOR_INITIAL_STRENGTH_SMALL_EVENT
@@ -3571,7 +4734,7 @@ class Character:
             return
 
         item_name = self.current_goal.parameters["item_name"]
-        price = world.market_prices.get(item_name)
+        price = world.get_market_price(item_name) if hasattr(world, "get_market_price") else world.market_prices.get(item_name)
 
         if price is None:
             self.add_memory(f"Wanted to buy {item_name}, but it's not sold at the market.")
@@ -3605,6 +4768,126 @@ class Character:
         else:
             # For other items, just go back to the default goal for now
             self.current_goal = self.get_default_goal()
+
+    def _ensure_home_assignment(self, world: 'World'):
+        if not hasattr(world, "claim_residential_spot"):
+            return None
+        building = world.claim_residential_spot(self)
+        if building:
+            self.home_location = building.location
+        return building
+
+    def _execute_find_shelter(self, world: 'World'):
+        building = self._ensure_home_assignment(world)
+        if building:
+            self.add_memory(f"Claimed a resting spot at {building.display_name}.")
+            self.current_goal = Goal(
+                GoalType.REST_AT_HOME,
+                assignee_id=self.name,
+                originator_id=self.name,
+                parameters={"building_location": building.location},
+                priority=2,
+            )
+            self._execute_rest_at_home(world)
+            return
+
+        self.add_memory("No housing available—finding a quiet place to recuperate under the stars.")
+        self.current_goal = Goal(GoalType.WANDER, assignee_id=self.name, originator_id=self.name, priority=6)
+
+    def _execute_rest_at_home(self, world: 'World'):
+        building = self._ensure_home_assignment(world)
+        if not building:
+            self.resting_at_home = False
+            self._rest_ticks = 0
+            self.add_memory("I have no home to rest in. I will keep moving.")
+            self.current_goal = Goal(GoalType.WANDER, assignee_id=self.name, originator_id=self.name, priority=6)
+            return
+
+        target_tile = building.location
+        if (self.x, self.y) not in building.get_tiles_occupied():
+            self.add_memory(f"Heading to {building.display_name} to rest.")
+            self.move_towards(target_tile[0], target_tile[1], world)
+            return
+
+        self.resting_at_home = True
+        self._rest_ticks += 1
+        current_energy = self.needs.get("Energy", 80)
+        gain = getattr(config, "ENERGY_REST_GAIN_PER_TICK", 5)
+        self.needs["Energy"] = min(config.NEED_SCORE_MAX, current_energy + gain)
+
+        if self._rest_ticks == 1:
+            self.add_memory(f"Settled in at {building.display_name} to recover.")
+
+        if self.needs["Energy"] >= getattr(config, "ENERGY_THRESHOLD_FULLY_RESTED", 95):
+            self.add_memory("Feeling refreshed and ready to work again.")
+            self.resting_at_home = False
+            self._rest_ticks = 0
+            if hasattr(world, "release_residential_spot"):
+                world.release_residential_spot(self)
+            self.current_goal.set_completed()
+            self.current_goal = self.get_default_goal()
+
+    def _execute_drink_water(self, world: 'World'):
+        water_blueprint = BLUEPRINTS.get("Water", {})
+        thirst_satisfaction = water_blueprint.get("thirst_satisfaction", 40)
+        if self.inventory.get("Water", 0) > 0:
+            self.inventory["Water"] -= 1
+            if self.inventory["Water"] <= 0:
+                del self.inventory["Water"]
+            self.needs["Thirst"] = min(
+                config.NEED_SCORE_MAX,
+                self.needs.get("Thirst", 60) + thirst_satisfaction,
+            )
+            self.add_memory("Enjoyed a drink of water.")
+            self.update_mood_score(getattr(config, "MOOD_CHANGE_REPLENISHED_WATER", 3), "Drank fresh water")
+            self.current_goal.set_completed()
+            self.current_goal = self.get_default_goal()
+            return
+
+        pulled = world.withdraw_resource("Water", 1) if hasattr(world, "withdraw_resource") else 0
+        if pulled > 0:
+            self.inventory["Water"] = self.inventory.get("Water", 0) + pulled
+            self.add_memory("Collected water from communal stores to drink.")
+            self._execute_drink_water(world)
+            return
+
+        self.add_memory("No water available in stockpiles—I need to gather some.")
+        self.current_goal = Goal(GoalType.GATHER_WATER, assignee_id=self.name, originator_id=self.name, priority=2)
+
+    def _execute_gather_water(self, world: 'World'):
+        task_loc = self.find_task_location("Draw Water", world)
+        if not task_loc:
+            self.add_memory("Could not find a water source nearby.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        if (self.x, self.y) != task_loc:
+            self.move_towards(task_loc[0], task_loc[1], world)
+            return
+
+        if not self._execute_generic_task(world, "Draw Water"):
+            return
+
+        directive = world.get_resource_directive("Water") if hasattr(world, "get_resource_directive") else None
+        per_trip_quota = directive.get("per_trip_quota") if directive else None
+        if directive and world.game_time and directive.get("last_reminded_day") != world.game_time.current_day:
+            directive["last_reminded_day"] = world.game_time.current_day
+            self.add_memory(
+                f"Leadership asks for {directive['per_trip_quota']} Water before returning."
+            )
+
+        inventory_water = self.inventory.get("Water", 0)
+        if (
+            self.get_inventory_load() >= self.max_inventory_items
+            or (per_trip_quota is not None and inventory_water >= per_trip_quota)
+        ):
+            haul_params = {"resource": "Water", "quantity": inventory_water}
+            self.add_memory("Water containers filled—preparing to deliver them to stockpiles.")
+            self.current_goal = Goal(GoalType.INITIATE_HAULING, assignee_id=self.name, originator_id=self.name, parameters=haul_params)
+            return
+
+        if inventory_water >= 1 and self.needs.get("Thirst", 60) < getattr(config, "THIRST_THRESHOLD_DRINK", 60):
+            self.current_goal = Goal(GoalType.DRINK_WATER, assignee_id=self.name, originator_id=self.name, priority=2)
 
     def _execute_eat_food(self, world: 'World'):
         if self.inventory.get("Food", 0) > 0:
@@ -3821,7 +5104,13 @@ class Character:
                 can_help = True
         elif help_type == "tool" and item_name_needed: # Simplistic: asking for a specific tool by name
             dialogue_line_self = f"{target_name}, I desperately need a {item_name_needed}. Do you have one I could borrow/have?"
-            if target_char.inventory.get(item_name_needed, 0) > 0: # TODO: check if it's their equipped tool
+            target_tool_count = target_char.inventory.get(item_name_needed, 0)
+            equipped_matches = (
+                target_char.equipped_tool is not None
+                and target_char.equipped_tool.get("name") == item_name_needed
+            )
+            spare_tools = target_tool_count - (1 if equipped_matches else 0)
+            if spare_tools > 0 or (target_tool_count > 0 and not equipped_matches):
                 can_help = True
         elif help_type == "task_assistance": # Conceptual for now
             dialogue_line_self = f"{target_name}, I'm really struggling with this task. Any chance you could lend a hand?"
@@ -3841,9 +5130,20 @@ class Character:
                 outcome_message = f"{target_name} gave {quantity_needed} {item_name_needed} to {self.name}."
                 dialogue_line_target = f"Of course, {self.name}. Here you go."
             elif help_type == "tool" and item_name_needed:
-                # TODO: More complex tool lending/giving logic, for now, simple transfer
-                target_char.inventory[item_name_needed] -= 1
-                if target_char.inventory[item_name_needed] <= 0: del target_char.inventory[item_name_needed]
+                giving_equipped_tool = (
+                    target_char.equipped_tool is not None
+                    and target_char.equipped_tool.get("name") == item_name_needed
+                    and target_char.inventory.get(item_name_needed, 0) <= 1
+                )
+                if giving_equipped_tool:
+                    target_char.unequip_tool()
+
+                current_tool_count = target_char.inventory.get(item_name_needed, 0)
+                if current_tool_count > 0:
+                    target_char.inventory[item_name_needed] = current_tool_count - 1
+                    if target_char.inventory[item_name_needed] <= 0:
+                        del target_char.inventory[item_name_needed]
+
                 self.inventory[item_name_needed] = self.inventory.get(item_name_needed, 0) + 1
                 outcome_message = f"{target_name} gave a {item_name_needed} to {self.name}."
                 dialogue_line_target = f"Certainly, {self.name}, take this {item_name_needed}."
@@ -3858,7 +5158,7 @@ class Character:
             target_char.update_mood_score(config.MOOD_CHANGE_POSITIVE_SOCIAL, f"Helped {self.name}")
 
             rep_change_reason = f"Helped {self.name} with {item_name_needed or help_type}"
-            target_char.update_reputation(config.REPUTATION_CHANGE_HELPED_OTHER, rep_change_reason)
+            target_char.update_reputation(config.REPUTATION_CHANGE_HELPED_OTHER, rep_change_reason, world=world)
             if abs(config.REPUTATION_CHANGE_HELPED_OTHER) >= config.REPUTATION_FOR_RUMOR_THRESHOLD and world.game_time:
                 rumor_content_key = "helped_someone_positive" # Generic key
                 rumor_strength = config.RUMOR_INITIAL_STRENGTH_SMALL_EVENT

@@ -1,35 +1,1428 @@
 document.addEventListener('DOMContentLoaded', () => {
     // --- Element Selectors ---
     const gameStatusHeader = document.getElementById('game-status-header');
-    const gameMapDiv = document.getElementById('game-map');
-    const entityDetailsDiv = document.getElementById('entity-details');
+    const mapStage = document.getElementById('map-stage');
+    const mapViewport = document.getElementById('map-viewport');
+    const mapGridDiv = document.getElementById('game-map');
+    const mapCharactersLayer = document.getElementById('map-characters');
     const eventLogDiv = document.getElementById('event-log');
     const pauseButton = document.getElementById('pause-button');
     const speedButtons = document.querySelectorAll('.speed-button');
-    const tabs = document.querySelectorAll('.tab-button');
-    const tabContents = document.querySelectorAll('.tab-content');
+    const overlayButtons = document.querySelectorAll('.overlay-toggle');
+    const overlayPanels = document.querySelectorAll('.overlay-panel');
+    const panelCloseButtons = document.querySelectorAll('.panel-close');
+    const characterListDiv = document.getElementById('character-list');
+    const followOverlay = document.getElementById('followed-character-overlay');
+    const followOverlayBody = document.getElementById('followed-character-body');
+    const eventFeedDiv = document.getElementById('event-feed');
+    const mapMeta = document.getElementById('map-meta');
+    const hudPopulationValue = document.getElementById('hud-population-value');
+    const hudSeasonValue = document.getElementById('hud-season-value');
+    const hudWeatherValue = document.getElementById('hud-weather-value');
+    const hudPhaseValue = document.getElementById('hud-phase-value');
+    const hudTravelValue = document.getElementById('hud-travel-value');
+    const hudElectionValue = document.getElementById('hud-election-value');
+    const hudTreasuryValue = document.getElementById('hud-treasury-value');
+    const hudRationsValue = document.getElementById('hud-rations-value');
+    const hudHydrationValue = document.getElementById('hud-hydration-value');
+    const hudHousingValue = document.getElementById('hud-housing-value');
+    const economyMarketList = document.getElementById('economy-market-list');
+    const economyPressureList = document.getElementById('economy-pressure-list');
+    const economyWageList = document.getElementById('economy-wage-list');
+    const economyCrimeNote = document.getElementById('economy-crime-note');
+    const economyCampaignList = document.getElementById('economy-campaign-list');
+    const environmentModifierList = document.getElementById('environment-modifier-list');
+    const rumorFeedList = document.getElementById('rumor-feed-list');
+    const housingStatusList = document.getElementById('housing-status-list');
+    const resourceNodeList = document.getElementById('resource-node-list');
+    const populationEventList = document.getElementById('population-event-list');
+    const weatherEventNote = document.getElementById('environment-weather-event');
+    const characterSearchInput = document.getElementById('character-search');
+    const infoPanel = document.getElementById('info-panel');
 
     // --- API & State ---
-    const API_BASE_URL = 'http://localhost:8000';
+    const DEFAULT_API_BASE_URL = 'http://localhost:5000';
+    const API_BASE_URL = (() => {
+        const { origin, protocol } = window.location;
+        const isHttpProtocol = protocol === 'http:' || protocol === 'https:';
+        if (origin && origin !== 'null' && isHttpProtocol) {
+            return origin;
+        }
+        return DEFAULT_API_BASE_URL;
+    })();
     let isFetchingGameState = false;
+    let latestGameState = null;
+    let selectedCharacterName = null;
+    let followedCharacterName = null;
+    let characterSearchTerm = '';
+    let pendingAutoCenter = false;
+    let autoFollowCamera = true;
 
-    // --- Tab Switching Logic ---
-    tabs.forEach(tab => {
-        tab.addEventListener('click', () => {
-            // Deactivate all tabs and content
-            tabs.forEach(item => item.classList.remove('active'));
-            tabContents.forEach(content => content.classList.remove('active'));
+    const characterMarkers = new Map();
+    let mapDimensions = { rows: 0, cols: 0 };
+    let viewportPan = { x: 0, y: 0 };
+    let viewportZoom = 1;
+    let activePointerId = null;
+    let lastPointerPosition = { x: 0, y: 0 };
+    let mapTerrainCache = [];
+    let mapOverlayCache = [];
+    let mapRevisionStamp = null;
 
-            // Activate the clicked tab and its content
-            tab.classList.add('active');
-            const targetContent = document.getElementById(tab.dataset.tab);
-            if (targetContent) {
-                targetContent.classList.add('active');
+    const rosterCardCache = new Map();
+    const rosterState = {
+        filtered: [],
+        cardHeight: 0,
+        renderedStart: -1,
+        renderedEnd: -1,
+    };
+    let rosterWindowEl = null;
+    let rosterSpacerTop = null;
+    let rosterSpacerBottom = null;
+
+    // --- Utility Helpers ---
+    const getTileSize = () => parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--tile-size')) || 48;
+
+    function openPanel(panelId) {
+        const panel = document.getElementById(panelId);
+        if (!panel) return;
+        panel.classList.add('open');
+        panel.setAttribute('aria-hidden', 'false');
+    }
+
+    function closePanel(panelId) {
+        const panel = document.getElementById(panelId);
+        if (!panel) return;
+        panel.classList.remove('open');
+        panel.setAttribute('aria-hidden', 'true');
+        if (panelId === 'info-panel') {
+            const entityDetails = document.getElementById('entity-details');
+            if (entityDetails && !entityDetails.innerHTML.trim()) {
+                entityDetails.innerHTML = '<p>Click on the map to inspect citizens or structures.</p>';
+            }
+        }
+    }
+
+    function initCharacterRosterContainer() {
+        if (!characterListDiv || rosterWindowEl) return;
+        characterListDiv.classList.add('virtualized-roster');
+        characterListDiv.classList.remove('character-grid');
+        characterListDiv.innerHTML = '';
+
+        rosterSpacerTop = document.createElement('div');
+        rosterSpacerTop.className = 'roster-spacer roster-spacer-top';
+
+        rosterWindowEl = document.createElement('div');
+        rosterWindowEl.className = 'roster-window character-grid';
+
+        rosterSpacerBottom = document.createElement('div');
+        rosterSpacerBottom.className = 'roster-spacer roster-spacer-bottom';
+
+        characterListDiv.append(rosterSpacerTop, rosterWindowEl, rosterSpacerBottom);
+        characterListDiv.addEventListener('scroll', onRosterScroll);
+        characterListDiv.addEventListener('click', onRosterClick);
+    }
+
+    function onRosterScroll() {
+        updateVirtualizedRoster();
+    }
+
+    function onRosterClick(event) {
+        const card = event.target.closest('.character-card');
+        if (!card) return;
+        const { charName } = card.dataset;
+        if (charName) {
+            handleCharacterSelection(charName);
+        }
+    }
+
+    function getCharacterCard(character) {
+        let card = rosterCardCache.get(character.name);
+        if (!card) {
+            card = document.createElement('article');
+            card.classList.add('character-card');
+            rosterCardCache.set(character.name, card);
+        }
+        return card;
+    }
+
+    function updateCharacterCardElement(card, character) {
+        card.dataset.charName = character.name;
+        const goal = extractGoal(character.current_goal).type;
+        const loadText = typeof character.inventory_load === 'number' ? ` • Load: ${character.inventory_load}` : '';
+        const statusFlags = [];
+        if (character.resting_at_home) statusFlags.push('Resting');
+        if (typeof character.energy === 'number' && character.energy < 40) statusFlags.push('Fatigued');
+        if (typeof character.thirst === 'number' && character.thirst < 40) statusFlags.push('Thirsty');
+        const statusSignature = statusFlags.join(',');
+        const signature = [
+            character.job || 'Unassigned',
+            goal,
+            character.x,
+            character.y,
+            loadText,
+            statusSignature,
+        ].join('|');
+
+        if (card.dataset.signature !== signature) {
+            const statusLine = statusFlags.length
+                ? `<small class="status-flags">${statusFlags.join(' • ')}</small>`
+                : '';
+            card.dataset.signature = signature;
+            card.innerHTML = `
+                <strong>${character.name}</strong>
+                <small>${character.job || 'Unassigned'} • Goal: ${goal}</small>
+                <small>Pos: (${character.x}, ${character.y})${loadText}</small>
+                ${statusLine}
+            `;
+        }
+    }
+
+    function updateVirtualizedRoster(forceMeasure = false) {
+        if (!rosterWindowEl) return;
+        const filtered = rosterState.filtered;
+        if (!filtered.length) return;
+
+        if (forceMeasure) {
+            rosterState.cardHeight = 0;
+        }
+
+        if (!rosterState.cardHeight) {
+            const sampleCharacter = filtered[0];
+            const sampleCard = getCharacterCard(sampleCharacter);
+            updateCharacterCardElement(sampleCard, sampleCharacter);
+            sampleCard.style.position = 'absolute';
+            sampleCard.style.visibility = 'hidden';
+            sampleCard.style.pointerEvents = 'none';
+            sampleCard.style.left = '-9999px';
+            rosterWindowEl.appendChild(sampleCard);
+            rosterState.cardHeight = Math.max(sampleCard.getBoundingClientRect().height, 72);
+            rosterWindowEl.removeChild(sampleCard);
+        }
+
+        const cardHeight = rosterState.cardHeight || 1;
+        const scrollTop = characterListDiv.scrollTop;
+        const viewportHeight = characterListDiv.clientHeight || cardHeight;
+        const buffer = 4;
+        const startIndex = Math.max(0, Math.floor(scrollTop / cardHeight) - buffer);
+        const endIndex = Math.min(
+            filtered.length,
+            startIndex + Math.ceil(viewportHeight / cardHeight) + buffer * 2,
+        );
+
+        rosterState.renderedStart = startIndex;
+        rosterState.renderedEnd = endIndex;
+
+        rosterSpacerTop.style.height = `${startIndex * cardHeight}px`;
+        rosterSpacerBottom.style.height = `${Math.max(0, (filtered.length - endIndex) * cardHeight)}px`;
+
+        const fragment = document.createDocumentFragment();
+        for (let i = startIndex; i < endIndex; i++) {
+            const character = filtered[i];
+            const card = getCharacterCard(character);
+            updateCharacterCardElement(card, character);
+            card.classList.toggle('active', character.name === selectedCharacterName);
+            card.classList.toggle('following', character.name === followedCharacterName);
+            fragment.appendChild(card);
+        }
+
+        rosterWindowEl.replaceChildren(fragment);
+    }
+
+    function updateEconomyIntel(gameState) {
+        if (!gameState) return;
+        const report = gameState.daily_economy_report || {};
+        const environment = gameState.environment_effects || report.environment || {};
+        const housingSnapshot = gameState.housing || report.housing || {};
+        const populationSnapshot = gameState.population || report.population_snapshot || {};
+
+        if (hudPopulationValue) {
+            const totalPopulation = typeof populationSnapshot.population === 'number'
+                ? populationSnapshot.population
+                : Array.isArray(gameState.characters)
+                    ? gameState.characters.length
+                    : null;
+            if (totalPopulation !== null) {
+                const births = populationSnapshot.births_today ?? populationSnapshot.births ?? 0;
+                const migrants = populationSnapshot.migrants_today ?? populationSnapshot.migrants ?? 0;
+                const departures = populationSnapshot.departures_today ?? populationSnapshot.departures ?? 0;
+                const deltas = [];
+                if (births) deltas.push(`+${births} birth${births === 1 ? '' : 's'}`);
+                if (migrants) deltas.push(`+${migrants} arrival${migrants === 1 ? '' : 's'}`);
+                if (departures) deltas.push(`-${departures} departure${departures === 1 ? '' : 's'}`);
+                hudPopulationValue.textContent = deltas.length
+                    ? `${totalPopulation} (${deltas.join(' · ')})`
+                    : `${totalPopulation}`;
+            } else {
+                hudPopulationValue.textContent = '—';
+            }
+        }
+
+        if (hudTreasuryValue) {
+            const treasury = typeof gameState.treasury === 'number' ? gameState.treasury : null;
+            hudTreasuryValue.textContent = treasury !== null ? `${treasury}c` : '—';
+        }
+
+        if (hudRationsValue) {
+            const consumed = typeof report.food_consumed === 'number' ? report.food_consumed : null;
+            const required = typeof report.food_required === 'number' ? report.food_required : null;
+            const deficit = typeof report.food_deficit === 'number' ? report.food_deficit : 0;
+            const yieldModifier = typeof report.food_consumption_modifier === 'number'
+                ? report.food_consumption_modifier
+                : null;
+
+            let summaryText = '—';
+            if (consumed !== null && required !== null) {
+                summaryText = `${consumed}/${required}`;
+            } else if (consumed !== null) {
+                summaryText = `${consumed}`;
+            }
+
+            const deficitText = deficit > 0 ? ` • Short ${deficit}` : '';
+            const yieldText = yieldModifier ? ` • Yield ×${yieldModifier.toFixed(2)}` : '';
+            hudRationsValue.textContent = `${summaryText}${deficitText}${yieldText}`;
+        }
+
+        if (hudHydrationValue) {
+            const waterConsumed = typeof report.water_consumed === 'number' ? report.water_consumed : null;
+            const waterRequired = typeof report.water_required === 'number' ? report.water_required : null;
+            const waterDeficit = typeof report.water_deficit === 'number' ? report.water_deficit : 0;
+            const waterYield = typeof report.water_consumption_modifier === 'number'
+                ? report.water_consumption_modifier
+                : null;
+
+            let summaryText = '—';
+            if (waterConsumed !== null && waterRequired !== null) {
+                summaryText = `${waterConsumed}/${waterRequired}`;
+            } else if (waterConsumed !== null) {
+                summaryText = `${waterConsumed}`;
+            }
+
+            const deficitText = waterDeficit > 0 ? ` • Short ${waterDeficit}` : '';
+            const yieldText = waterYield ? ` • Flow ×${waterYield.toFixed(2)}` : '';
+            hudHydrationValue.textContent = `${summaryText}${deficitText}${yieldText}`;
+        }
+
+        if (hudHousingValue) {
+            const claimed = typeof housingSnapshot.claimed_beds === 'number' ? housingSnapshot.claimed_beds : null;
+            const totalBeds = typeof housingSnapshot.total_beds === 'number' ? housingSnapshot.total_beds : null;
+            const availableBeds = typeof housingSnapshot.available_beds === 'number' ? housingSnapshot.available_beds : null;
+            const homelessCount = Array.isArray(housingSnapshot.homeless_characters)
+                ? housingSnapshot.homeless_characters.length
+                : 0;
+            if (claimed === null || totalBeds === null || availableBeds === null) {
+                hudHousingValue.textContent = '—';
+            } else {
+                const homelessText = homelessCount ? ` • Outside ${homelessCount}` : '';
+                hudHousingValue.textContent = `${claimed}/${totalBeds} occupied • ${availableBeds} open${homelessText}`;
+            }
+        }
+
+        if (hudTravelValue) {
+            const travelSpeed = typeof environment.travel_speed === 'number'
+                ? environment.travel_speed
+                : typeof gameState.travel_speed_modifier === 'number'
+                    ? gameState.travel_speed_modifier
+                    : null;
+            hudTravelValue.textContent = travelSpeed !== null ? `${travelSpeed.toFixed(2)}×` : '—';
+        }
+
+        if (economyMarketList) {
+            const prices = Object.entries(gameState.market_prices || {});
+            if (!prices.length) {
+                economyMarketList.innerHTML = '<li class="empty">No market data.</li>';
+            } else {
+                prices.sort((a, b) => b[1] - a[1]);
+                const topEntries = prices.slice(0, 5);
+                economyMarketList.innerHTML = topEntries
+                    .map(([item, price]) => `<li><strong>${item}</strong>: ${price}c</li>`)
+                    .join('');
+            }
+        }
+
+        if (economyPressureList) {
+            const pressures = Array.isArray(gameState.resource_pressures) ? gameState.resource_pressures : [];
+            if (!pressures.length) {
+                economyPressureList.innerHTML = '<li class="empty">No active pressures.</li>';
+            } else {
+                economyPressureList.innerHTML = pressures
+                    .slice(0, 5)
+                    .map(pressure => {
+                        const status = pressure.status === 'shortage' ? 'Shortage' : 'Surplus';
+                        return `<li><strong>${pressure.resource}</strong>: ${status} (Δ ${pressure.severity})</li>`;
+                    })
+                    .join('');
+            }
+        }
+
+        if (economyWageList) {
+            const arrears = Array.isArray(gameState.pending_wages) ? gameState.pending_wages : [];
+            if (!arrears.length) {
+                economyWageList.innerHTML = '<li class="empty">No outstanding wages.</li>';
+            } else {
+                economyWageList.innerHTML = arrears
+                    .slice(0, 5)
+                    .map(entry => {
+                        const amount = typeof entry.amount_due === 'number' ? entry.amount_due : 0;
+                        const reason = entry.reason || 'duties';
+                        const day = typeof entry.day_incurred === 'number' && entry.day_incurred >= 0
+                            ? ` (Day ${entry.day_incurred})`
+                            : '';
+                        return `<li><strong>${entry.character}</strong>: ${amount}c for ${reason}${day}</li>`;
+                    })
+                    .join('');
+            }
+        }
+
+        if (weatherEventNote) {
+            const weatherEvent = environment.weather_event || gameState.active_weather_event;
+            if (weatherEvent && weatherEvent.name) {
+                const severity = typeof weatherEvent.severity === 'number' ? `Severity ${weatherEvent.severity}` : null;
+                const endDay = typeof weatherEvent.end_day === 'number' ? `Ends Day ${weatherEvent.end_day}` : null;
+                const details = [severity, endDay].filter(Boolean).join(' · ');
+                weatherEventNote.textContent = details ? `${weatherEvent.name} (${details})` : weatherEvent.name;
+                weatherEventNote.classList.remove('muted');
+            } else {
+                weatherEventNote.textContent = 'Calm skies.';
+                weatherEventNote.classList.add('muted');
+            }
+        }
+
+        if (resourceNodeList) {
+            const nodes = Array.isArray(gameState.resource_nodes) ? gameState.resource_nodes : [];
+            if (!nodes.length) {
+                resourceNodeList.innerHTML = '<li class="empty">No tracked nodes.</li>';
+            } else {
+                const sortedNodes = nodes
+                    .slice()
+                    .sort((a, b) => {
+                        if (a.depleted === b.depleted) {
+                            return (b.durability || 0) - (a.durability || 0);
+                        }
+                        return a.depleted ? 1 : -1;
+                    })
+                    .slice(0, 6);
+                resourceNodeList.innerHTML = sortedNodes
+                    .map(node => {
+                        const loc = Array.isArray(node.location) ? node.location.join(',') : '—';
+                        const status = node.depleted
+                            ? `Regrowth ${(node.regrowth_progress * 100 || 0).toFixed(0)}%`
+                            : `${node.durability}/${node.max_durability}`;
+                        return `<li><strong>${node.resource}</strong> @ (${loc}) • ${status}</li>`;
+                    })
+                    .join('');
+            }
+        }
+
+        if (populationEventList) {
+            const popEvents = Array.isArray(report.population_events) ? report.population_events : [];
+            if (!popEvents.length) {
+                populationEventList.innerHTML = '<li class="empty">No changes today.</li>';
+            } else {
+                const recentEvents = popEvents.slice(-5).reverse();
+                populationEventList.innerHTML = recentEvents
+                    .map(event => {
+                        if (event.type === 'birth') {
+                            return `<li>Birth: <strong>${event.name}</strong> (parent ${event.parent || 'unknown'})</li>`;
+                        }
+                        if (event.type === 'arrival') {
+                            return `<li>Arrival: <strong>${event.name}</strong> joins as ${event.job || 'laborer'}.</li>`;
+                        }
+                        if (event.type === 'departure') {
+                            return `<li>Departure: <strong>${event.name}</strong> left (${event.reason || 'unknown'}).</li>`;
+                        }
+                        return `<li>${event.summary || 'Population change recorded.'}</li>`;
+                    })
+                    .join('');
+            }
+        }
+
+        if (environmentModifierList) {
+            const lines = [];
+            const resourceMultipliers = environment.resource_multipliers || {};
+            Object.entries(resourceMultipliers).forEach(([resource, entries]) => {
+                let total = 1.0;
+                (entries || []).forEach(entry => {
+                    const multiplier = typeof entry.multiplier === 'number' ? entry.multiplier : 1.0;
+                    total *= multiplier;
+                });
+                if (Math.abs(total - 1.0) > 0.01) {
+                    const sources = (entries || []).map(entry => entry.source || 'Effect').join(', ');
+                    lines.push(`<li><strong>${resource}</strong>: x${total.toFixed(2)} <span class="meta">${sources}</span></li>`);
+                }
+            });
+
+            const travelSources = Array.isArray(environment.travel_sources) ? environment.travel_sources : [];
+            if (travelSources.length) {
+                const travelDetails = travelSources.map(entry => `${entry.source || 'Effect'} x${(entry.multiplier || 1).toFixed(2)}`);
+                lines.unshift(`<li><strong>Travel</strong>: ${environment.travel_speed ? environment.travel_speed.toFixed(2) + '×' : 'Stable'} <span class="meta">${travelDetails.join(', ')}</span></li>`);
+            }
+
+            const marketMultipliers = environment.market_multipliers || {};
+            Object.entries(marketMultipliers).forEach(([item, entries]) => {
+                let total = 1.0;
+                (entries || []).forEach(entry => {
+                    const multiplier = typeof entry.multiplier === 'number' ? entry.multiplier : 1.0;
+                    total *= multiplier;
+                });
+                if (Math.abs(total - 1.0) > 0.01) {
+                    const sources = (entries || []).map(entry => entry.source || 'Effect').join(', ');
+                    lines.push(`<li><strong>${item}</strong>: x${total.toFixed(2)} <span class="meta">${sources}</span></li>`);
+                }
+            });
+
+            environmentModifierList.innerHTML = lines.length
+                ? lines.slice(0, 6).join('')
+                : '<li class="empty">No modifiers active.</li>';
+        }
+
+        if (housingStatusList) {
+            const lines = [];
+            const totalBeds = typeof housingSnapshot.total_beds === 'number' ? housingSnapshot.total_beds : null;
+            const claimedBeds = typeof housingSnapshot.claimed_beds === 'number' ? housingSnapshot.claimed_beds : null;
+            const availableBeds = typeof housingSnapshot.available_beds === 'number' ? housingSnapshot.available_beds : null;
+            const restingNames = Array.isArray(housingSnapshot.resting_characters)
+                ? housingSnapshot.resting_characters
+                : [];
+            const homelessNames = Array.isArray(housingSnapshot.homeless_characters)
+                ? housingSnapshot.homeless_characters
+                : [];
+
+            if (totalBeds !== null && claimedBeds !== null && availableBeds !== null) {
+                const summaryBits = [`${claimedBeds}/${totalBeds} occupied`, `${availableBeds} open`];
+                if (restingNames.length) {
+                    summaryBits.push(`${restingNames.length} resting`);
+                }
+                lines.push(`<li><strong>Capacity</strong>: ${summaryBits.join(' • ')}</li>`);
+            }
+
+            const structures = Array.isArray(housingSnapshot.structures) ? housingSnapshot.structures : [];
+            structures.slice(0, 5).forEach(structure => {
+                const capacity = typeof structure.capacity === 'number' ? structure.capacity : 0;
+                const occupants = Array.isArray(structure.occupants) ? structure.occupants : [];
+                const used = Math.min(occupants.length, capacity);
+                const available = Math.max(0, capacity - used);
+                const className = available === 0 ? 'housing-full' : 'housing-available';
+                const occupantPreview = occupants.length
+                    ? `${occupants.slice(0, 3).join(', ')}${occupants.length > 3 ? '…' : ''}`
+                    : 'Vacant';
+                lines.push(`
+                    <li class="${className}">
+                        <strong>${structure.name}</strong>: ${used}/${capacity} beds
+                        <span class="meta">${available} open • ${occupantPreview}</span>
+                    </li>
+                `.trim());
+            });
+
+            if (homelessNames.length) {
+                const preview = homelessNames.slice(0, 4).join(', ');
+                const more = homelessNames.length > 4 ? '…' : '';
+                const meta = preview ? `<span class="meta">${preview}${more}</span>` : '';
+                lines.push(`<li class="alert"><strong>Homeless</strong>: ${homelessNames.length} ${meta}</li>`);
+            }
+
+            housingStatusList.innerHTML = lines.length
+                ? lines.join('')
+                : '<li class="empty">No housing data.</li>';
+        }
+
+        if (economyCrimeNote) {
+            const reportCrimes = Array.isArray(report.crime_events) ? report.crime_events : [];
+            const historyCrimes = Array.isArray(gameState.crime_reports) ? gameState.crime_reports : [];
+            const pendingCrimes = Array.isArray(gameState.pending_crimes) ? gameState.pending_crimes : [];
+            let latestCrime = null;
+            if (reportCrimes.length) {
+                latestCrime = reportCrimes[reportCrimes.length - 1];
+            } else if (historyCrimes.length) {
+                latestCrime = historyCrimes[historyCrimes.length - 1];
+            }
+
+            const messageParts = [];
+            if (pendingCrimes.length) {
+                const activeAssignments = pendingCrimes.filter(crime => crime.status === 'assigned').length;
+                const openCases = pendingCrimes.length;
+                const activeText = activeAssignments ? `, ${activeAssignments} active` : '';
+                messageParts.push(`${openCases} case${openCases === 1 ? '' : 's'} open${activeText}`);
+            }
+
+            if (latestCrime && latestCrime.description) {
+                const crimeDay = typeof latestCrime.day === 'number' && latestCrime.day >= 0
+                    ? latestCrime.day
+                    : typeof latestCrime.reported_day === 'number' && latestCrime.reported_day >= 0
+                        ? latestCrime.reported_day
+                        : null;
+                const dayLabel = crimeDay !== null ? `Day ${crimeDay}: ` : '';
+                const statusLabel = latestCrime.status
+                    ? ` (${latestCrime.status.charAt(0).toUpperCase()}${latestCrime.status.slice(1)})`
+                    : '';
+                messageParts.push(`${dayLabel}${latestCrime.description}${statusLabel}`);
+            }
+
+            economyCrimeNote.textContent = messageParts.length
+                ? messageParts.join(' • ')
+                : 'No incidents reported.';
+        }
+
+        if (economyCampaignList) {
+            const promisesByCandidate = gameState.campaign_promises || {};
+            const allPromises = Object.entries(promisesByCandidate)
+                .flatMap(([candidate, entries]) => (Array.isArray(entries) ? entries : [])
+                    .map(promise => ({ ...promise, candidate })));
+
+            if (!allPromises.length) {
+                economyCampaignList.innerHTML = '<li class="empty">No promises active.</li>';
+            } else {
+                const statusOrder = { failed: 0, pledged: 1, enacted: 2 };
+                const statusLabels = { pledged: 'Pledged', enacted: 'Fulfilled', failed: 'Failed' };
+                const formatDay = day => (typeof day === 'number' && day >= 0 ? `Day ${day}` : null);
+
+                allPromises.sort((a, b) => {
+                    const orderDiff = (statusOrder[a.status] ?? 1) - (statusOrder[b.status] ?? 1);
+                    if (orderDiff !== 0) return orderDiff;
+                    return (b.created_day ?? 0) - (a.created_day ?? 0);
+                });
+
+                economyCampaignList.innerHTML = allPromises.slice(0, 5).map(promise => {
+                    const status = (promise.status || 'pledged').toLowerCase();
+                    const statusLabel = statusLabels[status] || status.charAt(0).toUpperCase() + status.slice(1);
+                    const deadlineText = status === 'pledged'
+                        ? formatDay(promise.deadline_day)
+                        : status === 'enacted'
+                            ? formatDay(promise.fulfilled_day)
+                            : status === 'failed'
+                                ? formatDay(promise.failed_day || promise.deadline_day)
+                                : null;
+                    const timeline = deadlineText
+                        ? (status === 'pledged'
+                            ? `Due ${deadlineText}`
+                            : status === 'enacted'
+                                ? `Fulfilled ${deadlineText}`
+                                : `Failed ${deadlineText}`)
+                        : '';
+
+                    const summaryText = promise.summary || 'Promise logged.';
+                    const timelineHtml = timeline ? `<div class="meta">${timeline}</div>` : '';
+                    return `
+                        <li class="status-${status}">
+                            <div><strong>${promise.candidate}</strong> • ${statusLabel}</div>
+                            <div>${summaryText}</div>
+                            ${timelineHtml}
+                        </li>
+                    `;
+                }).join('');
+            }
+        }
+
+        if (rumorFeedList) {
+            const rumors = Array.isArray(gameState.rumors) ? gameState.rumors : [];
+            if (!rumors.length) {
+                rumorFeedList.innerHTML = '<li class="empty">No rumors circulating.</li>';
+            } else {
+                rumorFeedList.innerHTML = rumors.slice(0, 6).map(rumor => {
+                    const tone = rumor.is_positive ? 'Positive' : 'Negative';
+                    const strength = typeof rumor.strength === 'number' ? rumor.strength : '?';
+                    const reach = typeof rumor.known_count === 'number' ? rumor.known_count : 0;
+                    return `
+                        <li class="rumor-${tone.toLowerCase()}">
+                            <div><strong>${rumor.subject}</strong> • ${tone}</div>
+                            <div>${rumor.content}</div>
+                            <div class="meta">Strength ${strength} • Heard by ${reach}</div>
+                        </li>
+                    `;
+                }).join('');
+            }
+        }
+    }
+
+    function togglePanel(panelId) {
+        const panel = document.getElementById(panelId);
+        if (!panel) return;
+        const isOpen = panel.classList.contains('open');
+        if (isOpen) {
+            closePanel(panelId);
+        } else {
+            if (!panel.classList.contains('dock-right')) {
+                overlayPanels.forEach(other => {
+                    if (other.id !== panelId && !other.classList.contains('dock-right')) {
+                        closePanel(other.id);
+                    }
+                });
+            }
+            openPanel(panelId);
+        }
+    }
+
+    function setPanelLoading(panelId, message = 'Loading details...') {
+        const panel = document.getElementById(panelId);
+        if (!panel) return;
+        panel.innerHTML = `<p>${message}</p>`;
+        if (panelId === 'entity-details') {
+            openPanel('info-panel');
+        }
+        if (panelId === 'character-details-panel') {
+            openPanel('characters-panel');
+        }
+    }
+
+    function handleCharacterSelection(name) {
+        selectedCharacterName = name;
+        setFollowedCharacter(name, { autoCenter: true });
+        openPanel('info-panel');
+        openPanel('characters-panel');
+        loadCharacterDetails(name, { worldPanel: true, characterPanel: true });
+        updateVirtualizedRoster();
+    }
+
+    function updateFollowedCharacterOverlay(character) {
+        if (!followOverlay || !followOverlayBody) return;
+
+        if (!character || character.name !== followedCharacterName) {
+            followOverlay.classList.add('hidden');
+            followOverlayBody.innerHTML = '<p>Select a character to follow.</p>';
+            return;
+        }
+
+        followOverlay.classList.remove('hidden');
+        const sicknessText = character.is_sick ? `Sick${character.sickness_severity !== undefined ? ` (sev ${character.sickness_severity})` : ''}` : 'Well';
+        const injuryText = character.is_injured ? `Injured${character.injury_severity !== undefined ? ` (sev ${character.injury_severity})` : ''}` : 'Unhurt';
+        const healthSummary = `Health: ${sicknessText}, ${injuryText}`;
+        const goalDetails = extractGoal(character.current_goal);
+        const goalSummary = `${goalDetails.type}${goalDetails.priority !== '—' ? ` (prio ${goalDetails.priority})` : ''}`;
+        const energyText = typeof character.energy === 'number' ? character.energy : '—';
+        const thirstText = typeof character.thirst === 'number' ? character.thirst : '—';
+        const housingSummary = character.resting_at_home
+            ? 'Resting at assigned housing'
+            : Array.isArray(character.home_location)
+                ? `Sheltered at (${character.home_location[0]}, ${character.home_location[1]})`
+                : 'No assigned housing';
+        const lastDialogue = (character.dialogue_history || []).slice(-1)[0];
+        let dialogueSummary = 'No recent conversations logged.';
+        if (lastDialogue) {
+            const exchanges = Array.isArray(lastDialogue.dialogue_exchanges) ? lastDialogue.dialogue_exchanges : [];
+            if (exchanges.length) {
+                dialogueSummary = exchanges.map(line => `${line.speaker}: “${line.line}”`).join('<br>');
+            } else {
+                dialogueSummary = 'Conversation noted, but no transcript available.';
+            }
+        }
+
+        const jobTitle = character.job || 'Unassigned';
+
+        followOverlayBody.innerHTML = `
+            <p><strong>${character.name}</strong> — ${jobTitle}</p>
+            <p>Location: (${character.x}, ${character.y})</p>
+            <p>Goal: ${goalSummary}</p>
+            <p>${healthSummary}</p>
+            <p>Needs: Energy ${energyText} • Thirst ${thirstText}</p>
+            <p>Housing: ${housingSummary}</p>
+            <hr>
+            <p><strong>Latest Social Exchange</strong></p>
+            <p class="dialogue-snippet">${dialogueSummary}</p>
+        `;
+    }
+
+    function updateWorldSummary(gameState) {
+        if (!gameState) return;
+        const population = Array.isArray(gameState.characters) ? gameState.characters.length : 0;
+        const environment = gameState.environment_effects || {};
+        if (hudPopulationValue) {
+            hudPopulationValue.textContent = population;
+        }
+        if (hudSeasonValue) {
+            const seasonName = environment.season || gameState.season || 'Unknown';
+            const seasonDay = environment.season_day;
+            hudSeasonValue.textContent = typeof seasonDay === 'number'
+                ? `${seasonName} · Day ${seasonDay}`
+                : seasonName;
+        }
+        if (hudWeatherValue) {
+            const weatherLabel = environment.weather || gameState.weather;
+            const weatherText = [weatherLabel, gameState.temperature_label].filter(Boolean).join(' • ');
+            hudWeatherValue.textContent = weatherText || weatherLabel || 'Calm';
+        }
+        if (hudPhaseValue) {
+            const phase = environment.phase || gameState.current_phase || {};
+            if (phase && (phase.name || phase.key)) {
+                const phaseName = phase.name || String(phase.key).replace(/_/g, ' ');
+                const tickLabel = typeof phase.tick === 'number' ? `Tick ${phase.tick}` : '';
+                hudPhaseValue.textContent = tickLabel ? `${phaseName} (${tickLabel})` : phaseName;
+            } else {
+                hudPhaseValue.textContent = '—';
+            }
+        }
+        if (hudTravelValue) {
+            const travelSpeed = typeof environment.travel_speed === 'number'
+                ? environment.travel_speed
+                : typeof gameState.travel_speed_modifier === 'number'
+                    ? gameState.travel_speed_modifier
+                    : null;
+            hudTravelValue.textContent = travelSpeed !== null ? `${travelSpeed.toFixed(2)}×` : '—';
+        }
+        if (hudElectionValue) {
+            const days = gameState.days_until_election;
+            if (typeof days === 'number' && days >= 0) {
+                hudElectionValue.textContent = days === 0 ? 'Today' : `${days} day${days === 1 ? '' : 's'}`;
+            } else {
+                hudElectionValue.textContent = 'Unknown';
+            }
+        }
+    }
+
+    function updateMapMetaInfo(gameState) {
+        if (!mapMeta) return;
+        if (!gameState) {
+            mapMeta.textContent = '';
+            return;
+        }
+        const gridSize = Array.isArray(gameState.grid_size) ? gameState.grid_size : [];
+        const buildingsCount = Array.isArray(gameState.buildings) ? gameState.buildings.length : 0;
+        const population = Array.isArray(gameState.characters) ? gameState.characters.length : 0;
+        const metaParts = [];
+        const phase = (gameState.environment_effects && gameState.environment_effects.phase)
+            || gameState.current_phase
+            || {};
+        if (phase && (phase.name || phase.key)) {
+            metaParts.push(phase.name || String(phase.key).replace(/_/g, ' '));
+        }
+        if (gridSize.length === 2) {
+            metaParts.push(`${gridSize[0]}×${gridSize[1]} grid`);
+        }
+        metaParts.push(`${population} citizen${population === 1 ? '' : 's'}`);
+        if (buildingsCount) {
+            metaParts.push(`${buildingsCount} structure${buildingsCount === 1 ? '' : 's'}`);
+        }
+        const weatherEvent = (gameState.environment_effects && gameState.environment_effects.weather_event)
+            || gameState.active_weather_event;
+        if (weatherEvent && weatherEvent.name) {
+            metaParts.push(`${weatherEvent.name}`);
+        }
+        mapMeta.textContent = metaParts.join(' • ');
+    }
+
+    function updateEventFeed(log) {
+        if (!eventFeedDiv) return;
+        if (!log || !log.length) {
+            eventFeedDiv.innerHTML = '<p class="empty">No events logged yet.</p>';
+            return;
+        }
+        const latestEntries = log.slice(-6).reverse();
+        eventFeedDiv.innerHTML = latestEntries.map(entry => `<p>${entry}</p>`).join('');
+    }
+
+    function setFollowedCharacter(name, { autoCenter = false } = {}) {
+        if (followedCharacterName !== name) {
+            followedCharacterName = name;
+        }
+        if (!name) {
+            pendingAutoCenter = false;
+            autoFollowCamera = false;
+            updateFollowedCharacterOverlay(null);
+        } else {
+            if (autoCenter) {
+                pendingAutoCenter = true;
+                autoFollowCamera = true;
+            }
+            if (latestGameState) {
+                const match = (latestGameState.characters || []).find(char => char.name === name);
+                updateFollowedCharacterOverlay(match || null);
+            }
+        }
+        updateVirtualizedRoster();
+    }
+
+    function extractGoal(goal) {
+        if (!goal) return { type: 'Idle', status: 'Idle', priority: '—' };
+        if (typeof goal === 'string') return { type: goal, status: 'Active', priority: '—' };
+        return {
+            type: goal.type || 'Unknown',
+            status: goal.status || 'Active',
+            priority: goal.priority !== undefined ? goal.priority : '—',
+        };
+    }
+
+    function formatKeyValueList(data) {
+        const list = document.createElement('ul');
+        Object.entries(data || {}).forEach(([key, value]) => {
+            const item = document.createElement('li');
+            item.innerHTML = `<strong>${key}:</strong> ${value}`;
+            list.appendChild(item);
+        });
+        if (!list.children.length) {
+            const empty = document.createElement('p');
+            empty.textContent = 'None recorded.';
+            return empty;
+        }
+        return list;
+    }
+
+    function formatNestedOpinions(opinions) {
+        const container = document.createElement('div');
+        const entries = Object.entries(opinions || {});
+        if (!entries.length) {
+            container.innerHTML = '<p>No opinions recorded.</p>';
+            return container;
+        }
+        entries.sort((a, b) => a[0].localeCompare(b[0]));
+        entries.forEach(([target, feelings]) => {
+            const block = document.createElement('div');
+            block.classList.add('opinion-block');
+            block.innerHTML = `<strong>${target}</strong>`;
+            const list = document.createElement('ul');
+            Object.entries(feelings || {}).forEach(([topic, score]) => {
+                const li = document.createElement('li');
+                li.innerHTML = `${topic}: ${score}`;
+                list.appendChild(li);
+            });
+            if (!list.children.length) {
+                const empty = document.createElement('p');
+                empty.textContent = 'No specific impressions.';
+                block.appendChild(empty);
+            } else {
+                block.appendChild(list);
+            }
+            container.appendChild(block);
+        });
+        return container;
+    }
+
+    function formatDialogueHistory(history) {
+        const container = document.createElement('div');
+        if (!history || !history.length) {
+            container.innerHTML = '<p>No dialogue history recorded.</p>';
+            return container;
+        }
+        const list = document.createElement('ul');
+        [...history].reverse().forEach(entry => {
+            const li = document.createElement('li');
+            const lines = (entry.dialogue_exchanges || []).map(line => `${line.speaker}: “${line.line}”`).join('<br>');
+            li.innerHTML = `
+                <strong>Day ${entry.day} – ${entry.type}</strong><br>
+                ${lines || 'No transcript available.'}
+            `;
+            list.appendChild(li);
+        });
+        container.appendChild(list);
+        return container;
+    }
+
+    function buildOverviewContent(character) {
+        const wrapper = document.createElement('div');
+        const needsSection = document.createElement('section');
+        needsSection.innerHTML = '<h4>Needs</h4>';
+        needsSection.appendChild(formatKeyValueList(character.needs));
+
+        const housingSection = document.createElement('section');
+        housingSection.innerHTML = '<h4>Housing & Rest</h4>';
+        const home = Array.isArray(character.home_location)
+            ? `(${character.home_location[0]}, ${character.home_location[1]})`
+            : 'Unassigned';
+        const restStatus = character.resting_at_home ? 'Resting' : 'Active';
+        housingSection.innerHTML += `<p><strong>Status:</strong> ${restStatus}</p>`;
+        housingSection.innerHTML += `<p><strong>Home:</strong> ${home}</p>`;
+
+        const skillsSection = document.createElement('section');
+        skillsSection.innerHTML = '<h4>Skills</h4>';
+        const skillLevels = Object.fromEntries(Object.entries(character.skills || {}).map(([skill, level]) => [skill, level]));
+        skillsSection.appendChild(formatKeyValueList(skillLevels));
+
+        const inventorySection = document.createElement('section');
+        inventorySection.innerHTML = '<h4>Inventory</h4>';
+        if (character.inventory && Object.keys(character.inventory).length) {
+            inventorySection.appendChild(formatKeyValueList(character.inventory));
+        } else {
+            const empty = document.createElement('p');
+            empty.textContent = 'Inventory is empty.';
+            inventorySection.appendChild(empty);
+        }
+
+        wrapper.append(needsSection, housingSection, skillsSection, inventorySection);
+        return wrapper;
+    }
+
+    function buildSocialContent(character) {
+        const wrapper = document.createElement('div');
+
+        const knownSection = document.createElement('section');
+        knownSection.innerHTML = '<h4>Known Characters</h4>';
+        if (character.known_characters && character.known_characters.length) {
+            const list = document.createElement('ul');
+            character.known_characters.sort().forEach(name => {
+                const li = document.createElement('li');
+                li.textContent = name;
+                list.appendChild(li);
+            });
+            knownSection.appendChild(list);
+        } else {
+            knownSection.innerHTML += '<p>No acquaintances yet.</p>';
+        }
+
+        const relationshipsSection = document.createElement('section');
+        relationshipsSection.innerHTML = '<h4>Relationships</h4>';
+        const relationshipEntries = Object.entries(character.relationships || {});
+        if (relationshipEntries.length) {
+            relationshipEntries.sort((a, b) => b[1] - a[1]);
+            const list = document.createElement('ul');
+            relationshipEntries.forEach(([name, score]) => {
+                const li = document.createElement('li');
+                li.innerHTML = `<strong>${name}</strong>: ${score}`;
+                list.appendChild(li);
+            });
+            relationshipsSection.appendChild(list);
+        } else {
+            relationshipsSection.innerHTML += '<p>No formed relationships.</p>';
+        }
+
+        const opinionsSection = document.createElement('section');
+        opinionsSection.innerHTML = '<h4>Opinions</h4>';
+        opinionsSection.appendChild(formatNestedOpinions(character.opinions));
+
+        const dialogueSection = document.createElement('section');
+        dialogueSection.innerHTML = '<h4>Recent Conversations</h4>';
+        dialogueSection.appendChild(formatDialogueHistory(character.dialogue_history));
+
+        wrapper.append(knownSection, relationshipsSection, opinionsSection, dialogueSection);
+        return wrapper;
+    }
+
+    function buildActivityContent(character) {
+        const wrapper = document.createElement('div');
+
+        const goalSection = document.createElement('section');
+        goalSection.innerHTML = '<h4>Current Focus</h4>';
+        const activityGoal = extractGoal(character.current_goal);
+        goalSection.innerHTML += `
+            <p><strong>Goal:</strong> ${activityGoal.type}</p>
+            <p><strong>Status:</strong> ${activityGoal.status}</p>
+            <p><strong>Priority:</strong> ${activityGoal.priority}</p>
+        `;
+
+        const placementSection = document.createElement('section');
+        placementSection.innerHTML = '<h4>Placement</h4>';
+        placementSection.innerHTML += `
+            <p><strong>Coordinates:</strong> (${character.x}, ${character.y})</p>
+            <p><strong>Region:</strong> ${character.region || 'Unknown'}</p>
+        `;
+
+        const historySection = document.createElement('section');
+        historySection.innerHTML = '<h4>Activity History</h4>';
+        if (character.activity_log && character.activity_log.length) {
+            const list = document.createElement('ul');
+            character.activity_log.slice(-8).reverse().forEach(entry => {
+                const li = document.createElement('li');
+                li.innerHTML = `<strong>Day ${entry.day}</strong>: ${entry.description}`;
+                list.appendChild(li);
+            });
+            historySection.appendChild(list);
+        } else {
+            historySection.innerHTML += '<p>No recent activity recorded.</p>';
+        }
+
+        wrapper.append(goalSection, placementSection, historySection);
+        return wrapper;
+    }
+
+    function buildCharacterDetails(character) {
+        const wrapper = document.createElement('section');
+        wrapper.classList.add('detail-tabs');
+
+        const header = document.createElement('header');
+        header.innerHTML = `
+            <h3>${character.name}</h3>
+            <p>${character.job || 'Unassigned'} • Reputation ${character.reputation ?? '—'}</p>
+        `;
+
+        const followButton = document.createElement('button');
+        followButton.type = 'button';
+        followButton.classList.add('primary-control');
+        if (character.name === followedCharacterName) {
+            followButton.textContent = 'Following';
+            followButton.setAttribute('aria-pressed', 'true');
+        } else {
+            followButton.textContent = 'Follow';
+            followButton.setAttribute('aria-pressed', 'false');
+        }
+
+        followButton.addEventListener('click', () => {
+            if (followedCharacterName === character.name) {
+                setFollowedCharacter(null);
+                followButton.textContent = 'Follow';
+                followButton.setAttribute('aria-pressed', 'false');
+            } else {
+                setFollowedCharacter(character.name, { autoCenter: true });
+                followButton.textContent = 'Following';
+                followButton.setAttribute('aria-pressed', 'true');
             }
         });
-    });
 
-    // --- API Calls ---
+        header.appendChild(followButton);
+
+        const tabButtonsContainer = document.createElement('div');
+        tabButtonsContainer.classList.add('detail-tab-buttons');
+        const tabContentsContainer = document.createElement('div');
+        tabContentsContainer.classList.add('detail-tab-contents');
+
+        const tabs = [
+            { label: 'Overview', builder: buildOverviewContent },
+            { label: 'Social', builder: buildSocialContent },
+            { label: 'Activity', builder: buildActivityContent },
+        ];
+
+        tabs.forEach((tabConfig, index) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.classList.add('detail-tab-button');
+            if (index === 0) button.classList.add('active');
+            button.textContent = tabConfig.label;
+
+            const content = document.createElement('div');
+            content.classList.add('detail-tab-content');
+            if (index === 0) content.classList.add('active');
+            content.appendChild(tabConfig.builder(character));
+
+            button.addEventListener('click', () => {
+                tabButtonsContainer.querySelectorAll('.detail-tab-button').forEach(btn => btn.classList.remove('active'));
+                tabContentsContainer.querySelectorAll('.detail-tab-content').forEach(panel => panel.classList.remove('active'));
+                button.classList.add('active');
+                content.classList.add('active');
+            });
+
+            tabButtonsContainer.appendChild(button);
+            tabContentsContainer.appendChild(content);
+        });
+
+        wrapper.append(header, tabButtonsContainer, tabContentsContainer);
+        return wrapper;
+    }
+
+    function displayEntityDetails(entity, type, targetPanelId) {
+        const targetPanel = document.getElementById(targetPanelId || 'entity-details');
+        if (!targetPanel) return;
+
+        targetPanel.innerHTML = '';
+        const dl = document.createElement('dl');
+
+        if (type === 'character') {
+            targetPanel.appendChild(buildCharacterDetails(entity));
+            updateFollowedCharacterOverlay(entity);
+            openPanel('info-panel');
+            return;
+        }
+
+        if (type === 'error') {
+            targetPanel.innerHTML = `<p class="error">${entity.message || 'Failed to load details.'}</p>`;
+            return;
+        }
+
+        if (type === 'building') {
+            dl.innerHTML = `
+                <h3>${entity.display_name}</h3>
+                <dt>Type</dt><dd>${entity.structure_type}</dd>
+                <dt>Operational</dt><dd>${entity.is_operational}</dd>
+                ${entity.provides_shelter ? `<dt>Shelter Capacity</dt><dd>${entity.provides_shelter}</dd>` : ''}
+                ${Array.isArray(entity.occupants) ? `<dt>Occupants</dt><dd>${entity.occupants.length ? entity.occupants.join(', ') : 'None'}</dd>` : ''}
+                ${entity.inventory ? `<dt>Inventory</dt><dd>${JSON.stringify(entity.inventory)}</dd>` : ''}
+            `;
+        }
+        targetPanel.appendChild(dl);
+        openPanel('info-panel');
+    }
+
+    function updateViewportTransform() {
+        if (!mapViewport) return;
+        mapViewport.style.transform = `translate(${viewportPan.x}px, ${viewportPan.y}px) scale(${viewportZoom})`;
+    }
+
+    function centerViewportOn(x, y) {
+        if (!mapStage || !mapViewport) return;
+        const tileSize = getTileSize();
+        const stageRect = mapStage.getBoundingClientRect();
+        const targetX = (x + 0.5) * tileSize;
+        const targetY = (y + 0.5) * tileSize;
+        viewportPan.x = stageRect.width / 2 - targetX * viewportZoom;
+        viewportPan.y = stageRect.height / 2 - targetY * viewportZoom;
+        updateViewportTransform();
+    }
+
+    function ensureMapBase(gameState) {
+        if (!mapGridDiv || !mapCharactersLayer || !gameState || !Array.isArray(gameState.grid)) return;
+        const gridSize = Array.isArray(gameState.grid_size) ? gameState.grid_size : [0, 0];
+        const [rows, cols] = gridSize;
+        if (!rows || !cols) return;
+
+        const needsRebuild = rows !== mapDimensions.rows || cols !== mapDimensions.cols || mapGridDiv.childElementCount === 0;
+        const totalCells = rows * cols;
+
+        if (needsRebuild) {
+            mapDimensions = { rows, cols };
+            mapGridDiv.innerHTML = '';
+            const fragment = document.createDocumentFragment();
+            for (let r = 0; r < rows; r++) {
+                for (let c = 0; c < cols; c++) {
+                    const cell = document.createElement('div');
+                    cell.classList.add('map-cell');
+                    cell.dataset.x = c;
+                    cell.dataset.y = r;
+                    cell.addEventListener('click', onMapCellClick);
+                    fragment.appendChild(cell);
+                }
+            }
+            mapGridDiv.appendChild(fragment);
+        }
+
+        const incomingRevision = typeof gameState.map_revision === 'number' ? gameState.map_revision : null;
+        const revisionChanged = incomingRevision !== null && incomingRevision !== mapRevisionStamp;
+        if (needsRebuild || revisionChanged || mapTerrainCache.length !== totalCells || mapOverlayCache.length !== totalCells) {
+            mapTerrainCache = new Array(totalCells).fill(null);
+            mapOverlayCache = new Array(totalCells).fill(null);
+        }
+        mapRevisionStamp = incomingRevision;
+
+        const tileSize = getTileSize();
+        const width = cols * tileSize;
+        const height = rows * tileSize;
+        mapViewport.style.width = `${width}px`;
+        mapViewport.style.height = `${height}px`;
+        mapCharactersLayer.style.width = `${width}px`;
+        mapCharactersLayer.style.height = `${height}px`;
+
+        const cells = mapGridDiv.children;
+        for (let r = 0; r < rows; r++) {
+            const tileRow = gameState.grid[r] || [];
+            for (let c = 0; c < cols; c++) {
+                const index = r * cols + c;
+                const cell = cells[index];
+                if (!cell) continue;
+                const tileType = tileRow[c] || 'Unknown';
+                if (mapTerrainCache[index] !== tileType) {
+                    const previousClass = cell.dataset.terrainClass;
+                    if (previousClass) {
+                        cell.classList.remove(previousClass);
+                    }
+                    const tileClass = `tile-${tileType.replace(/\s+/g, '-')}`;
+                    cell.classList.add(tileClass);
+                    cell.dataset.terrainClass = tileClass;
+                    mapTerrainCache[index] = tileType;
+                }
+                cell.dataset.baseTitle = tileType;
+                if (!cell.dataset.buildingName) {
+                    cell.title = `${tileType} (${c}, ${r})`;
+                }
+            }
+        }
+
+        const nextOverlayCache = new Array(totalCells).fill(null);
+        (gameState.buildings || []).forEach(building => {
+            const originX = building.x ?? 0;
+            const originY = building.y ?? 0;
+            const widthCells = building.width ?? 1;
+            const heightCells = building.height ?? 1;
+            const overlayType = building.structure_type === 'Stockpile' ? 'stockpile' : 'building';
+            const label = building.display_name || building.structure_type || 'Structure';
+            const signature = `${overlayType}|${label}|${originX},${originY}`;
+            for (let r = 0; r < heightCells; r++) {
+                for (let c = 0; c < widthCells; c++) {
+                    const x = originX + c;
+                    const y = originY + r;
+                    if (x < 0 || y < 0 || x >= cols || y >= rows) continue;
+                    const index = y * cols + x;
+                    nextOverlayCache[index] = signature;
+                }
+            }
+        });
+
+        for (let index = 0; index < totalCells; index++) {
+            const cell = cells[index];
+            if (!cell) continue;
+            const prevSignature = mapOverlayCache[index];
+            const nextSignature = nextOverlayCache[index];
+            if (prevSignature === nextSignature && !needsRebuild) {
+                continue;
+            }
+
+            if (prevSignature && prevSignature !== nextSignature) {
+                cell.classList.remove('building-cell', 'stockpile-cell');
+                delete cell.dataset.building;
+                delete cell.dataset.buildingOriginX;
+                delete cell.dataset.buildingOriginY;
+                delete cell.dataset.buildingName;
+                const baseTitle = cell.dataset.baseTitle || mapTerrainCache[index] || 'Unknown';
+                const x = index % cols;
+                const y = Math.floor(index / cols);
+                cell.title = `${baseTitle} (${x}, ${y})`;
+            }
+
+            if (!nextSignature) {
+                if (!prevSignature && needsRebuild) {
+                    const x = index % cols;
+                    const y = Math.floor(index / cols);
+                    const baseTitle = cell.dataset.baseTitle || mapTerrainCache[index] || 'Unknown';
+                    cell.title = `${baseTitle} (${x}, ${y})`;
+                }
+                continue;
+            }
+
+            const [type, label, origin] = nextSignature.split('|');
+            const [originX, originY] = origin.split(',').map(Number);
+            cell.classList.toggle('stockpile-cell', type === 'stockpile');
+            cell.classList.toggle('building-cell', type !== 'stockpile');
+            cell.dataset.building = 'true';
+            cell.dataset.buildingOriginX = originX;
+            cell.dataset.buildingOriginY = originY;
+            cell.dataset.buildingName = label;
+            const x = index % cols;
+            const y = Math.floor(index / cols);
+            cell.title = `${label} (${x}, ${y})`;
+        }
+
+        mapOverlayCache = nextOverlayCache;
+    }
+
+    function onMapCellClick(event) {
+        const cell = event.currentTarget;
+        if (cell.dataset.building === 'true') {
+            event.stopPropagation();
+            const coords = {
+                x: Number(cell.dataset.buildingOriginX),
+                y: Number(cell.dataset.buildingOriginY),
+            };
+            openPanel('info-panel');
+            loadBuildingDetails(coords);
+        }
+    }
+
+    function updateCharacterMarkers(characters) {
+        if (!mapCharactersLayer) return;
+        const tileSize = getTileSize();
+        const seen = new Set();
+
+        (characters || []).forEach(character => {
+            let marker = characterMarkers.get(character.name);
+            if (!marker) {
+                marker = document.createElement('button');
+                marker.type = 'button';
+                marker.classList.add('char-marker');
+                marker.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    handleCharacterSelection(character.name);
+                });
+                marker.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        handleCharacterSelection(character.name);
+                    }
+                });
+                marker.addEventListener('pointerdown', (e) => {
+                    e.stopPropagation();
+                });
+                mapCharactersLayer.appendChild(marker);
+                characterMarkers.set(character.name, marker);
+            }
+
+            marker.dataset.job = character.job || 'Unassigned';
+            marker.dataset.name = character.name;
+            marker.textContent = character.name.charAt(0).toUpperCase();
+            marker.title = `${character.name} (${character.job || 'Unassigned'})`;
+            marker.classList.toggle('following', character.name === followedCharacterName);
+            marker.classList.toggle('sick', Boolean(character.is_sick));
+            marker.classList.toggle('injured', Boolean(character.is_injured));
+            marker.style.transform = `translate3d(${character.x * tileSize}px, ${character.y * tileSize}px, 0)`;
+
+            if (character.name === selectedCharacterName) {
+                marker.classList.add('active');
+            } else {
+                marker.classList.remove('active');
+            }
+
+            seen.add(character.name);
+        });
+
+        Array.from(characterMarkers.keys()).forEach(name => {
+            if (!seen.has(name)) {
+                const marker = characterMarkers.get(name);
+                if (marker && marker.parentElement) {
+                    marker.parentElement.removeChild(marker);
+                }
+                characterMarkers.delete(name);
+            }
+        });
+
+        if (followedCharacterName) {
+            const followed = (characters || []).find(char => char.name === followedCharacterName);
+            updateFollowedCharacterOverlay(followed || null);
+            if (followed && (pendingAutoCenter || autoFollowCamera)) {
+                centerViewportOn(followed.x, followed.y);
+                pendingAutoCenter = false;
+            }
+        } else {
+            updateFollowedCharacterOverlay(null);
+        }
+    }
+
+    function updateGameInfo(gameState) {
+        if (!gameStatusHeader || !gameState) return;
+        const statusClass = gameState.is_paused ? 'status-pill muted' : 'status-pill';
+        gameStatusHeader.innerHTML = `
+            <span class="status-pill">Day ${gameState.day}</span>
+            <span class="status-pill">Tick ${gameState.tick}/${gameState.ticks_per_day}</span>
+            <span class="status-pill">Speed ${gameState.current_speed_multiplier}x</span>
+            <span class="${statusClass}">${gameState.is_paused ? 'Paused' : 'Running'}</span>
+        `;
+        if (pauseButton) {
+            pauseButton.textContent = gameState.is_paused ? 'Resume' : 'Pause';
+        }
+    }
+
+    function updateEventLog(log) {
+        if (!eventLogDiv) return;
+        if (!log || !log.length) {
+            eventLogDiv.innerHTML = '<p class="empty">No events logged yet.</p>';
+            return;
+        }
+        eventLogDiv.innerHTML = log.slice().reverse().map(entry => `<p>${entry}</p>`).join('');
+    }
+
+    function renderCharacterList(characters) {
+        if (!characterListDiv || !Array.isArray(characters)) return;
+        initCharacterRosterContainer();
+
+        const sortedCharacters = [...characters].sort((a, b) => a.name.localeCompare(b.name));
+        const searchTerm = characterSearchTerm.trim().toLowerCase();
+        const filteredCharacters = sortedCharacters.filter(char => {
+            if (!searchTerm) return true;
+            const haystack = `${char.name} ${char.job} ${extractGoal(char.current_goal).type}`.toLowerCase();
+            return haystack.includes(searchTerm);
+        });
+
+        rosterState.filtered = filteredCharacters;
+        rosterState.renderedStart = -1;
+        rosterState.renderedEnd = -1;
+
+        const visibleNames = new Set(filteredCharacters.map(char => char.name));
+        for (const name of rosterCardCache.keys()) {
+            if (!visibleNames.has(name)) {
+                rosterCardCache.delete(name);
+            }
+        }
+
+        if (!filteredCharacters.length) {
+            rosterWindowEl.innerHTML = '<div class="empty-state">No citizens match your search.</div>';
+            rosterSpacerTop.style.height = '0px';
+            rosterSpacerBottom.style.height = '0px';
+            rosterState.cardHeight = 0;
+            return;
+        }
+
+        characterListDiv.scrollTop = Math.min(characterListDiv.scrollTop, filteredCharacters.length * (rosterState.cardHeight || 1));
+        updateVirtualizedRoster(true);
+    }
+
+    function renderMap(gameState) {
+        if (!gameState) return;
+        ensureMapBase(gameState);
+        updateCharacterMarkers(gameState.characters || []);
+        latestGameState = gameState;
+        updateMapMetaInfo(gameState);
+    }
+
     async function fetchGameState() {
         if (isFetchingGameState) return null;
         isFetchingGameState = true;
@@ -50,239 +1443,61 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    async function fetchEntityDetails(type, identifier) {
-        entityDetailsDiv.innerHTML = `<p>Loading details...</p>`;
-        let url = '';
-        if (type === 'character') {
-            url = `${API_BASE_URL}/character_info?name=${encodeURIComponent(identifier)}`;
-        } else if (type === 'building') {
-            url = `${API_BASE_URL}/building_info?x=${identifier.x}&y=${identifier.y}`;
-        } else {
-            entityDetailsDiv.innerHTML = `<p>Unknown entity type.</p>`;
-            return;
+    async function loadCharacterDetails(name, { worldPanel = true, characterPanel = true, showLoading = true } = {}) {
+        if (showLoading) {
+            if (worldPanel) setPanelLoading('entity-details');
+            if (characterPanel) setPanelLoading('character-details-panel');
         }
-
         try {
-            const response = await fetch(url);
+            const response = await fetch(`${API_BASE_URL}/character_info?name=${encodeURIComponent(name)}`);
             if (!response.ok) {
-                entityDetailsDiv.innerHTML = `<p class="error">Error fetching details: ${response.status}</p>`;
+                const errorMessage = `Error fetching details: ${response.status}`;
+                if (worldPanel) displayEntityDetails({ message: errorMessage }, 'error', 'entity-details');
+                if (characterPanel) displayEntityDetails({ message: errorMessage }, 'error', 'character-details-panel');
                 return;
             }
             const details = await response.json();
-            displayEntityDetails(details, type);
+            if (worldPanel) displayEntityDetails(details, 'character', 'entity-details');
+            if (characterPanel) displayEntityDetails(details, 'character', 'character-details-panel');
         } catch (error) {
-            console.error(`Error fetching ${type} details:`, error);
-            entityDetailsDiv.innerHTML = `<p class="error">Failed to fetch details.</p>`;
+            console.error('Error fetching character details:', error);
+            const errorHtml = '<p class="error">Failed to fetch character details.</p>';
+            if (worldPanel) {
+                const panel = document.getElementById('entity-details');
+                if (panel) panel.innerHTML = errorHtml;
+            }
+            if (characterPanel) {
+                const panel = document.getElementById('character-details-panel');
+                if (panel) panel.innerHTML = errorHtml;
+            }
+        }
+    }
+
+    async function loadBuildingDetails(coords, targetPanelId = 'entity-details') {
+        setPanelLoading(targetPanelId);
+        try {
+            const response = await fetch(`${API_BASE_URL}/building_info?x=${coords.x}&y=${coords.y}`);
+            if (!response.ok) {
+                const panel = document.getElementById(targetPanelId);
+                if (panel) panel.innerHTML = `<p class="error">Error fetching details: ${response.status}</p>`;
+                return;
+            }
+            const details = await response.json();
+            displayEntityDetails(details, 'building', targetPanelId);
+        } catch (error) {
+            console.error('Error fetching building details:', error);
+            const panel = document.getElementById(targetPanelId);
+            if (panel) panel.innerHTML = '<p class="error">Failed to fetch details.</p>';
         }
     }
 
     async function performControlAction(url) {
         try {
             await fetch(url, { method: 'POST' });
-            updateUI(); // Refresh UI immediately after action
+            updateUI();
         } catch (error) {
             console.error('Error performing control action:', error);
         }
-    }
-
-    // --- Rendering Functions ---
-    function renderMap(gameState) {
-        if (!gameMapDiv || !gameState || !gameState.grid) return;
-
-        gameMapDiv.innerHTML = '';
-        gameMapDiv.style.gridTemplateColumns = `repeat(${gameState.grid_size[1]}, 1fr)`;
-        gameMapDiv.style.gridTemplateRows = `repeat(${gameState.grid_size[0]}, 1fr)`;
-
-        // Render base tiles
-        for (let r = 0; r < gameState.grid_size[0]; r++) {
-            for (let c = 0; c < gameState.grid_size[1]; c++) {
-                const cell = document.createElement('div');
-                cell.classList.add('map-cell');
-                const tileType = gameState.grid[r][c];
-                cell.classList.add(`tile-${tileType.replace(/\s+/g, '-') || 'Unknown'}`);
-                cell.title = `${tileType} (${c}, ${r})`;
-                gameMapDiv.appendChild(cell);
-            }
-        }
-
-        // Render buildings on top of tiles
-        (gameState.buildings || []).forEach(b => {
-            for (let r_offset = 0; r_offset < b.height; r_offset++) {
-                for (let c_offset = 0; c_offset < b.width; c_offset++) {
-                    const cellX = b.x + c_offset;
-                    const cellY = b.y + r_offset;
-                    const cellIndex = cellY * gameState.grid_size[1] + cellX;
-                    const cellDiv = gameMapDiv.children[cellIndex];
-                    if (cellDiv) {
-                        cellDiv.className = 'map-cell'; // Reset classes
-                        const typeClass = b.structure_type === "Stockpile" ? 'stockpile-cell' : 'building-cell';
-                        cellDiv.classList.add(typeClass);
-                        cellDiv.title = `${b.display_name} (${b.structure_type})`;
-                        cellDiv.addEventListener('click', () => fetchEntityDetails('building', {x: cellX, y: cellY}));
-                    }
-                }
-            }
-        });
-
-        // Render characters as circles on top of everything
-        (gameState.characters || []).forEach(char => {
-            const cellIndex = char.y * gameState.grid_size[1] + char.x;
-            const cellDiv = gameMapDiv.children[cellIndex];
-            if (cellDiv) {
-                const charMarker = document.createElement('div');
-                charMarker.classList.add('char-marker');
-                charMarker.title = `${char.name} (${char.job})`;
-                if (char.is_sick) charMarker.style.backgroundColor = 'orange';
-                if (char.is_injured) charMarker.style.borderColor = 'red';
-
-                charMarker.addEventListener('click', (e) => {
-                    e.stopPropagation(); // Prevent tile click
-                    fetchEntityDetails('character', char.name);
-                });
-                cellDiv.appendChild(charMarker);
-            }
-        });
-    }
-
-    function displayEntityDetails(entity, type) {
-        entityDetailsDiv.innerHTML = '';
-        const dl = document.createElement('dl');
-
-        if (type === 'character') {
-            dl.innerHTML = `
-                <dt>Name</dt><dd>${entity.name}</dd>
-                <dt>Job</dt><dd>${entity.job} (${entity.rank})</dd>
-                <dt>Goal</dt><dd>${entity.current_goal.type}</dd>
-                <dt>Position</dt><dd>(${entity.x}, ${entity.y})</dd>
-                <dt>Needs</dt><dd>${JSON.stringify(entity.needs)}</dd>
-                <dt>Inventory</dt><dd>${JSON.stringify(entity.inventory)}</dd>
-            `;
-        } else if (type === 'building') {
-            dl.innerHTML = `
-                <dt>Name</dt><dd>${entity.display_name}</dd>
-                <dt>Type</dt><dd>${entity.structure_type}</dd>
-                <dt>Operational</dt><dd>${entity.is_operational}</dd>
-                ${entity.inventory ? `<dt>Inventory</dt><dd>${JSON.stringify(entity.inventory)}</dd>` : ''}
-            `;
-        }
-        entityDetailsDiv.appendChild(dl);
-    }
-
-    function updateEventLog(log) {
-        if (!eventLogDiv || !log) return;
-        eventLogDiv.innerHTML = log.slice().reverse().map(entry => `<p>${entry}</p>`).join('');
-    }
-
-    function updateGameInfo(gameState) {
-        if (!gameStatusHeader || !gameState) return;
-        gameStatusHeader.innerHTML = `
-            <span>Day: ${gameState.day}, ${gameState.season}</span> |
-            <span>Status: ${gameState.is_paused ? "Paused" : "Running"}</span> |
-            <span>Speed: ${gameState.current_speed_multiplier}x</span>
-        `;
-        pauseButton.textContent = gameState.is_paused ? "Resume" : "Pause";
-    }
-
-    function renderCharacterList(characters) {
-        const characterListDiv = document.getElementById('character-list');
-        const characterDetailsPanel = document.getElementById('character-details-panel');
-        if (!characterListDiv || !characters) return;
-
-        // Sort characters alphabetically
-        const sortedCharacters = [...characters].sort((a, b) => a.name.localeCompare(b.name));
-
-        characterListDiv.innerHTML = '<ul>' + sortedCharacters.map(char => `
-            <li data-char-name="${char.name}">
-                <strong>${char.name}</strong><br>
-                <small>${char.job} | Goal: ${char.current_goal ? char.current_goal.type : 'None'}</small>
-            </li>
-        `).join('') + '</ul>';
-
-        // Add event listeners
-        characterListDiv.querySelectorAll('li').forEach(li => {
-            li.addEventListener('click', () => {
-                // Remove active class from any previously selected character
-                characterListDiv.querySelectorAll('li').forEach(item => item.classList.remove('active'));
-                // Add active class to the clicked character
-                li.classList.add('active');
-                fetchEntityDetails('character', li.dataset.charName, 'character-details-panel');
-            });
-        });
-    }
-
-    async function fetchEntityDetails(type, identifier, targetPanelId) {
-        const targetPanel = document.getElementById(targetPanelId || 'entity-details');
-        if (!targetPanel) return;
-
-        targetPanel.innerHTML = `<p>Loading details...</p>`;
-        let url = '';
-        if (type === 'character') {
-            url = `${API_BASE_URL}/character_info?name=${encodeURIComponent(identifier)}`;
-        } else if (type === 'building') {
-            url = `${API_BASE_URL}/building_info?x=${identifier.x}&y=${identifier.y}`;
-        } else {
-            targetPanel.innerHTML = `<p>Unknown entity type.</p>`;
-            return;
-        }
-
-        try {
-            const response = await fetch(url);
-            if (!response.ok) {
-                targetPanel.innerHTML = `<p class="error">Error fetching details: ${response.status}</p>`;
-                return;
-            }
-            const details = await response.json();
-            console.log("Received entity details:", details);
-            displayEntityDetails(details, type, targetPanelId);
-        } catch (error) {
-            console.error(`Error fetching ${type} details:`, error);
-            targetPanel.innerHTML = `<p class="error">Failed to fetch details.</p>`;
-        }
-    }
-
-    function displayEntityDetails(entity, type, targetPanelId) {
-        const targetPanel = document.getElementById(targetPanelId || 'entity-details');
-        if (!targetPanel) return;
-
-        targetPanel.innerHTML = '';
-        const dl = document.createElement('dl');
-
-        if (type === 'character') {
-            let skillsHtml = '<ul>';
-            for (const [skill, data] of Object.entries(entity.skills)) {
-                skillsHtml += `<li>${skill}: ${data.level}</li>`;
-            }
-            skillsHtml += '</ul>';
-
-            let needsHtml = '<ul>';
-            for (const [need, value] of Object.entries(entity.needs)) {
-                needsHtml += `<li>${need}: ${value}</li>`;
-            }
-            needsHtml += '</ul>';
-
-            dl.innerHTML = `
-                <h3>${entity.name}</h3>
-                <dt>Job</dt><dd>${entity.job} (${entity.rank})</dd>
-                <dt>Money</dt><dd>${entity.money} coins</dd>
-                <dt>Goal</dt><dd>${entity.current_goal.type} (Prio: ${entity.current_goal.priority})</dd>
-                <dt>Goal Status</dt><dd>${entity.current_goal.status}</dd>
-                <dt>Health</dt><dd>Sick: ${entity.is_sick ? `Yes (Sev: ${entity.sickness_severity})` : 'No'}, Injured: ${entity.is_injured ? `Yes (Sev: ${entity.injury_severity})` : 'No'}</dd>
-                <hr>
-                <dt>Needs</dt><dd>${needsHtml}</dd>
-                <hr>
-                <dt>Skills</dt><dd>${skillsHtml}</dd>
-                <hr>
-                <dt>Inventory</dt><dd>${Object.keys(entity.inventory).length > 0 ? JSON.stringify(entity.inventory) : 'Empty'}</dd>
-            `;
-        } else if (type === 'building') {
-            dl.innerHTML = `
-                <h3>${entity.display_name}</h3>
-                <dt>Type</dt><dd>${entity.structure_type}</dd>
-                <dt>Operational</dt><dd>${entity.is_operational}</dd>
-                ${entity.inventory ? `<dt>Inventory</dt><dd>${JSON.stringify(entity.inventory)}</dd>` : ''}
-            `;
-        }
-        targetPanel.appendChild(dl);
     }
 
     async function updateUI() {
@@ -291,17 +1506,128 @@ document.addEventListener('DOMContentLoaded', () => {
             renderMap(gameState);
             updateEventLog(gameState.event_log);
             updateGameInfo(gameState);
+            updateEventFeed(gameState.event_log);
+            updateWorldSummary(gameState);
+            updateEconomyIntel(gameState);
             renderCharacterList(gameState.characters);
+            if (followedCharacterName) {
+                loadCharacterDetails(followedCharacterName, { worldPanel: false, characterPanel: true, showLoading: false });
+            }
+        }
+    }
+
+    function handleWheelZoom(event) {
+        if (!mapStage) return;
+        event.preventDefault();
+        const zoomFactor = event.deltaY < 0 ? 1.1 : 0.9;
+        const newZoom = Math.min(3, Math.max(0.5, viewportZoom * zoomFactor));
+        const rect = mapStage.getBoundingClientRect();
+        const cursorX = event.clientX - rect.left;
+        const cursorY = event.clientY - rect.top;
+        const offsetX = (cursorX - viewportPan.x) / viewportZoom;
+        const offsetY = (cursorY - viewportPan.y) / viewportZoom;
+        viewportZoom = newZoom;
+        viewportPan.x = cursorX - offsetX * viewportZoom;
+        viewportPan.y = cursorY - offsetY * viewportZoom;
+        updateViewportTransform();
+    }
+
+    function beginMapDrag(event) {
+        if (event.pointerType === 'mouse' && event.button !== 0) return;
+        if (activePointerId !== null) return;
+        activePointerId = event.pointerId;
+        lastPointerPosition = { x: event.clientX, y: event.clientY };
+        mapStage.setPointerCapture(activePointerId);
+        autoFollowCamera = false;
+    }
+
+    function moveMapDrag(event) {
+        if (activePointerId !== event.pointerId) return;
+        const deltaX = event.clientX - lastPointerPosition.x;
+        const deltaY = event.clientY - lastPointerPosition.y;
+        lastPointerPosition = { x: event.clientX, y: event.clientY };
+        viewportPan.x += deltaX;
+        viewportPan.y += deltaY;
+        updateViewportTransform();
+    }
+
+    function endMapDrag(event) {
+        if (activePointerId !== event.pointerId) return;
+        mapStage.releasePointerCapture(activePointerId);
+        activePointerId = null;
+    }
+
+    function refreshMapLayout() {
+        if (!latestGameState) return;
+        ensureMapBase(latestGameState);
+        updateCharacterMarkers(latestGameState.characters || []);
+        updateViewportTransform();
+        if (followedCharacterName && autoFollowCamera) {
+            const followed = (latestGameState.characters || []).find(char => char.name === followedCharacterName);
+            if (followed) {
+                centerViewportOn(followed.x, followed.y);
+            }
         }
     }
 
     // --- Event Listeners ---
-    pauseButton.addEventListener('click', () => performControlAction(`${API_BASE_URL}/toggle_pause`));
+    overlayButtons.forEach(button => {
+        button.addEventListener('click', () => togglePanel(button.dataset.panel));
+    });
+
+    panelCloseButtons.forEach(button => {
+        button.addEventListener('click', () => closePanel(button.dataset.panel));
+    });
+
+    if (characterSearchInput) {
+        characterSearchInput.addEventListener('input', () => {
+            characterSearchTerm = characterSearchInput.value.trim().toLowerCase();
+            if (latestGameState) {
+                renderCharacterList(latestGameState.characters || []);
+            }
+        });
+    }
+
+    if (pauseButton) {
+        pauseButton.addEventListener('click', () => performControlAction(`${API_BASE_URL}/toggle_pause`));
+    }
+
     speedButtons.forEach(button => {
         button.addEventListener('click', () => {
             performControlAction(`${API_BASE_URL}/set_speed?multiplier=${button.dataset.speed}`);
         });
     });
+
+    if (mapStage) {
+        mapStage.addEventListener('pointerdown', beginMapDrag);
+        mapStage.addEventListener('pointermove', moveMapDrag);
+        mapStage.addEventListener('pointerup', endMapDrag);
+        mapStage.addEventListener('pointerleave', endMapDrag);
+        mapStage.addEventListener('wheel', handleWheelZoom, { passive: false });
+    }
+
+    if (followOverlay) {
+        followOverlay.addEventListener('click', () => {
+            if (followedCharacterName) {
+                autoFollowCamera = true;
+                pendingAutoCenter = true;
+                if (latestGameState) {
+                    const followed = (latestGameState.characters || []).find(char => char.name === followedCharacterName);
+                    if (followed) {
+                        centerViewportOn(followed.x, followed.y);
+                    }
+                }
+            }
+        });
+    }
+
+    window.addEventListener('resize', () => {
+        refreshMapLayout();
+    });
+
+    // --- Initial State ---
+    openPanel('hud-panel');
+    updateViewportTransform();
 
     // --- Initial Load & Interval ---
     updateUI();

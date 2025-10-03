@@ -15,6 +15,7 @@ class GoalType(Enum):
     GATHER_WOOD = auto() # Specific version of GATHER_RESOURCE
     GATHER_STONE = auto() # Specific version of GATHER_RESOURCE
     GATHER_HERBS = auto() # Specific version of GATHER_RESOURCE
+    GATHER_WATER = auto()
 
     HAUL_RESOURCE_TO_STOCKPILE = auto()
     INITIATE_HAULING = auto() # Intermediate step for haulers
@@ -34,6 +35,7 @@ class GoalType(Enum):
     APPROVE_MAJOR_PROJECT = auto() # Mayor
     HOST_EVENT = auto() # Mayor, Nobles (e.g. GiveSpeech, HoldMeeting)
     GIVE_SPEECH = auto() # Specific HOST_EVENT type
+    CAMPAIGN_SPEECH = auto() # Election trail promise rally
 
     # Military & Security
     MAINTAIN_DEFENSES = auto() # Militia Commander
@@ -70,6 +72,9 @@ class GoalType(Enum):
 
     # Need-Driven & Prosocial
     EAT_FOOD = auto()
+    DRINK_WATER = auto()
+    FIND_SHELTER = auto()
+    REST_AT_HOME = auto()
     SEEK_RECOGNITION = auto() # Esteem
     IMPROVE_DWELLING = auto() # Safety
     HELP_FRIEND = auto() # Belonging / Relationship
@@ -95,6 +100,9 @@ class GoalType(Enum):
     PERFORM_WOODCUTTER_DUTIES = auto()
     PERFORM_STONEMASON_DUTIES = auto()
     PERFORM_MINER_DUTIES = auto()
+    PERFORM_FARMER_DUTIES = auto()
+    PERFORM_HUNTER_DUTIES = auto()
+    PERFORM_FLETCHER_DUTIES = auto()
 
 
 class GoalStatus(Enum):
@@ -193,6 +201,9 @@ def create_goal_from_job(job_name: str, char_name: str) -> Goal:
                 "Perform Woodcutter Duties": GoalType.PERFORM_WOODCUTTER_DUTIES,
                 "Perform Stonemason Duties": GoalType.PERFORM_STONEMASON_DUTIES,
                 "Perform Miner Duties": GoalType.PERFORM_MINER_DUTIES,
+                "Perform Farmer Duties": GoalType.PERFORM_FARMER_DUTIES,
+                "Perform Hunter Duties": GoalType.PERFORM_HUNTER_DUTIES,
+                "Perform Fletcher Duties": GoalType.PERFORM_FLETCHER_DUTIES,
                 "Assess Production Needs": GoalType.ASSESS_PRODUCTION_NEEDS,
                 "Manage Subordinates": GoalType.MANAGE_SUBORDINATES,
                 "Maintain Ledger": GoalType.MAINTAIN_LEDGER,

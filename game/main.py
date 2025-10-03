@@ -24,6 +24,8 @@ import socketserver
 import json
 import threading
 import time as py_time # Renamed to avoid conflict with game.time.Time
+import urllib.request
+import webbrowser
 
 # --- Global Game State Variables ---
 game_world: Optional[World] = None
@@ -53,6 +55,16 @@ def initialize_game_world():
     game_world.add_stockpile(wood_stockpile)
     game_world.ledger.update_stockpile_record(wood_stockpile.name, wood_stockpile.inventory, game_time_obj.current_day)
     initial_setup_messages.append(f"Added WoodStore stockpile with {wood_stockpile.inventory.get('Wood',0)} Wood.")
+
+    water_stockpile = Stockpile(name="WaterCasks", x=2, y=3, width=1, height=1, allowed_resources=["Water"], total_capacity=80)
+    water_stockpile.add_item("Water", 24)
+    game_world.add_stockpile(water_stockpile)
+    game_world.ledger.update_stockpile_record(water_stockpile.name, water_stockpile.inventory, game_time_obj.current_day)
+    initial_setup_messages.append(f"Added WaterCasks stockpile with {water_stockpile.inventory.get('Water',0)} Water.")
+
+    # Establish natural water sources for gathering
+    game_world.add_resource("Water", (4, 0), tile_becomes="Water")
+    game_world.add_resource("Water", (5, 0), tile_becomes="Water")
 
     # Characters (example setup)
     liam_skills = {"Construction": 1, "Leadership": 5} # Give Liam some leadership for potential Mayor candidacy
@@ -130,6 +142,8 @@ def tick_simulation():
 
     if not game_paused and simulation_running:
         new_day = game_time_obj.tick()
+        if hasattr(game_world, "update_day_phase"):
+            game_world.update_day_phase()
         # current_total_ticks +=1 # This was local, can be re-added if needed for other metrics
 
         for char_to_act in list(game_world.characters): # Iterate over a copy if list might change
@@ -140,6 +154,15 @@ def tick_simulation():
         if new_day:
             day_msg = f"*** NEW DAY: Day {game_time_obj.current_day}. Weather: {game_world.weather}, Season: {game_world.season} ***"
             print(day_msg); game_world.add_event_log_message(day_msg)
+
+            if hasattr(game_world, "daily_environment_tick"):
+                game_world.daily_environment_tick()
+            if hasattr(game_world, "manage_campaigns"):
+                game_world.manage_campaigns()
+            if hasattr(game_world, "manage_economy"):
+                game_world.manage_economy()
+            if hasattr(game_world, "process_daily_economy"):
+                game_world.process_daily_economy()
 
             if hasattr(game_time_obj, 'days_until_election') and game_time_obj.days_until_election <= 0:
                 if hasattr(game_world, 'handle_election'):
@@ -259,7 +282,30 @@ def simulation_thread_func():
 
 
 # --- HTTP Server Logic ---
-PORT = 8000
+PORT = 5000
+
+
+def trigger_initial_ui_fetch(port: int, delay: float = 0.5, attempts: int = 5) -> None:
+    """Warm the UI by requesting the index page (and fall back to opening a browser)."""
+
+    def _fetch() -> None:
+        url = f"http://localhost:{port}/"
+        for attempt in range(attempts):
+            try:
+                with urllib.request.urlopen(url):
+                    print(f"Initial UI fetch succeeded for {url}")
+                    return
+            except Exception as exc:  # noqa: BLE001 - log and continue retries
+                print(f"Attempt {attempt + 1} to fetch {url} failed: {exc}")
+                py_time.sleep(delay)
+
+        try:
+            webbrowser.open(url)
+            print(f"Opened default browser for {url}")
+        except Exception as exc:  # noqa: BLE001 - best-effort browser launch
+            print(f"Unable to launch browser automatically for {url}: {exc}")
+
+    threading.Thread(target=_fetch, daemon=True).start()
 class GameDataHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         global game_world, game_time_obj, game_paused, simulation_running, SIMULATION_SPEED_MULTIPLIER # Correct placement
@@ -280,17 +326,30 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                 characters_repr = []
                 if hasattr(game_world, 'characters'):
                     for char in game_world.characters:
+                        goal_payload = None
+                        if hasattr(char.current_goal, 'to_dict'):
+                            goal_payload = char.current_goal.to_dict()
+                        elif char.current_goal:
+                            goal_payload = str(char.current_goal)
                         characters_repr.append({
                             "name": char.name,
                             "x": char.x,
                             "y": char.y,
                             "job": char.job,
-                            "goal": char.current_goal,
+                            "goal": goal_payload,
                             "is_sick": getattr(char, 'is_sick', False), # Add health status
                             "is_injured": getattr(char, 'is_injured', False),
                             "inventory_load": char.get_inventory_load(),
                             "known_characters": getattr(char, 'known_characters', []),
-                            "dialogue_history_count": len(getattr(char, 'dialogue_history', [])) # Just count for overview
+                            "dialogue_history_count": len(getattr(char, 'dialogue_history', [])), # Just count for overview
+                            "needs": getattr(char, 'needs', {}),
+                            "resting_at_home": getattr(char, 'resting_at_home', False),
+                            "home_location": getattr(char, 'home_location', None),
+                            "energy": getattr(char, 'needs', {}).get('Energy'),
+                            "thirst": getattr(char, 'needs', {}).get('Thirst'),
+                            "inventory": getattr(char, 'inventory', {}),
+                            "age": getattr(char, 'age_years', None),
+                            "citizenship": getattr(char, 'citizenship_status', 'Resident'),
                         })
 
                 event_log_repr = game_world.event_log[-20:] if game_world else []
@@ -305,7 +364,9 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                             "height": b.size[1],
                             "map_char": b.get_current_map_char(),
                             "display_name": b.display_name,
-                            "structure_type": b.structure_type # Added for frontend differentiation
+                            "structure_type": b.structure_type, # Added for frontend differentiation
+                            "occupants": getattr(b, 'occupants', []),
+                            "provides_shelter": b.functionality.get('provides_shelter') if b.functionality else None,
                         })
                 if hasattr(game_world, 'stockpiles'): # Also include stockpiles as "buildings" for map display
                     for sp in game_world.stockpiles:
@@ -328,11 +389,27 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "weather": game_world.weather,
                     "grid_size": game_world.grid_size,
                     "grid": grid_repr,
+                    "map_revision": getattr(game_world, 'map_revision', 0),
                     "characters": characters_repr,
                     "event_log": event_log_repr,
                     "is_paused": game_paused,
                     "days_until_election": getattr(game_time_obj, 'days_until_election', -1),
-                    "current_speed_multiplier": SIMULATION_SPEED_MULTIPLIER
+                    "current_speed_multiplier": SIMULATION_SPEED_MULTIPLIER,
+                    "treasury": getattr(game_world, 'treasury_coins', 0),
+                    "daily_economy_report": getattr(game_world, 'last_daily_economic_report', {}),
+                    "pending_wages": getattr(game_world, 'pending_wages', []),
+                    "market_prices": getattr(game_world, 'market_prices', {}),
+                    "resource_pressures": game_world.identify_resource_pressures() if hasattr(game_world, 'identify_resource_pressures') else [],
+                    "crime_reports": getattr(game_world, 'crime_reports', []),
+                    "pending_crimes": getattr(game_world, 'pending_crimes', []),
+                    "campaign_promises": getattr(game_world, 'campaign_promises', {}),
+                    "environment_effects": game_world.get_environment_snapshot() if hasattr(game_world, 'get_environment_snapshot') else {},
+                    "rumors": game_world.get_rumor_digest() if hasattr(game_world, 'get_rumor_digest') else [],
+                    "housing": getattr(game_world, 'latest_housing_snapshot', {}),
+                    "current_phase": game_world.get_current_phase() if hasattr(game_world, 'get_current_phase') else {},
+                    "active_weather_event": game_world.get_active_weather_event() if hasattr(game_world, 'get_active_weather_event') else None,
+                    "resource_nodes": game_world.get_resource_nodes_snapshot() if hasattr(game_world, 'get_resource_nodes_snapshot') else [],
+                    "population": getattr(game_world, 'population_stats', {}),
                 }
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
@@ -409,16 +486,25 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
 
             character = game_world.get_character_by_name(char_name)
             if character:
+                goal_payload = None
+                if hasattr(character.current_goal, 'to_dict'):
+                    goal_payload = character.current_goal.to_dict()
+                elif character.current_goal:
+                    goal_payload = str(character.current_goal)
                 char_data = {
                     "name": character.name,
                     "job": character.job,
                     "rank": character.rank,
                     "x": character.x,
                     "y": character.y,
-                    "current_goal": character.current_goal,
+                    "current_goal": goal_payload,
                     "inventory": character.inventory,
                     "skills": {skill_name: data["level"] for skill_name, data in character.skills.items()}, # Simplified skills view
                     "needs": character.needs,
+                    "energy": character.needs.get('Energy'),
+                    "thirst": character.needs.get('Thirst'),
+                    "resting_at_home": getattr(character, 'resting_at_home', False),
+                    "home_location": getattr(character, 'home_location', None),
                     "is_sick": getattr(character, 'is_sick', False),
                     "sickness_severity": getattr(character, 'sickness_severity', 0),
                     "is_injured": getattr(character, 'is_injured', False),
@@ -476,7 +562,9 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "current_progress": getattr(building, 'current_progress', 0),
                     "build_time": getattr(building, 'build_time', 0), # Total work for all phases
                     "current_phase_name": building.get_current_phase_name() if hasattr(building, 'get_current_phase_name') else "N/A",
-                    "map_char": building.get_current_map_char()
+                    "map_char": building.get_current_map_char(),
+                    "occupants": getattr(building, 'occupants', []),
+                    "provides_shelter": building.functionality.get('provides_shelter') if building.functionality else None,
                 }
                 # If it's a stockpile or has inventory (like some workshops might)
                 if hasattr(building, 'inventory'):
@@ -552,8 +640,9 @@ if __name__ == "__main__":
     try:
         with socketserver.TCPServer(("", PORT), GameDataHandler) as httpd:
             print(f"Serving HTTP on port {PORT}...")
-            print("Game simulation running in background. Access UI at http://localhost:8000/ (assuming index.html in ui folder)")
+            print(f"Game simulation running in background. Access UI at http://localhost:{PORT}/ (assuming index.html in ui folder)")
             print("Press Ctrl+C to stop server and simulation.")
+            trigger_initial_ui_fetch(PORT)
             httpd.serve_forever()
     except KeyboardInterrupt:
         print("\nCtrl+C received. Shutting down server and simulation...")
