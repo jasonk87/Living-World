@@ -81,6 +81,7 @@ class World:
         self.last_daily_economic_report: Dict[str, Any] = {}
         self.crime_reports: List[Dict[str, Any]] = []
         self.pending_crimes: List[Dict[str, Any]] = []
+        self.pending_trials: List[Dict[str, Any]] = []
         self.active_crimes: Dict[str, Dict[str, Any]] = {}
         self._crime_incident_counter: int = 0
         self.today_surplus_sales: List[Dict[str, Any]] = []
@@ -884,6 +885,13 @@ class World:
                 return wo
         return None
 
+    def get_jail_location(self) -> Optional[Tuple[int, int]]:
+        """Returns the location of the jail, if it exists."""
+        jail_buildings = self.get_operational_buildings_of_type("jail")
+        if jail_buildings:
+            return jail_buildings[0].location
+        return None
+
     def get_character_by_name(self, name: str) -> Optional['Character']: # Added utility
         for char in self.characters:
             if char.name == name:
@@ -962,6 +970,16 @@ class World:
         crime = self.get_crime_by_id(crime_id)
         if not crime:
             return None
+
+        if result == "apprehended":
+            crime["status"] = "awaiting_trial"
+            if crime_id in self.active_crimes:
+                del self.active_crimes[crime_id]
+            self.pending_crimes = [c for c in self.pending_crimes if c.get("id") != crime_id]
+            self.pending_trials.append(crime)
+            self.add_event_log_message(f"Case {crime_id} against {crime.get('suspect')} is now awaiting trial.")
+            self._record_crime_history(crime)
+            return crime
 
         if requeue:
             crime["status"] = "pending"

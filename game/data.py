@@ -103,6 +103,8 @@ CITIZEN_TRAIT_POOL = [
     "Tough",
     "Patient",
     "Resourceful",
+    "Honest",
+    "Deceptive",
 ]
 
 MIGRANT_ARCHETYPES = [
@@ -371,6 +373,34 @@ STRUCTURE_BLUEPRINTS = {
         "functionality": {"tags": ["construction", "progress_marker"]},
         "required_resources": {},
         "construction_phases": [{"name": "Site Preparation", "work_required": 1, "map_char_during": "X"}]
+    },
+    "courthouse": {
+        "display_name": "Courthouse",
+        "size": (4, 3),
+        "required_resources": {"Wood": 60, "Stone": 100},
+        "construction_phases": [
+            {"name": "Foundation", "work_required": 40, "map_char_during": "_"},
+            {"name": "Walls and Interior", "work_required": 60, "map_char_during": "|"},
+            {"name": "Judge's Bench and Furnishings", "work_required": 30, "map_char_during": "C"}
+        ],
+        "functionality": {"tags": ["indoor", "justice", "government"]},
+        "required_skill": {"Construction": 4},
+        "map_char_initial": ".",
+        "map_char_complete": "C"
+    },
+    "jail": {
+        "display_name": "Jail",
+        "size": (3, 3),
+        "required_resources": {"Wood": 40, "Stone": 80, "Iron Ingot": 10},
+        "construction_phases": [
+            {"name": "Foundation", "work_required": 30, "map_char_during": "_"},
+            {"name": "Stone Walls", "work_required": 50, "map_char_during": "#"},
+            {"name": "Iron Bars and Lock", "work_required": 20, "map_char_during": "J"}
+        ],
+        "functionality": {"provides_jail_cells": 4, "tags": ["indoor", "justice"]},
+        "required_skill": {"Construction": 3},
+        "map_char_initial": ".",
+        "map_char_complete": "J"
     }
 }
 

@@ -99,6 +99,9 @@ class Character:
         self._mc_item_check_idx: int = 0
         self.active_crime_assignment: Optional[str] = None
         self.crime_investigation_focus: Optional[Dict[str, Any]] = None
+        self.criminal_record: List[Dict[str, Any]] = []
+        self.is_jailed: bool = False
+        self.jail_sentence_end_day: Optional[int] = None
         self.last_estate_review_day: Optional[int] = None
         self.active_estate_orders: List[Dict[str, Any]] = []
         self.last_high_court_day: Optional[int] = None
@@ -2221,6 +2224,55 @@ class Character:
             self.current_goal = Goal(GoalType.GIVE_SPEECH, assignee_id=self.name, originator_id=self.name)
             return # Goal changed, decide_action will pick it up next tick
 
+        # Check for pending trials that need a judge
+        if hasattr(world, "pending_trials") and world.pending_trials:
+            # Check if already has a court session goal
+            if self.current_goal.type != GoalType.HOLD_COURT_SESSION:
+                # Prioritize holding court if there are pending trials
+                self.add_memory("There are pending trials that require my attention as judge.")
+                self.current_goal = Goal(
+                    GoalType.HOLD_COURT_SESSION,
+                    assignee_id=self.name,
+                    originator_id="SystemJustice",
+                    priority=2, # High priority to ensure justice is served
+                    parameters={"trial_case": world.pending_trials[0]} # Take the first case
+                )
+                return # Goal changed, will be executed next tick
+
+        # Ensure critical justice buildings exist
+        justice_buildings_to_check = ["courthouse", "jail"]
+        for b_type in justice_buildings_to_check:
+            if not world.get_operational_buildings_of_type(b_type):
+                # Check if a work order already exists
+                if not any(wo.details.get("structure_type") == b_type for wo in world.work_orders if wo.status in ["Pending", "Approved", "InProgress"]):
+                    self.add_memory(f"The settlement is missing a {b_type}. I will order one built.")
+                    # Find a location and create a build order
+                    structure_bp = STRUCTURE_BLUEPRINTS.get(b_type)
+                    if structure_bp:
+                        build_location: Optional[Tuple[int,int]] = None
+                        for r in range(world.grid_size[0] - structure_bp["size"][1] + 1):
+                            for c in range(world.grid_size[1] - structure_bp["size"][0] + 1):
+                                can_place = True
+                                for dr in range(structure_bp["size"][1]):
+                                    for dc in range(structure_bp["size"][0]):
+                                        if world.get_tile(c + dc, r + dr) != "Grass" or world.get_building_at(c + dc, r + dr):
+                                            can_place = False; break
+                                    if not can_place: break
+                                if can_place:
+                                    build_location = (c, r)
+                                    break
+                            if build_location: break
+
+                        if build_location:
+                            order_details = { "structure_type": b_type, "location": build_location }
+                            new_build_order = WorkOrder(order_type="BuildStructure", details=order_details,
+                                                        priority=1, creation_day=world.game_time.current_day)
+                            world.add_work_order(new_build_order)
+                            self.add_memory(f"Issued a high-priority work order for a {b_type} at {build_location}.")
+                            return # One major order per tick is enough
+                        else:
+                            self.add_memory(f"I want to build a {b_type}, but there is no space.")
+
         # Mayoral Project Initiation
         # Simplified: 5% chance each time the Mayor oversees settlement to initiate a project
         if random.random() < 0.05:
@@ -2529,6 +2581,14 @@ class Character:
                     caught=True,
                     notes=notes,
                 )
+            # NEW: Instead of just resolving, set the suspect's goal to AWAIT_TRIAL
+            suspect.current_goal = Goal(
+                GoalType.AWAIT_TRIAL,
+                assignee_id=suspect.name,
+                originator_id=self.name, # The arresting officer
+                parameters={"crime_id": crime_id}
+            )
+            suspect.add_memory(f"I have been apprehended and am now awaiting trial for case {crime_id}.")
         elif investigation_success:
             self.add_memory(f"Secured the scene of case {crime_id}; suspect not present.")
             if hasattr(world, "resolve_crime_outcome"):
@@ -3100,6 +3160,127 @@ class Character:
         self.current_goal.set_completed()
         self.current_goal = self.get_default_goal()
 
+    def _execute_await_trial(self, world: 'World'):
+        self.add_memory("Awaiting trial. I should probably stay out of trouble and lay low.")
+        # Character will mostly idle or wander slowly, perhaps near the courthouse or jail.
+        # A high priority goal like ATTEND_COURT_SESSION will interrupt this.
+        self._execute_wander(world)
+
+    def _execute_hold_court_session(self, world: 'World'):
+        trial_case = self.current_goal.parameters.get("trial_case")
+        if not trial_case:
+            self.add_memory("No trial case to preside over.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        defendant_name = trial_case.get("suspect")
+        defendant = world.get_character_by_name(defendant_name)
+        if not defendant:
+            self.add_memory(f"Defendant {defendant_name} not found for trial.")
+            world.pending_trials.remove(trial_case)
+            self.current_goal = self.get_default_goal()
+            return
+
+        courthouse = world.get_operational_buildings_of_type("courthouse")
+        if not courthouse:
+            self.add_memory("There is no courthouse to hold a trial.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        courthouse_location = courthouse[0].location
+
+        # Summon defendant if they are not at the courthouse
+        if (defendant.x, defendant.y) != courthouse_location:
+            defendant.current_goal = Goal(
+                GoalType.ATTEND_COURT_SESSION,
+                assignee_id=defendant.name,
+                originator_id=self.name,
+                parameters={"courthouse_location": courthouse_location}
+            )
+            self.add_memory(f"Summoning {defendant_name} to the courthouse for trial.")
+            return
+
+        # At the courthouse, proceed with the trial
+        self.add_memory(f"Holding trial for {defendant_name}.")
+
+        # Nuanced guilt determination
+        base_guilt_prob = 0.6 # Base probability of being found guilty
+
+        # Officer's skill influences the strength of the case
+        officer_name = trial_case.get("resolved_by")
+        officer = world.get_character_by_name(officer_name)
+        if officer:
+            security_skill = officer.skills.get("Security", {}).get("level", 0)
+            base_guilt_prob += security_skill * 0.05 # Each skill level adds 5%
+            self.add_memory(f"Officer {officer_name}'s security skill of {security_skill} influences the trial.")
+
+        # Defendant's traits influence the outcome
+        if "Deceptive" in defendant.traits:
+            base_guilt_prob -= 0.15
+            self.add_memory(f"Defendant {defendant_name}'s deceptive nature is considered.")
+        if "Honest" in defendant.traits:
+            base_guilt_prob += 0.1
+            self.add_memory(f"Defendant {defendant_name}'s honest reputation is considered.")
+
+        guilty = random.random() < base_guilt_prob
+
+        if guilty:
+            sentence_days = random.randint(3, 10)
+            defendant.jail_sentence_end_day = world.game_time.current_day + sentence_days
+            defendant.is_jailed = True
+            defendant.criminal_record.append({
+                "crime": trial_case.get("type"),
+                "sentence": f"{sentence_days} days in jail",
+                "convicted_day": world.game_time.current_day
+            })
+            defendant.current_goal = Goal(
+                GoalType.SERVE_JAIL_SENTENCE,
+                assignee_id=defendant.name,
+                originator_id=self.name
+            )
+            self.add_memory(f"Found {defendant_name} guilty. Sentenced to {sentence_days} days in jail.")
+            defendant.add_memory(f"I have been found guilty and sentenced to {sentence_days} days in jail.")
+        else:
+            self.add_memory(f"Found {defendant_name} not guilty.")
+            defendant.add_memory("I have been found not guilty of the charges.")
+            defendant.current_goal = defendant.get_default_goal()
+
+        # Remove the trial from the pending list
+        world.pending_trials.remove(trial_case)
+        self.current_goal = self.get_default_goal()
+
+    def _execute_attend_court_session(self, world: 'World'):
+        courthouse_location = self.current_goal.parameters.get("courthouse_location")
+        if not courthouse_location:
+            self.add_memory("I'm supposed to attend court, but I don't know where it is.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        if (self.x, self.y) == courthouse_location:
+            self.add_memory("I have arrived at the courthouse for my trial.")
+            # Now the character waits for the judge to proceed.
+            # The HOLD_COURT_SESSION goal will handle the next steps.
+        else:
+            self.add_memory("On my way to the courthouse for my trial.")
+            self.move_towards(courthouse_location[0], courthouse_location[1], world)
+
+    def _execute_serve_jail_sentence(self, world: 'World'):
+        jail_location = world.get_jail_location()
+        if not jail_location:
+            self.add_memory("I've been sentenced, but there's no jail. I guess I'm free to go?")
+            self.is_jailed = False
+            self.jail_sentence_end_day = None
+            self.current_goal = self.get_default_goal()
+            return
+
+        if (self.x, self.y) != jail_location:
+            self.add_memory("I am being escorted to jail to serve my sentence.")
+            self.move_towards(jail_location[0], jail_location[1], world)
+        else:
+            self.add_memory("I am now in jail, serving my time.")
+            # The character will remain here. The `decide_action` method will handle
+            # checking the sentence and releasing them.
+
     def _execute_wander(self, world: 'World'): # Assumes current_goal is WANDER
         moves = []
         for dx, dy in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
@@ -3125,6 +3306,17 @@ class Character:
             # self.current_goal = "Idle" # Will be refactored to Goal object
             self.current_goal = self.get_default_goal()
             return
+
+        if self.is_jailed:
+            if self.jail_sentence_end_day is not None and world.game_time.current_day > self.jail_sentence_end_day:
+                self.is_jailed = False
+                self.jail_sentence_end_day = None
+                self.add_memory("I have served my time and am now free.")
+                self.current_goal = self.get_default_goal()
+            else:
+                # While jailed, do nothing else.
+                self.add_memory("Stuck in jail, counting the days.")
+                return # Prevent any other actions
 
         phase_info = world.get_current_phase() if hasattr(world, "get_current_phase") else world.game_time.get_phase()
         self._apply_phase_behavior(world, phase_info)
@@ -3342,6 +3534,12 @@ class Character:
         elif self.current_goal.type == GoalType.ASSIST_REEVE: self._execute_assist_reeve(world)
         elif self.current_goal.type == GoalType.HOLD_HIGH_COURT: self._execute_hold_high_court(world)
         elif self.current_goal.type == GoalType.ATTEND_HIGH_COURT: self._execute_attend_high_court(world)
+
+        # Justice System Goals
+        elif self.current_goal.type == GoalType.AWAIT_TRIAL: self._execute_await_trial(world)
+        elif self.current_goal.type == GoalType.HOLD_COURT_SESSION: self._execute_hold_court_session(world)
+        elif self.current_goal.type == GoalType.ATTEND_COURT_SESSION: self._execute_attend_court_session(world)
+        elif self.current_goal.type == GoalType.SERVE_JAIL_SENTENCE: self._execute_serve_jail_sentence(world)
 
         # Social Goals
         elif self.current_goal.type == GoalType.GREET_CHARACTER: self._execute_greet_character(world)
