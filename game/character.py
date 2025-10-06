@@ -637,6 +637,53 @@ class Character:
     def get_inventory_load(self) -> int: return sum(self.inventory.values())
     def add_memory(self, e: str): self.memory.append(e); self.memory=self.memory[-20:]
 
+    def receive_cultural_event_boost(self, event_data: Dict[str, Any], world: 'World') -> None:
+        """Apply morale and need adjustments when the settlement hosts a cultural event."""
+        event_name = event_data.get("name", "community gathering")
+        description = event_data.get("description")
+        event_key = event_data.get("key", event_name.lower())
+
+        belonging_bonus = int(event_data.get("belonging_bonus", 0))
+        esteem_bonus = int(event_data.get("esteem_bonus", 0))
+        social_bonus = int(event_data.get("social_bonus", 0))
+        mood_bonus = int(event_data.get("mood_bonus", 0))
+
+        if belonging_bonus:
+            current_belonging = self.needs.get("Belonging", config.NEED_BELONGING_DEFAULT)
+            self.needs["Belonging"] = min(
+                config.NEED_SCORE_MAX,
+                max(config.NEED_SCORE_MIN, current_belonging + belonging_bonus),
+            )
+
+        if esteem_bonus:
+            current_esteem = self.needs.get("Esteem", config.NEED_ESTEEM_DEFAULT)
+            self.needs["Esteem"] = min(
+                config.NEED_SCORE_MAX,
+                max(config.NEED_SCORE_MIN, current_esteem + esteem_bonus),
+            )
+
+        if social_bonus:
+            current_social = self.needs.get("Social", config.NEED_SCORE_MAX // 2)
+            self.needs["Social"] = min(
+                config.NEED_SCORE_MAX,
+                max(config.NEED_SCORE_MIN, current_social + social_bonus),
+            )
+
+        if mood_bonus:
+            self.update_mood_score(mood_bonus, f"Enjoyed {event_name}")
+
+        flavor_lines = event_data.get("flavor") or []
+        flavor_snippet = random.choice(flavor_lines) if flavor_lines else ""
+        fragments = [frag for frag in [description, flavor_snippet] if frag]
+        memory_summary = f"Enjoyed {event_name}."
+        if fragments:
+            memory_summary += " " + " ".join(fragments)
+        self.add_memory(memory_summary.strip())
+
+        if hasattr(self, "known_events"):
+            self.known_events.append(event_key)
+            self.known_events = self.known_events[-20:]
+
     def _receive_payment(self, amount: int, reason: str, world: Optional['World'] = None):
         """Handles wages, routing through the world's treasury when available."""
         if amount <= 0:

@@ -455,6 +455,7 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "active_weather_event": game_world.get_active_weather_event() if hasattr(game_world, 'get_active_weather_event') else None,
                     "resource_nodes": game_world.get_resource_nodes_snapshot() if hasattr(game_world, 'get_resource_nodes_snapshot') else [],
                     "population": getattr(game_world, 'population_stats', {}),
+                    "cultural": game_world.get_cultural_snapshot() if hasattr(game_world, 'get_cultural_snapshot') else {},
                 }
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')

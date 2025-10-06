@@ -98,6 +98,157 @@ WEATHER_EVENT_DEFINITIONS = {
 
 WEATHER_EVENT_MESSAGE_LIMIT = 4
 
+# Cultural Life & Festivals
+CULTURAL_SPIRIT_BASELINE = 0.45
+CULTURAL_SPIRIT_DECAY = 0.02
+CULTURAL_EVENT_LIBRARY = {
+    "Spring": [
+        {
+            "key": "first_bloom_festival",
+            "name": "First Bloom Festival",
+            "anchor_day": 4,
+            "duration": 2,
+            "description": "Villagers braid garlands and share herbal tonics as the valley greens again.",
+            "belonging_bonus": 12,
+            "esteem_bonus": 4,
+            "social_bonus": 10,
+            "mood_bonus": 10,
+            "community_spirit_delta": 0.12,
+            "travel_speed_multiplier": 1.05,
+            "market_price_adjustment": {"Herbs": 0.9, "Food": 0.95},
+            "flavor": [
+                "Herbalists exchange new remedies beside the communal fountain.",
+                "Children chase ribbons beneath freshly hung wreaths.",
+            ],
+        },
+        {
+            "key": "planters_oath",
+            "name": "Planters' Oath",
+            "anchor_day": 7,
+            "duration": 1,
+            "description": "Farmers pledge to steward the fields and trade seedlings at the long tables.",
+            "belonging_bonus": 8,
+            "esteem_bonus": 3,
+            "social_bonus": 6,
+            "mood_bonus": 6,
+            "community_spirit_delta": 0.08,
+            "resource_yield_bonus": [{"resource": "Food", "multiplier": 1.1}],
+            "flavor": [
+                "Seed packets swap hands faster than scribes can tally pledges.",
+                "Elders press soil blessings into eager apprentices' palms.",
+            ],
+        },
+    ],
+    "Summer": [
+        {
+            "key": "sunpeak_tourney",
+            "name": "Sunpeak Tourney",
+            "anchor_day": 4,
+            "duration": 2,
+            "description": "Friendly contests spill across the meadow while merchants hawk chilled cordials.",
+            "belonging_bonus": 10,
+            "esteem_bonus": 6,
+            "social_bonus": 9,
+            "mood_bonus": 12,
+            "community_spirit_delta": 0.14,
+            "travel_speed_multiplier": 1.08,
+            "flavor": [
+                "Crowds roar as archers loose volleys toward painted targets.",
+                "Vendors ring bells, promising respite from the blazing sun.",
+            ],
+        },
+        {
+            "key": "river_revel",
+            "name": "River Revel",
+            "anchor_day": 8,
+            "duration": 1,
+            "description": "Lantern skiffs drift downstream while storytellers trade sailor myths.",
+            "belonging_bonus": 9,
+            "esteem_bonus": 4,
+            "social_bonus": 8,
+            "mood_bonus": 8,
+            "community_spirit_delta": 0.1,
+            "market_price_adjustment": {"Water": 0.92},
+            "flavor": [
+                "Musicians keep time with the river's current on hand drums and lutes.",
+                "Families launch lanterns, whispering wishes into the warm night air.",
+            ],
+        },
+    ],
+    "Autumn": [
+        {
+            "key": "harvest_home",
+            "name": "Harvest Home Supper",
+            "anchor_day": 5,
+            "duration": 2,
+            "description": "A banquet of roasted roots and ciders thanks the hands that gathered the yield.",
+            "belonging_bonus": 14,
+            "esteem_bonus": 6,
+            "social_bonus": 12,
+            "mood_bonus": 12,
+            "community_spirit_delta": 0.16,
+            "market_price_adjustment": {"Food": 0.85},
+            "resource_yield_bonus": [{"resource": "Food", "multiplier": 1.08}],
+            "flavor": [
+                "Tavern fiddlers strike quick reels while platters circle the square.",
+                "Cellars open their casks to toast a season safely stored away.",
+            ],
+        },
+        {
+            "key": "lantern_vigil",
+            "name": "Lantern Vigil",
+            "anchor_day": 9,
+            "duration": 1,
+            "description": "Quiet processions honor ancestors as autumn fog rolls between cottages.",
+            "belonging_bonus": 7,
+            "esteem_bonus": 4,
+            "social_bonus": 5,
+            "mood_bonus": 6,
+            "community_spirit_delta": 0.09,
+            "flavor": [
+                "A hush settles as bells toll through the misty hillside.",
+                "Candles glow in every window, guiding travelers back to warmth.",
+            ],
+        },
+    ],
+    "Winter": [
+        {
+            "key": "deepwinter_gifts",
+            "name": "Deepwinter Gift Exchange",
+            "anchor_day": 3,
+            "duration": 2,
+            "description": "Neighbors craft tokens by hearthlight and share stews that chase away the chill.",
+            "belonging_bonus": 13,
+            "esteem_bonus": 5,
+            "social_bonus": 10,
+            "mood_bonus": 11,
+            "community_spirit_delta": 0.15,
+            "market_price_adjustment": {"Wood": 0.95, "Arrow Bundle": 1.05},
+            "flavor": [
+                "Laughter mingles with the crackle of pine logs in the gathering hall.",
+                "Children dart between tables, arms overflowing with ribbons and sweets.",
+            ],
+        },
+        {
+            "key": "thaw_dreams",
+            "name": "Thaw Dreams Council",
+            "anchor_day": 7,
+            "duration": 1,
+            "description": "Citizens chart spring ambitions while mapmakers spread parchment across the dais.",
+            "belonging_bonus": 9,
+            "esteem_bonus": 5,
+            "social_bonus": 7,
+            "mood_bonus": 7,
+            "community_spirit_delta": 0.11,
+            "travel_speed_multiplier": 1.03,
+            "flavor": [
+                "Ideas for new workshops spark rapid sketches and eager applause.",
+                "Cooks pass steaming mugs as debates over next season's plans grow lively.",
+            ],
+        },
+    ],
+}
+
 # Population Churn Balancing
 POPULATION_BIRTH_BASE_CHANCE = 0.08
 POPULATION_MIGRATION_BASE_CHANCE = 0.12
