@@ -98,6 +98,88 @@ WEATHER_EVENT_DEFINITIONS = {
 
 WEATHER_EVENT_MESSAGE_LIMIT = 4
 
+# Workforce & Logistics
+DEFAULT_WORK_SHIFT_TICKS = 6
+WORK_SHIFT_DEFINITIONS = {
+    "logging": {
+        "title": "Logging Crews",
+        "jobs": ["Woodcutter"],
+        "task": "Chop Wood",
+        "resource": "Wood",
+        "skill": "Woodcutting",
+        "shift_ticks": 6,
+        "carry_capacity_per_worker": 6,
+        "hauler_jobs": ["Builder"],
+        "hauler_capacity": 12,
+        "skill_yield_bonus": 0.12,
+        "preferred_stockpiles": ["Lumber Yard", "Central Stockpile"],
+    },
+    "quarry": {
+        "title": "Quarry Team",
+        "jobs": ["Stonemason", "Miner"],
+        "task": "Mine Stone",
+        "resource": "Stone",
+        "skill": "Mining",
+        "shift_ticks": 6,
+        "carry_capacity_per_worker": 5,
+        "hauler_jobs": ["Builder"],
+        "hauler_capacity": 10,
+        "skill_yield_bonus": 0.1,
+        "preferred_stockpiles": ["Masonry Yard", "Central Stockpile"],
+    },
+    "fields": {
+        "title": "Field Hands",
+        "jobs": ["Farmer"],
+        "task": "Tend Fields",
+        "resource": "Food",
+        "skill": "Farming",
+        "shift_ticks": 6,
+        "carry_capacity_per_worker": 8,
+        "hauler_jobs": ["Farmer"],
+        "hauler_capacity": 8,
+        "skill_yield_bonus": 0.1,
+        "preferred_stockpiles": ["Granary", "Central Stockpile"],
+    },
+}
+
+# Training & Apprenticeships
+TRAINING_ESTEEM_BOOST = 3
+TRAINING_PROGRAM_DEFINITIONS = {
+    "construction_basics": {
+        "title": "Construction Basics Workshop",
+        "skill": "Construction",
+        "focus_jobs": ["Builder", "Master Craftsman"],
+        "target_level": 2,
+        "min_level": 0,
+        "capacity": 3,
+        "duration_days": 2,
+        "daily_exp_gain": 6.5,
+        "instructor_roles": ["Master Craftsman", "Manager"],
+    },
+    "field_agronomy": {
+        "title": "Field Agronomy Clinic",
+        "skill": "Farming",
+        "focus_jobs": ["Farmer"],
+        "target_level": 2,
+        "min_level": 0,
+        "capacity": 4,
+        "duration_days": 3,
+        "daily_exp_gain": 5.0,
+        "instructor_roles": ["Farmer", "Chief Medical Officer"],
+    },
+    "triage_rotation": {
+        "title": "Triage Rotation Drills",
+        "skill": "Medicine",
+        "focus_jobs": ["Medic", "Chief Medical Officer"],
+        "target_level": 3,
+        "min_level": 1,
+        "capacity": 2,
+        "duration_days": 3,
+        "daily_exp_gain": 7.0,
+        "instructor_roles": ["Chief Medical Officer"],
+    },
+}
+
 # Cultural Life & Festivals
 CULTURAL_SPIRIT_BASELINE = 0.45
 CULTURAL_SPIRIT_DECAY = 0.02

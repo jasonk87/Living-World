@@ -37,6 +37,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const resourceNodeList = document.getElementById('resource-node-list');
     const populationEventList = document.getElementById('population-event-list');
     const weatherEventNote = document.getElementById('environment-weather-event');
+    const workCrewNote = document.getElementById('work-crew-note');
+    const workCrewList = document.getElementById('work-crew-list');
+    const workShipmentList = document.getElementById('work-shipment-list');
+    const trainingNeedsNote = document.getElementById('training-needs-note');
+    const trainingSessionList = document.getElementById('training-session-list');
+    const trainingWaitlistList = document.getElementById('training-waitlist-list');
     const characterSearchInput = document.getElementById('character-search');
     const infoPanel = document.getElementById('info-panel');
 
@@ -234,6 +240,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const environment = gameState.environment_effects || report.environment || {};
         const housingSnapshot = gameState.housing || report.housing || {};
         const populationSnapshot = gameState.population || report.population_snapshot || {};
+        const trainingReport = gameState.training || report.training || {};
+        const workforceReport = gameState.workforce || report.workforce || {};
 
         if (hudPopulationValue) {
             const totalPopulation = typeof populationSnapshot.population === 'number'
@@ -410,6 +418,157 @@ document.addEventListener('DOMContentLoaded', () => {
                         return `<li><strong>${node.resource}</strong> @ (${loc}) • ${status}</li>`;
                     })
                     .join('');
+            }
+        }
+
+        if (workCrewNote) {
+            const gatheredTotal = typeof workforceReport.gathered_total === 'number' ? workforceReport.gathered_total : 0;
+            const deliveredTotal = typeof workforceReport.delivered_total === 'number' ? workforceReport.delivered_total : 0;
+            const backlogTotal = typeof workforceReport.backlog_total === 'number' ? workforceReport.backlog_total : 0;
+            const alerts = Array.isArray(workforceReport.alerts) ? workforceReport.alerts : [];
+
+            if (!gatheredTotal && !deliveredTotal && !backlogTotal && !alerts.length) {
+                workCrewNote.textContent = 'Crews waiting on orders.';
+                workCrewNote.classList.add('muted');
+            } else {
+                const fragments = [`Gathered ${gatheredTotal}`, `Delivered ${deliveredTotal}`];
+                if (backlogTotal) fragments.push(`Backlog ${backlogTotal}`);
+                if (alerts.length) fragments.push(`Alerts: ${alerts.join('; ')}`);
+                workCrewNote.textContent = fragments.join(' • ');
+                workCrewNote.classList.toggle('muted', false);
+            }
+        }
+
+        const workCrews = Array.isArray(workforceReport.crews) ? workforceReport.crews : [];
+
+        if (workCrewList) {
+            if (!workCrews.length) {
+                workCrewList.innerHTML = '<li class="empty">No crews reported.</li>';
+            } else {
+                const crewItems = workCrews.map((crew) => {
+                    const workerCount = Array.isArray(crew.workers) ? crew.workers.length : 0;
+                    const haulerCount = Array.isArray(crew.haulers) ? crew.haulers.length : 0;
+                    const resourceLabel = crew.resource ? ` ${crew.resource}` : '';
+                    const parts = [
+                        `${workerCount} worker${workerCount === 1 ? '' : 's'}`,
+                    ];
+                    if (haulerCount) {
+                        parts.push(`${haulerCount} hauler${haulerCount === 1 ? '' : 's'}`);
+                    }
+                    parts.push(`gathered ${crew.gathered}${resourceLabel}`);
+                    parts.push(`delivered ${crew.delivered}`);
+                    if (crew.backlog) {
+                        parts.push(`backlog ${crew.backlog}`);
+                    }
+                    const details = parts.join(' • ');
+                    const notes = Array.isArray(crew.notes) ? crew.notes.join(' • ') : '';
+                    const noteHtml = notes ? `<small class="muted">${notes}</small>` : '';
+                    return `<li><strong>${crew.title}</strong> — ${details}${noteHtml ? `<br>${noteHtml}` : ''}</li>`;
+                });
+                workCrewList.innerHTML = crewItems.join('');
+            }
+        }
+
+        if (workShipmentList) {
+            const shipments = Array.isArray(workforceReport.shipments) ? workforceReport.shipments : [];
+            const alerts = Array.isArray(workforceReport.alerts) ? workforceReport.alerts : [];
+            const entries = [];
+            if (shipments.length) {
+                shipments.forEach((shipment) => {
+                    const crew = workCrews.find((entry) => entry.key === shipment.sector);
+                    const label = crew ? crew.title : (shipment.sector || 'Crew');
+                    const resource = shipment.resource || 'goods';
+                    const delivered = typeof shipment.delivered === 'number' ? shipment.delivered : 0;
+                    const routes = Array.isArray(shipment.routes) ? shipment.routes : [];
+                    const routeSummary = routes.length
+                        ? routes.map((route) => `${route.quantity} → ${route.stockpile}`).join(', ')
+                        : 'No storage available';
+                    entries.push(`<li>${label}: ${delivered} ${resource} (${routeSummary})</li>`);
+                });
+            }
+            if (alerts.length) {
+                alerts.forEach((alert) => {
+                    entries.push(`<li class="alert">${alert}</li>`);
+                });
+            }
+            if (!entries.length) {
+                workShipmentList.innerHTML = '<li class="empty">No deliveries dispatched.</li>';
+            } else {
+                workShipmentList.innerHTML = entries.join('');
+            }
+        }
+
+        if (trainingSessionList) {
+            const activeSessions = Array.isArray(trainingReport.active_sessions)
+                ? trainingReport.active_sessions
+                : [];
+            if (!activeSessions.length) {
+                trainingSessionList.innerHTML = '<li class="empty">No active sessions.</li>';
+            } else {
+                trainingSessionList.innerHTML = activeSessions
+                    .slice(0, 4)
+                    .map(session => {
+                        const progressText = typeof session.progress === 'number' && typeof session.duration === 'number'
+                            ? `Day ${session.progress}/${session.duration}`
+                            : `Day ${session.progress ?? 0}`;
+                        const instructor = session.instructor ? `Led by ${session.instructor}` : 'No instructor';
+                        const trainees = Array.isArray(session.trainees) && session.trainees.length
+                            ? session.trainees.join(', ')
+                            : 'No trainees';
+                        return `
+                            <li>
+                                <strong>${session.program}</strong>
+                                <div class="meta">${progressText} • ${instructor} • ${trainees}</div>
+                            </li>
+                        `;
+                    })
+                    .join('');
+            }
+        }
+
+        if (trainingWaitlistList) {
+            const waitlists = Array.isArray(trainingReport.waitlists) ? trainingReport.waitlists : [];
+            const queued = waitlists.filter(entry => Array.isArray(entry.queued) && entry.queued.length);
+            if (!queued.length) {
+                trainingWaitlistList.innerHTML = '<li class="empty">No one queued.</li>';
+            } else {
+                trainingWaitlistList.innerHTML = queued
+                    .slice(0, 4)
+                    .map(entry => {
+                        const names = entry.queued.slice(0, 4).join(', ');
+                        const count = typeof entry.count === 'number' ? entry.count : entry.queued.length;
+                        return `
+                            <li>
+                                <strong>${entry.program}</strong>: ${count} waiting
+                                <div class="meta">${names}</div>
+                            </li>
+                        `;
+                    })
+                    .join('');
+            }
+        }
+
+        if (trainingNeedsNote) {
+            const needs = Array.isArray(trainingReport.assessed_needs) ? trainingReport.assessed_needs : [];
+            const flagged = needs
+                .filter(entry => (entry.under_target || 0) > 0)
+                .sort((a, b) => (b.under_target || 0) - (a.under_target || 0));
+            if (!flagged.length) {
+                trainingNeedsNote.textContent = 'No programs flagged.';
+                trainingNeedsNote.classList.add('muted');
+            } else {
+                const summary = flagged
+                    .slice(0, 3)
+                    .map(entry => {
+                        const avg = typeof entry.avg_level === 'number'
+                            ? entry.avg_level.toFixed(1)
+                            : '—';
+                        const waiting = entry.under_target || 0;
+                        return `${entry.program}: avg ${avg} • ${waiting} behind`;
+                    })
+                    .join(' | ');
+                trainingNeedsNote.textContent = summary;
+                trainingNeedsNote.classList.remove('muted');
             }
         }
 

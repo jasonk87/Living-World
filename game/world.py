@@ -14,6 +14,7 @@ from .data import (
     STRUCTURE_BLUEPRINTS,
     MARKET_PRICES,
     BLUEPRINTS,
+    JOB_TASK_DEFINITIONS,
     CITIZEN_NAME_POOL,
     CITIZEN_PERSONALITY_POOL,
     CITIZEN_TRAIT_POOL,
@@ -83,6 +84,17 @@ class World:
         self.pending_crimes: List[Dict[str, Any]] = []
         self.active_crimes: Dict[str, Dict[str, Any]] = {}
         self._crime_incident_counter: int = 0
+        self.legal_cases: Dict[str, Dict[str, Any]] = {}
+        self.trial_queue: List[str] = []
+        self.trial_history: List[Dict[str, Any]] = []
+        self.medical_cases: Dict[str, Dict[str, Any]] = {}
+        self.medical_triage_queue: List[str] = []
+        self.medical_history: List[Dict[str, Any]] = []
+        self.clinic_supply_requests: List[Dict[str, Any]] = []
+        self.latest_healthcare_report: Dict[str, Any] = {}
+        self._medical_case_counter: int = 0
+        courthouse_y = max(0, self.market_location[1] - 1)
+        self.courthouse_location: Tuple[int, int] = (self.market_location[0], courthouse_y)
         self.today_surplus_sales: List[Dict[str, Any]] = []
         self._residential_assignments: Dict[str, Tuple[int, int]] = {}
         self.last_housing_evaluation_day: Optional[int] = None
@@ -114,6 +126,25 @@ class World:
         self.community_spirit: float = getattr(config, "CULTURAL_SPIRIT_BASELINE", 0.4)
         self.cultural_history: List[Dict[str, Any]] = []
         self._last_cultural_update_day: Optional[int] = None
+        self.training_program_definitions: Dict[str, Dict[str, Any]] = deepcopy(
+            getattr(config, "TRAINING_PROGRAM_DEFINITIONS", {})
+        )
+        self.training_waitlists: Dict[str, List[str]] = {
+            key: [] for key in self.training_program_definitions
+        }
+        self.active_training_sessions: List[Dict[str, Any]] = []
+        self.training_history: List[Dict[str, Any]] = []
+        self.latest_training_report: Dict[str, Any] = {}
+        self._last_training_update_day: Optional[int] = None
+        self.work_shift_definitions: Dict[str, Dict[str, Any]] = deepcopy(
+            getattr(config, "WORK_SHIFT_DEFINITIONS", {})
+        )
+        self.work_shift_backlog: Dict[str, float] = {
+            key: 0.0 for key in self.work_shift_definitions
+        }
+        self.latest_workforce_report: Dict[str, Any] = {}
+        self._last_workforce_update_day: Optional[int] = None
+        self.work_logistics_history: List[Dict[str, Any]] = []
 
     def update_rumors_daily(self):
         """Decays strength of all rumors and removes very weak ones."""
@@ -966,6 +997,7 @@ class World:
         caught: bool,
         notes: Optional[str] = None,
         requeue: bool = False,
+        evidence_strength: Optional[float] = None,
     ) -> Optional[Dict[str, Any]]:
         crime = self.get_crime_by_id(crime_id)
         if not crime:
@@ -979,6 +1011,8 @@ class World:
                 crime["next_review_day"] = self.game_time.current_day + 1
             if notes:
                 crime["description"] = f"{crime.get('description', 'Disturbance')} (lead cold: {notes})"
+            if evidence_strength is not None:
+                crime["evidence_strength"] = evidence_strength
             self._record_crime_history(crime)
             return crime
 
@@ -987,6 +1021,8 @@ class World:
         crime["resolved_by"] = responder_name
         crime["result"] = result
         crime["caught"] = caught
+        if evidence_strength is not None:
+            crime["evidence_strength"] = evidence_strength
         if notes:
             crime["resolution_notes"] = notes
             crime["description"] = f"{crime.get('description', 'Disturbance resolved')} ({notes})"
@@ -997,7 +1033,738 @@ class World:
         if crime_id in self.active_crimes:
             del self.active_crimes[crime_id]
         self._record_crime_history(crime)
+
+        if caught and crime.get("suspect"):
+            baseline_strength = evidence_strength if evidence_strength is not None else 0.5
+            self.schedule_trial_for_crime(crime, responder_name, baseline_strength)
         return crime
+
+    def get_case_by_id(self, case_id: str) -> Optional[Dict[str, Any]]:
+        return self.legal_cases.get(case_id)
+
+    def schedule_trial_for_crime(
+        self,
+        crime: Dict[str, Any],
+        prosecutor_name: str,
+        evidence_strength: float,
+    ) -> Optional[Dict[str, Any]]:
+        suspect = crime.get("suspect")
+        if not suspect:
+            return None
+
+        case_id = crime.get("trial_case_id")
+        if case_id:
+            existing_case = self.legal_cases.get(case_id)
+            if existing_case and existing_case.get("status") not in {"concluded", "cancelled"}:
+                existing_case["evidence_strength"] = max(
+                    existing_case.get("evidence_strength", 0.0), evidence_strength
+                )
+                crime["evidence_strength"] = existing_case["evidence_strength"]
+                return existing_case
+
+        case_id = f"{crime.get('id', self._next_crime_id())}_trial"
+        if case_id in self.legal_cases and self.legal_cases[case_id].get("status") not in {"concluded", "cancelled"}:
+            return self.legal_cases[case_id]
+
+        current_day = self.game_time.current_day if self.game_time else 0
+        base_delay = getattr(config, "TRIAL_SCHEDULING_DELAY", 2)
+        variance = getattr(config, "TRIAL_SCHEDULING_VARIANCE", 1)
+        scheduled_day = current_day + base_delay + random.randint(0, max(0, variance))
+        if scheduled_day <= current_day:
+            scheduled_day = current_day + 1
+
+        presiding = self._select_presiding_officer()
+        severity = crime.get("amount") or 1
+        try:
+            severity_value = int(severity)
+        except (TypeError, ValueError):
+            severity_value = 1
+        severity_value = max(1, min(5, severity_value))
+
+        case = {
+            "case_id": case_id,
+            "crime_id": crime.get("id"),
+            "defendant": suspect,
+            "charge": crime.get("type", "crime"),
+            "prosecutor": prosecutor_name,
+            "presiding_officer": presiding,
+            "status": "scheduled",
+            "scheduled_day": scheduled_day,
+            "evidence_strength": max(0.0, min(1.0, evidence_strength)),
+            "preparedness": 0.0,
+            "crime_summary": crime.get("description") or crime.get("summary"),
+            "severity": severity_value,
+            "preparation_notes": [],
+        }
+
+        self.legal_cases[case_id] = case
+        crime["trial_case_id"] = case_id
+        self.trial_queue.append(case_id)
+        self.trial_queue = sorted(
+            {cid for cid in self.trial_queue if cid in self.legal_cases},
+            key=lambda cid: self.legal_cases[cid].get("scheduled_day", float("inf")),
+        )
+        self.add_event_log_message(
+            f"Trial scheduled: {suspect} will face charges of {case['charge']} on Day {scheduled_day}."
+        )
+
+        prosecutor = self.get_character_by_name(prosecutor_name)
+        if prosecutor:
+            prosecutor.add_memory(
+                f"Scheduled trial {case_id} for {suspect} on Day {scheduled_day}."
+            )
+        defendant = self.get_character_by_name(suspect)
+        if defendant:
+            defendant.add_memory(
+                f"Summoned to stand trial ({case['charge']}) on Day {scheduled_day}."
+            )
+            defendant.update_mood_score(-6, "Awaiting trial")
+        if presiding:
+            presiding_char = self.get_character_by_name(presiding)
+            if presiding_char:
+                presiding_char.add_memory(
+                    f"Assigned to preside over trial {case_id} on Day {scheduled_day}."
+                )
+        return case
+
+    def progress_case_preparation(
+        self,
+        case_id: str,
+        effort: float,
+        *,
+        contributor: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        case = self.legal_cases.get(case_id)
+        if not case:
+            return None
+        if case.get("status") in {"concluded", "cancelled"}:
+            return case
+
+        case.setdefault("preparedness", 0.0)
+        case["preparedness"] = min(1.0, case.get("preparedness", 0.0) + max(0.0, effort))
+        case.setdefault("evidence_strength", 0.5)
+        case["evidence_strength"] = min(1.0, case["evidence_strength"] + max(0.0, effort) * 0.1)
+
+        if contributor:
+            day = self.game_time.current_day if self.game_time else None
+            last_day = case.get("last_prepared_day")
+            if day is None or day != last_day:
+                note = f"{contributor} reviewed evidence on Day {day if day is not None else '?'}"
+                case["preparation_notes"].append(note)
+                case["preparation_notes"] = case["preparation_notes"][-10:]
+                case["last_prepared_day"] = day
+
+        if case.get("preparedness", 0.0) >= 0.95:
+            if case.get("status") != "ready":
+                case["status"] = "ready"
+                self.add_event_log_message(
+                    f"Case {case_id} is fully prepared for trial."
+                )
+        else:
+            if case.get("status") in {"scheduled", "ready"}:
+                case["status"] = "preparing"
+
+        return case
+
+    def get_case_to_prepare(self, prosecutor_name: str) -> Optional[Dict[str, Any]]:
+        if not prosecutor_name:
+            return None
+        today = self.game_time.current_day if self.game_time else 0
+        prep_window = getattr(config, "TRIAL_PREPARATION_WINDOW", 2)
+        candidates: List[Tuple[int, Dict[str, Any]]] = []
+        for case in self.legal_cases.values():
+            if case.get("prosecutor") != prosecutor_name:
+                continue
+            if case.get("status") in {"concluded", "cancelled", "in_session"}:
+                continue
+            scheduled_day = case.get("scheduled_day")
+            if scheduled_day is None:
+                continue
+            days_until = scheduled_day - today
+            if case.get("preparedness", 0.0) >= 0.95 and days_until > 0:
+                continue
+            if days_until <= prep_window:
+                candidates.append((max(days_until, 0), case))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda entry: (entry[0], entry[1].get("preparedness", 0.0)))
+        return candidates[0][1]
+
+    def get_case_in_session_for(self, participant_name: str) -> Optional[Dict[str, Any]]:
+        if not participant_name:
+            return None
+        for case in self.legal_cases.values():
+            if case.get("status") != "in_session":
+                continue
+            if participant_name in {
+                case.get("prosecutor"),
+                case.get("defendant"),
+                case.get("presiding_officer"),
+            }:
+                return case
+        return None
+
+    def process_legal_system_daily(self) -> None:
+        if not self.legal_cases:
+            return
+        today = self.game_time.current_day if self.game_time else 0
+        prep_window = getattr(config, "TRIAL_PREPARATION_WINDOW", 2)
+        for case_id in list(self.trial_queue):
+            case = self.legal_cases.get(case_id)
+            if not case:
+                self.trial_queue.remove(case_id)
+                continue
+            status = case.get("status")
+            if status in {"concluded", "cancelled"}:
+                self.trial_queue.remove(case_id)
+                continue
+            scheduled_day = case.get("scheduled_day")
+            if scheduled_day is None:
+                continue
+            if status == "scheduled" and scheduled_day - today <= prep_window:
+                case["status"] = "preparing"
+                self.add_event_log_message(
+                    f"Case {case_id} enters preparation ahead of its trial."
+                )
+            if today >= scheduled_day:
+                case["status"] = "in_session"
+                self.add_event_log_message(
+                    f"Trial begins for case {case_id}: {case.get('defendant')} faces {case.get('charge', 'charges')}.")
+                self._summon_trial_attendees(case)
+                outcome = self._conduct_trial(case)
+                self.trial_history.append(outcome)
+                if case_id in self.trial_queue:
+                    self.trial_queue.remove(case_id)
+
+    def _conduct_trial(self, case: Dict[str, Any]) -> Dict[str, Any]:
+        evidence = case.get("evidence_strength", 0.5)
+        preparedness = case.get("preparedness", 0.0)
+        base_probability = 0.35 + 0.4 * evidence + 0.1 * preparedness
+        defendant = self.get_character_by_name(case.get("defendant", ""))
+        if defendant:
+            rep_modifier = max(-0.1, min(0.1, -defendant.reputation_score / 200.0))
+            base_probability += rep_modifier
+        base_probability = max(0.05, min(0.95, base_probability))
+        verdict = "guilty" if random.random() < base_probability else "not_guilty"
+
+        case["verdict"] = verdict
+        case["verdict_day"] = self.game_time.current_day if self.game_time else None
+        case["status"] = "concluded"
+
+        prosecutor = self.get_character_by_name(case.get("prosecutor", ""))
+        presiding = self.get_character_by_name(case.get("presiding_officer", ""))
+        severity = case.get("severity", 1)
+
+        crime_record = self.get_crime_by_id(case.get("crime_id", ""))
+        if crime_record:
+            crime_record["verdict"] = verdict
+
+        if verdict == "guilty":
+            fine_amount = max(3, int(round(4 * severity + evidence * 6)))
+            fine_paid = 0
+            if defendant:
+                fine_paid = min(defendant.money, fine_amount)
+                if fine_paid:
+                    defendant.money -= fine_paid
+                    self.treasury_coins += fine_paid
+                defendant.update_mood_score(-15, f"Found guilty of {case.get('charge', 'a crime')}")
+                defendant.update_reputation(-8, f"Convicted of {case.get('charge', 'a crime')}", self)
+                defendant.add_memory(
+                    f"Found guilty in trial {case.get('case_id')} and fined {fine_amount} coins."
+                )
+                esteem = defendant.needs.get("Esteem", config.NEED_ESTEEM_DEFAULT)
+                defendant.needs["Esteem"] = max(config.NEED_SCORE_MIN, esteem - 10)
+            if prosecutor:
+                prosecutor.update_mood_score(6, "Secured conviction at trial")
+                prosecutor.add_memory(
+                    f"Verdict: {case.get('defendant')} found guilty in case {case.get('case_id')}."
+                )
+            if presiding:
+                presiding.add_memory(
+                    f"Presided over guilty verdict for case {case.get('case_id')}."
+                )
+            case["sentence"] = {"type": "fine", "amount": fine_amount, "paid": fine_paid}
+            self.add_event_log_message(
+                f"Verdict reached: {case.get('defendant')} found guilty of {case.get('charge', 'charges')} (fine {fine_amount} coins)."
+            )
+        else:
+            if defendant:
+                defendant.update_mood_score(8, "Acquitted at trial")
+                defendant.update_reputation(3, f"Cleared of {case.get('charge', 'charges')}", self)
+                defendant.add_memory(
+                    f"Acquitted in trial {case.get('case_id')} and cleared of charges."
+                )
+                belonging = defendant.needs.get("Belonging", config.NEED_BELONGING_DEFAULT)
+                defendant.needs["Belonging"] = min(config.NEED_SCORE_MAX, belonging + 5)
+            if prosecutor:
+                prosecutor.update_mood_score(-4, "Case dismissed at trial")
+                prosecutor.add_memory(
+                    f"Verdict: {case.get('defendant')} acquitted in case {case.get('case_id')}."
+                )
+            if presiding:
+                presiding.add_memory(
+                    f"Presided over acquittal for case {case.get('case_id')}."
+                )
+            case["sentence"] = {"type": "acquittal"}
+            self.add_event_log_message(
+                f"Verdict reached: {case.get('defendant')} acquitted of {case.get('charge', 'charges')}."
+            )
+
+        return case
+
+    def _summon_trial_attendees(self, case: Dict[str, Any]) -> None:
+        for role_key in ("prosecutor", "defendant", "presiding_officer"):
+            name = case.get(role_key)
+            if not name:
+                continue
+            character = self.get_character_by_name(name)
+            if not character:
+                continue
+            character.current_goal = Goal(
+                GoalType.ATTEND_TRIAL,
+                assignee_id=character.name,
+                originator_id="CourtSummons",
+                parameters={
+                    "case_id": case.get("case_id"),
+                    "location": self.courthouse_location,
+                },
+            )
+            character.add_memory(
+                f"Summoned to attend trial {case.get('case_id')} at the courthouse."
+            )
+
+    def _select_presiding_officer(self) -> Optional[str]:
+        mayor = next((char for char in self.characters if char.job == "Mayor"), None)
+        if mayor:
+            return mayor.name
+        best_candidate: Optional['Character'] = None
+        best_score = -1
+        for char in self.characters:
+            leadership = char.skills.get("Leadership", {}).get("level", 0)
+            if leadership > best_score:
+                best_score = leadership
+                best_candidate = char
+        return best_candidate.name if best_candidate else None
+
+    def get_public_trial_snapshot(self) -> List[Dict[str, Any]]:
+        if not self.legal_cases:
+            return []
+        ordered_cases = sorted(
+            self.legal_cases.values(),
+            key=lambda case: (
+                case.get("status") not in {"scheduled", "preparing", "ready"},
+                case.get("scheduled_day", float("inf")),
+            ),
+        )
+        snapshot: List[Dict[str, Any]] = []
+        for case in ordered_cases[:10]:
+            snapshot.append(
+                {
+                    "case_id": case.get("case_id"),
+                    "defendant": case.get("defendant"),
+                    "charge": case.get("charge"),
+                    "status": case.get("status"),
+                    "scheduled_day": case.get("scheduled_day"),
+                    "verdict": case.get("verdict"),
+                }
+            )
+        return snapshot
+
+    # --- Healthcare & Medical Coordination -------------------------------------------------
+
+    def _next_medical_case_id(self) -> str:
+        self._medical_case_counter += 1
+        return f"med_{self._medical_case_counter}"
+
+    def _prioritize_medical_queue(self) -> None:
+        if not self.medical_cases:
+            self.medical_triage_queue = []
+            return
+        unique_ids = []
+        seen: Set[str] = set()
+        for cid in self.medical_triage_queue:
+            if cid in seen:
+                continue
+            if cid not in self.medical_cases:
+                continue
+            if self.medical_cases[cid].get("status") == "resolved":
+                continue
+            seen.add(cid)
+            unique_ids.append(cid)
+        unique_ids.sort(
+            key=lambda case_id: (
+                -self.medical_cases[case_id].get("severity", 0),
+                self.medical_cases[case_id].get("reported_day", float("inf")),
+                self.medical_cases[case_id].get("last_report_day", float("inf")),
+            )
+        )
+        self.medical_triage_queue = unique_ids
+
+    def register_medical_case(
+        self,
+        patient_name: str,
+        condition: str,
+        severity: float,
+        *,
+        reporter: Optional[str] = None,
+        cause: Optional[str] = None,
+        location: Optional[Tuple[int, int]] = None,
+    ) -> Tuple[Optional[Dict[str, Any]], bool]:
+        patient = self.get_character_by_name(patient_name)
+        if not patient:
+            return None, False
+
+        severity = max(0.0, float(severity))
+        existing_id: Optional[str] = None
+        for cid, case in self.medical_cases.items():
+            if (
+                case.get("patient") == patient_name
+                and case.get("condition") == condition
+                and case.get("status") != "resolved"
+            ):
+                existing_id = cid
+                break
+
+        day = self.game_time.current_day if self.game_time else 0
+        note = {
+            "day": day,
+            "reporter": reporter or patient_name,
+            "summary": cause or "Condition update",
+        }
+
+        if existing_id:
+            case = self.medical_cases[existing_id]
+            previous_severity = case.get("severity", 0.0)
+            if severity > previous_severity:
+                case["severity"] = severity
+                case.setdefault("alerts", []).append(
+                    {
+                        "day": day,
+                        "message": f"Severity increased to {severity:.1f}",
+                    }
+                )
+                self.add_event_log_message(
+                    f"Medical update: {patient_name}'s {condition} escalated to severity {severity:.1f}."
+                )
+            case.setdefault("reports", []).append(note)
+            case["last_report_day"] = day
+            if case.get("status") == "waiting" and existing_id not in self.medical_triage_queue:
+                self.medical_triage_queue.append(existing_id)
+            self._prioritize_medical_queue()
+            return case, False
+
+        case_id = self._next_medical_case_id()
+        case = {
+            "case_id": case_id,
+            "patient": patient_name,
+            "condition": condition,
+            "severity": severity,
+            "reported_day": day,
+            "last_report_day": day,
+            "status": "waiting",
+            "assigned_to": None,
+            "location": location or (patient.x, patient.y),
+            "reports": [note],
+            "alerts": [],
+        }
+        self.medical_cases[case_id] = case
+        self.medical_triage_queue.append(case_id)
+        self._prioritize_medical_queue()
+
+        patient.add_memory(
+            f"Medical case opened for {condition} (severity {severity:.1f})."
+        )
+        self.add_event_log_message(
+            f"Medical case {case_id} opened for {patient_name} ({condition}, severity {severity:.1f})."
+        )
+        return case, True
+
+    def get_medical_case_by_id(self, case_id: str) -> Optional[Dict[str, Any]]:
+        return self.medical_cases.get(case_id)
+
+    def claim_medical_case(self, medic_name: str) -> Optional[Dict[str, Any]]:
+        if not self.medical_cases:
+            return None
+        for case_id in list(self.medical_triage_queue):
+            case = self.medical_cases.get(case_id)
+            if not case:
+                self.medical_triage_queue.remove(case_id)
+                continue
+            if case.get("status") == "resolved":
+                self.medical_triage_queue.remove(case_id)
+                continue
+            if case.get("assigned_to") and case.get("assigned_to") != medic_name:
+                continue
+            patient = self.get_character_by_name(case.get("patient", ""))
+            if not patient:
+                self.resolve_medical_case(
+                    case_id,
+                    "cancelled",
+                    notes=f"Patient {case.get('patient')} no longer in settlement.",
+                )
+                self.medical_triage_queue.remove(case_id)
+                continue
+            case["status"] = "assigned"
+            case["assigned_to"] = medic_name
+            case["last_assignment_day"] = self.game_time.current_day if self.game_time else 0
+            case.setdefault("reports", []).append(
+                {
+                    "day": self.game_time.current_day if self.game_time else 0,
+                    "reporter": medic_name,
+                    "summary": "Case claimed for treatment",
+                }
+            )
+            self.medical_triage_queue.remove(case_id)
+            return case
+        return None
+
+    def record_medical_treatment(
+        self,
+        case_id: str,
+        caregiver: str,
+        severity_after: float,
+        *,
+        item_used: Optional[str] = None,
+        notes: Optional[str] = None,
+        success: bool = False,
+    ) -> bool:
+        case = self.medical_cases.get(case_id)
+        if not case:
+            return False
+
+        day = self.game_time.current_day if self.game_time else 0
+        case["severity"] = max(0.0, severity_after)
+        case["last_treated_day"] = day
+        case["assigned_to"] = None
+        summary = notes or ("Treatment succeeded" if success else "Treatment attempted")
+        if item_used:
+            summary = f"{summary} using {item_used}"
+        case.setdefault("reports", []).append(
+            {
+                "day": day,
+                "reporter": caregiver,
+                "summary": summary,
+            }
+        )
+        if success:
+            case.setdefault("alerts", []).append(
+                {
+                    "day": day,
+                    "message": f"Improvement noted by {caregiver}",
+                }
+            )
+
+        if case["severity"] <= 0:
+            self.resolve_medical_case(
+                case_id,
+                "recovered",
+                notes=f"{caregiver} resolved the case.",
+            )
+            return True
+
+        case["status"] = "waiting"
+        if case_id not in self.medical_triage_queue:
+            self.medical_triage_queue.append(case_id)
+        self._prioritize_medical_queue()
+        return False
+
+    def resolve_medical_case(
+        self,
+        case_id: str,
+        outcome: str,
+        *,
+        notes: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        case = self.medical_cases.get(case_id)
+        if not case:
+            return None
+        day = self.game_time.current_day if self.game_time else 0
+        case["status"] = "resolved"
+        case["resolved_day"] = day
+        case["outcome"] = outcome
+        if notes:
+            case.setdefault("reports", []).append(
+                {
+                    "day": day,
+                    "reporter": "System",
+                    "summary": notes,
+                }
+            )
+        history_entry = deepcopy(case)
+        self.medical_history.append(history_entry)
+        self.medical_cases.pop(case_id, None)
+        if case_id in self.medical_triage_queue:
+            self.medical_triage_queue.remove(case_id)
+        self.add_event_log_message(
+            f"Medical case {case_id} closed ({outcome})."
+        )
+        return history_entry
+
+    def _get_open_supply_request(self, resource: str) -> Optional[Dict[str, Any]]:
+        for request in self.clinic_supply_requests:
+            if request.get("resource") == resource and request.get("status") == "open":
+                return request
+        return None
+
+    def get_clinic_supply_requests(self) -> List[Dict[str, Any]]:
+        return [deepcopy(req) for req in self.clinic_supply_requests]
+
+    def get_medical_queue_snapshot(self) -> List[Dict[str, Any]]:
+        if not self.medical_cases:
+            return []
+        active_cases = [
+            case
+            for case in self.medical_cases.values()
+            if case.get("status") != "resolved"
+        ]
+        active_cases.sort(
+            key=lambda case: (
+                -case.get("severity", 0),
+                case.get("reported_day", float("inf")),
+                case.get("patient", ""),
+            )
+        )
+        snapshot: List[Dict[str, Any]] = []
+        for case in active_cases[:15]:
+            snapshot.append(
+                {
+                    "case_id": case.get("case_id"),
+                    "patient": case.get("patient"),
+                    "condition": case.get("condition"),
+                    "severity": case.get("severity"),
+                    "status": case.get("status"),
+                    "assigned_to": case.get("assigned_to"),
+                    "reported_day": case.get("reported_day"),
+                }
+            )
+        return snapshot
+
+    def process_healthcare_daily(self) -> None:
+        if not self.game_time:
+            return
+
+        day = self.game_time.current_day
+        new_cases: List[str] = []
+        worsened_cases: List[str] = []
+
+        for char in self.characters:
+            if char.is_sick and char.sickness_severity > 0:
+                case, created = self.register_medical_case(
+                    char.name,
+                    "sickness",
+                    char.sickness_severity,
+                    reporter=char.name,
+                    cause="Daily health check-in",
+                    location=(char.x, char.y),
+                )
+                if created and case:
+                    new_cases.append(case.get("case_id"))
+            if char.is_injured and char.injury_severity > 0:
+                case, created = self.register_medical_case(
+                    char.name,
+                    "injury",
+                    char.injury_severity,
+                    reporter=char.name,
+                    cause="Daily injury assessment",
+                    location=(char.x, char.y),
+                )
+                if created and case:
+                    new_cases.append(case.get("case_id"))
+
+        for case_id, case in list(self.medical_cases.items()):
+            if case.get("status") == "resolved":
+                continue
+            last_treatment_day = case.get("last_treated_day", case.get("reported_day", day))
+            waiting_days = max(0, day - last_treatment_day)
+            if waiting_days > 0:
+                severity_before = case.get("severity", 0.0)
+                escalation_chance = 0.2 + 0.05 * waiting_days + 0.03 * severity_before
+                if random.random() < min(0.9, escalation_chance):
+                    case["severity"] = min(10.0, severity_before + random.choice([0.5, 1.0]))
+                    patient = self.get_character_by_name(case.get("patient", ""))
+                    if patient:
+                        if case.get("condition") == "injury":
+                            patient.is_injured = True
+                            patient.injury_severity = max(patient.injury_severity, case["severity"])
+                        else:
+                            patient.is_sick = True
+                            patient.sickness_severity = max(patient.sickness_severity, case["severity"])
+                        patient.update_mood_score(
+                            -3,
+                            "Health worsened while awaiting treatment",
+                        )
+                        patient.add_memory(
+                            f"Condition worsened to severity {case['severity']:.1f} while waiting for care."
+                        )
+                    case.setdefault("alerts", []).append(
+                        {
+                            "day": day,
+                            "message": "Condition worsened while unattended.",
+                        }
+                    )
+                    case.setdefault("reports", []).append(
+                        {
+                            "day": day,
+                            "reporter": "System",
+                            "summary": "Severity escalated due to treatment delay",
+                        }
+                    )
+                    self.add_event_log_message(
+                        f"Medical case {case_id} for {case.get('patient')} worsened to severity {case['severity']:.1f}."
+                    )
+                    worsened_cases.append(case_id)
+            if case.get("status") == "waiting" and case_id not in self.medical_triage_queue:
+                self.medical_triage_queue.append(case_id)
+
+        self._prioritize_medical_queue()
+
+        supply_alerts: List[Dict[str, Any]] = []
+        if self.ledger:
+            thresholds = getattr(
+                config,
+                "CLINIC_SUPPLY_THRESHOLDS",
+                {"Bandages": 5, "Herbs": 8},
+            )
+            for resource, threshold in thresholds.items():
+                quantity = self.ledger.get_total_resource_count(resource)
+                open_request = self._get_open_supply_request(resource)
+                if quantity < threshold:
+                    if not open_request:
+                        request = {
+                            "resource": resource,
+                            "threshold": threshold,
+                            "current": quantity,
+                            "status": "open",
+                            "requested_day": day,
+                        }
+                        self.clinic_supply_requests.append(request)
+                        self.add_event_log_message(
+                            f"Clinic flagged low {resource} levels ({quantity}/{threshold})."
+                        )
+                    else:
+                        open_request["current"] = quantity
+                    supply_alerts.append(
+                        {
+                            "resource": resource,
+                            "current": quantity,
+                            "threshold": threshold,
+                        }
+                    )
+                elif open_request:
+                    open_request["status"] = "fulfilled"
+                    open_request["fulfilled_day"] = day
+                    open_request["current"] = quantity
+                    self.add_event_log_message(
+                        f"Clinic restocked {resource} (now {quantity})."
+                    )
+
+        self.latest_healthcare_report = {
+            "day": day,
+            "new_cases": new_cases,
+            "worsened_cases": worsened_cases,
+            "active_cases": len(self.medical_cases),
+            "supply_alerts": supply_alerts,
+        }
 
     # Event related methods (can be kept minimal if EventManager is not fully used)
     def _event_attr(self, event_instance: Any, key: str, default: Any = None) -> Any:
@@ -1605,6 +2372,70 @@ class World:
 
     def withdraw_resource(self, resource_name: str, quantity: int) -> int:
         return self._withdraw_from_stockpiles(resource_name, quantity)
+
+    def _deposit_work_output(
+        self,
+        resource_name: str,
+        quantity: int,
+        preferred_stockpiles: Optional[Iterable[str]] = None,
+    ) -> Dict[str, Any]:
+        result: Dict[str, Any] = {
+            "delivered": 0,
+            "overflow": max(0, quantity),
+            "routes": [],
+        }
+        if quantity <= 0:
+            return result
+
+        stockpiles = list(self.get_stockpiles_for_resource(resource_name))
+        if not stockpiles:
+            return result
+
+        ordered: List[Stockpile] = []
+        preferred_lookup: Set[str] = set(preferred_stockpiles or [])
+        if preferred_lookup:
+            for name in preferred_stockpiles or []:
+                stockpile = self.get_stockpile_by_name(name)
+                if stockpile and stockpile in stockpiles and stockpile not in ordered:
+                    ordered.append(stockpile)
+        for stockpile in stockpiles:
+            if stockpile not in ordered:
+                ordered.append(stockpile)
+
+        remaining = quantity
+        routes: List[Dict[str, Any]] = []
+        for stockpile in ordered:
+            if remaining <= 0:
+                break
+            success, added = stockpile.add_item(resource_name, remaining)
+            if not success or added <= 0:
+                continue
+            routes.append({"stockpile": stockpile.name, "quantity": added})
+            remaining -= added
+            if self.game_time:
+                self.ledger.update_stockpile_record(
+                    stockpile.name,
+                    stockpile.inventory,
+                    self.game_time.current_day,
+                )
+
+        delivered = quantity - remaining
+        result["delivered"] = delivered
+        result["overflow"] = max(0, remaining)
+        result["routes"] = routes
+
+        if delivered > 0:
+            for route in routes:
+                history_entry = {
+                    "day": self.game_time.current_day if self.game_time else -1,
+                    "resource": resource_name,
+                    "stockpile": route["stockpile"],
+                    "quantity": route["quantity"],
+                }
+                self.work_logistics_history.append(history_entry)
+            self.work_logistics_history = self.work_logistics_history[-25:]
+
+        return result
 
     def _consume_resource_for_character(self, character: 'Character', resource_name: str, quantity: int) -> int:
         if quantity <= 0:
@@ -2347,6 +3178,619 @@ class World:
             )
         return paid, owed
 
+    # --- Training & Apprenticeships ---
+
+    def _assess_training_needs(self) -> Dict[str, Dict[str, Any]]:
+        metrics: Dict[str, Dict[str, Any]] = {}
+        if not self.training_program_definitions:
+            return metrics
+
+        for program_key, definition in self.training_program_definitions.items():
+            skill_name = definition.get("skill")
+            if not skill_name:
+                continue
+            focus_jobs = definition.get("focus_jobs", [])
+            relevant_chars = [
+                char
+                for char in self.characters
+                if not focus_jobs or char.job in focus_jobs
+            ]
+            levels: List[int] = []
+            under_target: List[str] = []
+            target_level = definition.get("target_level", 1)
+            for char in relevant_chars:
+                skill_data = char.skills.get(skill_name)
+                level = skill_data.get("level", 0) if skill_data else 0
+                levels.append(level)
+                if level < target_level:
+                    under_target.append(char.name)
+            avg_level = sum(levels) / len(levels) if levels else 0.0
+            metrics[program_key] = {
+                "definition": definition,
+                "skill": skill_name,
+                "focus_jobs": focus_jobs,
+                "avg_level": avg_level,
+                "under_target": under_target,
+                "total_characters": len(relevant_chars),
+            }
+        return metrics
+
+    def _refresh_training_waitlists(
+        self, metrics: Dict[str, Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        snapshot: List[Dict[str, Any]] = []
+        active_names = {
+            name
+            for session in self.active_training_sessions
+            for name in session.get("trainees", [])
+        }
+        valid_programs = set(metrics.keys())
+        for stale_key in set(self.training_waitlists.keys()) - valid_programs:
+            self.training_waitlists.pop(stale_key, None)
+
+        for program_key, data in metrics.items():
+            definition = data["definition"]
+            skill_name = data["skill"]
+            target_level = definition.get("target_level", 1)
+            min_level = definition.get("min_level", 0)
+            focus_jobs = data.get("focus_jobs", [])
+            waitlist = self.training_waitlists.setdefault(program_key, [])
+            filtered_queue: List[str] = []
+            for name in waitlist:
+                char = self.get_character_by_name(name)
+                if not char:
+                    continue
+                if focus_jobs and char.job not in focus_jobs:
+                    continue
+                skill_level = char.skills.get(skill_name, {}).get("level", 0)
+                if skill_level >= target_level:
+                    continue
+                filtered_queue.append(name)
+
+            new_entries: List[str] = []
+            for name in data.get("under_target", []):
+                if name in filtered_queue or name in active_names:
+                    continue
+                char = self.get_character_by_name(name)
+                if not char:
+                    continue
+                skill_level = char.skills.get(skill_name, {}).get("level", 0)
+                if skill_level < target_level and skill_level >= min_level:
+                    filtered_queue.append(name)
+                    new_entries.append(name)
+
+            self.training_waitlists[program_key] = filtered_queue
+            if new_entries:
+                cohort = ", ".join(new_entries)
+                title = definition.get("title", program_key)
+                self.add_event_log_message(
+                    f"Training queue: {title} adds {cohort}."
+                )
+
+            snapshot.append(
+                {
+                    "program": definition.get("title", program_key),
+                    "program_key": program_key,
+                    "skill": skill_name,
+                    "queued": list(filtered_queue),
+                    "count": len(filtered_queue),
+                }
+            )
+
+        return snapshot
+
+    def _select_training_instructor(
+        self, definition: Dict[str, Any], busy_instructors: Set[str]
+    ) -> Optional['Character']:
+        instructor_roles = definition.get("instructor_roles", [])
+        if not instructor_roles:
+            return None
+        skill_name = definition.get("skill")
+        best_candidate: Optional['Character'] = None
+        best_score = -1
+        for char in self.characters:
+            if char.name in busy_instructors:
+                continue
+            if char.job not in instructor_roles:
+                continue
+            skill_level = char.skills.get(skill_name, {}).get("level", 0)
+            if skill_level > best_score:
+                best_candidate = char
+                best_score = skill_level
+        return best_candidate
+
+    def _start_training_sessions(
+        self,
+        metrics: Dict[str, Dict[str, Any]],
+        current_day: int,
+    ) -> List[Dict[str, Any]]:
+        started: List[Dict[str, Any]] = []
+        busy_instructors: Set[str] = {
+            session.get("instructor", "")
+            for session in self.active_training_sessions
+        }
+
+        for program_key, data in metrics.items():
+            waitlist = self.training_waitlists.get(program_key, [])
+            if not waitlist:
+                continue
+            allow_parallel = data["definition"].get("parallel_sessions", False)
+            if not allow_parallel and any(
+                session.get("program_key") == program_key
+                for session in self.active_training_sessions
+            ):
+                continue
+
+            instructor = self._select_training_instructor(
+                data["definition"], busy_instructors
+            )
+            if not instructor:
+                continue
+
+            capacity = max(1, int(data["definition"].get("capacity", 1)))
+            trainees = waitlist[:capacity]
+            if not trainees:
+                continue
+            self.training_waitlists[program_key] = waitlist[capacity:]
+
+            session = {
+                "program_key": program_key,
+                "program_title": data["definition"].get("title", program_key),
+                "skill": data["skill"],
+                "instructor": instructor.name,
+                "trainees": list(trainees),
+                "original_trainees": list(trainees),
+                "start_day": current_day,
+                "duration": max(1, int(data["definition"].get("duration_days", 1))),
+                "daily_exp": float(data["definition"].get("daily_exp_gain", 1.0)),
+                "progress": 0,
+                "trainee_baselines": {},
+                "latest_results": {},
+            }
+
+            for trainee_name in trainees:
+                character = self.get_character_by_name(trainee_name)
+                if not character:
+                    continue
+                skill_data = character.skills.get(data["skill"], {})
+                session["trainee_baselines"][trainee_name] = {
+                    "level": skill_data.get("level", 0),
+                    "experience": skill_data.get("experience", 0.0),
+                }
+
+            self.active_training_sessions.append(session)
+            busy_instructors.add(instructor.name)
+            trainee_label = ", ".join(trainees)
+            self.add_event_log_message(
+                f"{instructor.name} opens {session['program_title']} for {trainee_label}."
+            )
+            started.append(
+                {
+                    "program": session["program_title"],
+                    "instructor": instructor.name,
+                    "trainees": list(trainees),
+                }
+            )
+
+        return started
+
+    def _advance_training_sessions(
+        self, current_day: int
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        if not self.active_training_sessions:
+            return [], []
+
+        daily_updates: List[Dict[str, Any]] = []
+        concluded_summaries: List[Dict[str, Any]] = []
+        sessions_to_remove: List[Dict[str, Any]] = []
+
+        for session in list(self.active_training_sessions):
+            day_results: List[Dict[str, Any]] = []
+            level_ups: List[Dict[str, Any]] = []
+            remaining_trainees: List[str] = []
+
+            for trainee_name in list(session.get("trainees", [])):
+                character = self.get_character_by_name(trainee_name)
+                if not character:
+                    day_results.append({"name": trainee_name, "status": "absent"})
+                    continue
+                result = character.participate_in_training(
+                    session["program_title"],
+                    session["skill"],
+                    session["daily_exp"],
+                    self,
+                )
+                session["latest_results"][trainee_name] = {
+                    "level": result["level_after"],
+                    "experience": result["experience_after"],
+                }
+                day_results.append(
+                    {
+                        "name": trainee_name,
+                        "level_before": result["level_before"],
+                        "level_after": result["level_after"],
+                        "experience_gain": session["daily_exp"],
+                    }
+                )
+                if result["level_after"] > result["level_before"]:
+                    level_ups.append(
+                        {
+                            "name": trainee_name,
+                            "new_level": result["level_after"],
+                        }
+                    )
+                    self.add_event_log_message(
+                        f"{trainee_name} advanced to {session['skill']} "
+                        f"{result['level_after']} via {session['program_title']}."
+                    )
+                remaining_trainees.append(trainee_name)
+
+            session["trainees"] = remaining_trainees
+            session["progress"] += 1
+            daily_updates.append(
+                {
+                    "program": session["program_title"],
+                    "day": current_day,
+                    "results": day_results,
+                    "level_ups": level_ups,
+                    "progress": session["progress"],
+                    "duration": session["duration"],
+                }
+            )
+
+            if not session["trainees"]:
+                self.add_event_log_message(
+                    f"{session['program_title']} paused—no trainees remaining."
+                )
+                summary = self._summarize_training_session(
+                    session, current_day, reason="empty"
+                )
+                concluded_summaries.append(summary)
+                sessions_to_remove.append(session)
+                continue
+
+            if session["progress"] >= session["duration"]:
+                summary = self._summarize_training_session(
+                    session, current_day, reason="completed"
+                )
+                concluded_summaries.append(summary)
+                sessions_to_remove.append(session)
+
+        for session in sessions_to_remove:
+            if session in self.active_training_sessions:
+                self.active_training_sessions.remove(session)
+
+        return daily_updates, concluded_summaries
+
+    def _summarize_training_session(
+        self, session: Dict[str, Any], end_day: int, reason: str
+    ) -> Dict[str, Any]:
+        summary = {
+            "program": session.get("program_title"),
+            "program_key": session.get("program_key"),
+            "skill": session.get("skill"),
+            "instructor": session.get("instructor"),
+            "trainees": list(session.get("original_trainees", [])),
+            "start_day": session.get("start_day"),
+            "end_day": end_day,
+            "reason": reason,
+            "outcomes": [],
+        }
+        for name in summary["trainees"]:
+            baseline = session.get("trainee_baselines", {}).get(name, {})
+            latest = session.get("latest_results", {}).get(name, baseline)
+            summary["outcomes"].append(
+                {
+                    "name": name,
+                    "level_before": baseline.get("level"),
+                    "level_after": latest.get("level"),
+                }
+            )
+
+        if reason == "completed":
+            self.add_event_log_message(
+                f"{summary['program']} concludes under {summary['instructor']}."
+            )
+        else:
+            self.add_event_log_message(
+                f"{summary['program']} closed without a full cohort."
+            )
+
+        self.training_history.append(summary)
+        self.training_history = self.training_history[-25:]
+        return summary
+
+    def process_training_daily(
+        self, economy_report: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        if not self.game_time:
+            return {}
+
+        current_day = self.game_time.current_day
+        if not self.training_program_definitions:
+            self.latest_training_report = {}
+            self._last_training_update_day = current_day
+            if economy_report is not None:
+                economy_report["training"] = {}
+            return {}
+
+        if (
+            self._last_training_update_day == current_day
+            and self.latest_training_report
+        ):
+            if economy_report is not None:
+                economy_report["training"] = self.latest_training_report
+            return self.latest_training_report
+
+        metrics = self._assess_training_needs()
+        waitlists = self._refresh_training_waitlists(metrics)
+        started_sessions = self._start_training_sessions(metrics, current_day)
+        session_updates, concluded_sessions = self._advance_training_sessions(
+            current_day
+        )
+
+        active_sessions = [
+            {
+                "program": session["program_title"],
+                "program_key": session["program_key"],
+                "skill": session["skill"],
+                "instructor": session["instructor"],
+                "trainees": list(session["trainees"]),
+                "progress": session["progress"],
+                "duration": session["duration"],
+                "start_day": session["start_day"],
+            }
+            for session in self.active_training_sessions
+        ]
+
+        assessed_needs = [
+            {
+                "program": data["definition"].get("title", key),
+                "program_key": key,
+                "avg_level": round(data.get("avg_level", 0.0), 2),
+                "under_target": len(data.get("under_target", [])),
+                "total_characters": data.get("total_characters", 0),
+            }
+            for key, data in metrics.items()
+        ]
+
+        report = {
+            "day": current_day,
+            "assessed_needs": assessed_needs,
+            "waitlists": [
+                {
+                    "program": entry.get("program"),
+                    "skill": entry.get("skill"),
+                    "queued": entry.get("queued", []),
+                    "count": entry.get("count", 0),
+                }
+                for entry in waitlists
+            ],
+            "started_sessions": started_sessions,
+            "active_sessions": active_sessions,
+            "session_updates": session_updates,
+            "concluded_sessions": concluded_sessions,
+            "recent_history": deepcopy(self.training_history[-6:]),
+        }
+
+        self.latest_training_report = report
+        self._last_training_update_day = current_day
+        if economy_report is not None:
+            economy_report["training"] = report
+        return report
+
+    def get_training_snapshot(self) -> Dict[str, Any]:
+        return deepcopy(self.latest_training_report)
+
+    def process_workforce_daily(
+        self, economy_report: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        if not self.game_time:
+            return {}
+
+        current_day = self.game_time.current_day
+        if not self.work_shift_definitions:
+            self.latest_workforce_report = {}
+            self._last_workforce_update_day = current_day
+            if economy_report is not None:
+                economy_report["workforce"] = {}
+            return {}
+
+        if (
+            self._last_workforce_update_day == current_day
+            and self.latest_workforce_report
+        ):
+            if economy_report is not None:
+                economy_report["workforce"] = self.latest_workforce_report
+            return self.latest_workforce_report
+
+        crews_report: List[Dict[str, Any]] = []
+        shipments: List[Dict[str, Any]] = []
+        alerts: List[str] = []
+        total_gathered = 0
+        total_delivered = 0
+        total_backlog = 0.0
+
+        for key, definition in self.work_shift_definitions.items():
+            workers = [
+                char
+                for char in self.characters
+                if char.job in definition.get("jobs", [])
+            ]
+            haulers = [
+                char
+                for char in self.characters
+                if char.job in definition.get("hauler_jobs", [])
+            ]
+
+            backlog_existing = self.work_shift_backlog.setdefault(key, 0.0)
+            resource = definition.get("resource")
+            task_name = definition.get("task")
+            skill_name = definition.get("skill") or (
+                JOB_TASK_DEFINITIONS.get(task_name, {}).get("skill_used")
+                if task_name
+                else None
+            )
+            shift_ticks = definition.get(
+                "shift_ticks", getattr(config, "DEFAULT_WORK_SHIFT_TICKS", 6)
+            )
+            base_output = definition.get("base_output_per_worker")
+            task_def = JOB_TASK_DEFINITIONS.get(task_name, {}) if task_name else {}
+            if base_output is None and task_def:
+                cycles = shift_ticks / max(1, task_def.get("base_time_per_yield", 1))
+                base_output = cycles * task_def.get("base_yield", 1)
+            if base_output is None:
+                base_output = max(1.0, float(shift_ticks))
+
+            worker_details: List[Dict[str, Any]] = []
+            sector_output = 0.0
+            directive_bonus = 1.0
+            if resource and resource in self.resource_collection_directives:
+                directive_bonus += 0.1
+            resource_multiplier = (
+                self.get_resource_yield_multiplier(resource)
+                if resource
+                else 1.0
+            )
+
+            for worker in workers:
+                skill_level = (
+                    worker.skills.get(skill_name, {}).get("level", 0)
+                    if skill_name
+                    else 0
+                )
+                efficiency_bonus = 1.0 + skill_level * definition.get(
+                    "skill_yield_bonus", 0.1
+                )
+                morale_bonus = 1.0
+                if worker.mood_score > config.MOOD_SCORE_NEUTRAL_START + 10:
+                    morale_bonus += 0.05
+                elif worker.mood_score < config.MOOD_SCORE_NEUTRAL_START - 10:
+                    morale_bonus -= 0.05
+
+                worker_output = (
+                    base_output * efficiency_bonus * directive_bonus * morale_bonus
+                )
+                worker_output *= resource_multiplier
+                sector_output += worker_output
+                worker_details.append(
+                    {
+                        "name": worker.name,
+                        "skill_level": skill_level,
+                        "estimated_output": round(worker_output, 1),
+                    }
+                )
+
+            gathered_units = int(sector_output)
+            total_gathered += gathered_units
+            pending_output = backlog_existing + sector_output
+
+            carry_capacity = len(workers) * definition.get(
+                "carry_capacity_per_worker", 6
+            )
+            haul_capacity = len(haulers) * definition.get("hauler_capacity", 12)
+            total_capacity = carry_capacity + haul_capacity
+
+            deliverable = min(pending_output, total_capacity) if total_capacity else 0.0
+            deliver_units = int(deliverable)
+            deposit_result: Optional[Dict[str, Any]] = None
+            delivered_actual = 0
+
+            if deliver_units > 0 and resource:
+                deposit_result = self._deposit_work_output(
+                    resource,
+                    deliver_units,
+                    preferred_stockpiles=definition.get("preferred_stockpiles"),
+                )
+                delivered_actual = deposit_result.get("delivered", 0)
+                if delivered_actual < deliver_units:
+                    alerts.append(
+                        f"{definition.get('title', key.title())} lacked storage for {deliver_units - delivered_actual} {resource}."
+                    )
+            backlog_after_delivery = max(0.0, pending_output - delivered_actual)
+            self.work_shift_backlog[key] = backlog_after_delivery
+
+            crew_entry = {
+                "key": key,
+                "title": definition.get("title", key.title()),
+                "resource": resource,
+                "workers": [detail["name"] for detail in worker_details],
+                "haulers": [hauler.name for hauler in haulers],
+                "gathered": gathered_units,
+                "delivered": delivered_actual,
+                "backlog": round(backlog_after_delivery, 1),
+                "capacity": total_capacity,
+                "pending": round(pending_output, 1),
+                "workers_detail": worker_details,
+            }
+
+            if not workers and backlog_existing <= 0:
+                crew_entry.setdefault("notes", []).append("No crew reported for duty.")
+            elif not workers and backlog_existing > 0:
+                crew_entry.setdefault("notes", []).append(
+                    "Haulers awaiting gathered stock from previous days."
+                )
+
+            if deposit_result and deposit_result.get("routes"):
+                crew_entry.setdefault("notes", []).append(
+                    ", ".join(
+                        f"{route['quantity']} to {route['stockpile']}"
+                        for route in deposit_result["routes"]
+                    )
+                )
+                shipments.append(
+                    {
+                        "sector": key,
+                        "resource": resource,
+                        "delivered": deposit_result["delivered"],
+                        "routes": deposit_result["routes"],
+                    }
+                )
+
+            if backlog_after_delivery and resource:
+                crew_entry.setdefault("notes", []).append(
+                    f"{backlog_after_delivery:.1f} {resource} waiting on carts."
+                )
+
+            if not workers and not haulers and backlog_after_delivery <= 0:
+                crew_entry.setdefault("status", "idle")
+
+            crews_report.append(crew_entry)
+            total_backlog += backlog_after_delivery
+            total_delivered += delivered_actual
+
+        report = {
+            "day": current_day,
+            "crews": crews_report,
+            "shipments": shipments,
+            "alerts": alerts,
+            "gathered_total": total_gathered,
+            "delivered_total": total_delivered,
+            "backlog_total": round(total_backlog, 1),
+            "recent_shipments": deepcopy(self.work_logistics_history[-8:]),
+        }
+
+        self.latest_workforce_report = report
+        self._last_workforce_update_day = current_day
+        if economy_report is not None:
+            economy_report["workforce"] = report
+
+        if crews_report:
+            summary = (
+                f"Work crews gathered {total_gathered} units and delivered {total_delivered}."
+            )
+            if total_backlog:
+                summary += f" Backlog stands at {total_backlog:.1f} units."
+            self.add_event_log_message(summary)
+        if alerts:
+            for alert in alerts[:3]:
+                self.add_event_log_message(f"Work alert: {alert}")
+
+        return report
+
+    def get_workforce_snapshot(self) -> Dict[str, Any]:
+        return deepcopy(self.latest_workforce_report)
+
     def process_daily_economy(self):
         if not self.game_time:
             return
@@ -2387,9 +3831,11 @@ class World:
         self._apply_daily_water_consumption(report)
         housing_snapshot = self._evaluate_housing_daily(report)
         self._resolve_theft_attempts(report)
+        self.process_workforce_daily(report)
         report["pending_crimes"] = len(self.pending_crimes)
         report["surplus_trades"] = list(self.today_surplus_sales)
         self.evaluate_population_dynamics(report, housing_snapshot)
+        training_report = self.process_training_daily(report)
 
         summary = (
             f"Economic summary — Treasury {self.treasury_coins}c "
@@ -2408,6 +3854,17 @@ class World:
             elif isinstance(available_beds, int):
                 self.add_event_log_message(
                     f"Housing report: {available_beds} bed{'s' if available_beds != 1 else ''} currently open."
+                )
+        if training_report:
+            active_count = len(training_report.get("active_sessions", []))
+            queued_total = sum(
+                len(entry.get("queued", []))
+                for entry in training_report.get("waitlists", [])
+            )
+            if active_count or queued_total:
+                self.add_event_log_message(
+                    f"Training grounds: {active_count} session{'s' if active_count != 1 else ''} active, "
+                    f"{queued_total} queued for instruction."
                 )
         for crime_event in report.get("crime_events", []):
             self.add_event_log_message(f"Security report: {crime_event['description']}.")

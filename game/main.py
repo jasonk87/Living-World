@@ -177,6 +177,12 @@ def tick_simulation():
             if hasattr(game_world, 'update_rumors_daily'):
                 game_world.update_rumors_daily()
 
+            if hasattr(game_world, 'process_legal_system_daily'):
+                game_world.process_legal_system_daily()
+
+            if hasattr(game_world, 'process_healthcare_daily'):
+                game_world.process_healthcare_daily()
+
 
             # Daily needs update and goal reset for idle characters
             for char_daily_reset in game_world.characters:
@@ -447,6 +453,10 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "resource_pressures": game_world.identify_resource_pressures() if hasattr(game_world, 'identify_resource_pressures') else [],
                     "crime_reports": getattr(game_world, 'crime_reports', []),
                     "pending_crimes": getattr(game_world, 'pending_crimes', []),
+                    "legal_cases": game_world.get_public_trial_snapshot() if hasattr(game_world, 'get_public_trial_snapshot') else [],
+                    "medical_queue": game_world.get_medical_queue_snapshot() if hasattr(game_world, 'get_medical_queue_snapshot') else [],
+                    "clinic_supply_requests": game_world.get_clinic_supply_requests() if hasattr(game_world, 'get_clinic_supply_requests') else [],
+                    "healthcare_report": getattr(game_world, 'latest_healthcare_report', {}),
                     "campaign_promises": getattr(game_world, 'campaign_promises', {}),
                     "environment_effects": game_world.get_environment_snapshot() if hasattr(game_world, 'get_environment_snapshot') else {},
                     "rumors": game_world.get_rumor_digest() if hasattr(game_world, 'get_rumor_digest') else [],
@@ -456,6 +466,8 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "resource_nodes": game_world.get_resource_nodes_snapshot() if hasattr(game_world, 'get_resource_nodes_snapshot') else [],
                     "population": getattr(game_world, 'population_stats', {}),
                     "cultural": game_world.get_cultural_snapshot() if hasattr(game_world, 'get_cultural_snapshot') else {},
+                    "training": game_world.get_training_snapshot() if hasattr(game_world, 'get_training_snapshot') else {},
+                    "workforce": game_world.get_workforce_snapshot() if hasattr(game_world, 'get_workforce_snapshot') else {},
                 }
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
@@ -656,7 +668,9 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
             super().do_GET()
 
 # --- Main Execution ---
-if __name__ == "__main__":
+def run_server(port: int = PORT) -> None:
+    """Start the simulation loop and HTTP server on the requested port."""
+
     initialize_game_world()
 
     sim_thread = threading.Thread(target=simulation_thread_func, daemon=True)
@@ -664,20 +678,22 @@ if __name__ == "__main__":
 
     httpd = None
     ui_dir = os.path.join(project_root, "ui")
+
     class Handler(GameDataHandler):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, directory=ui_dir, **kwargs)
 
     try:
-        with socketserver.TCPServer(("", PORT), Handler) as httpd:
-            print(f"Serving HTTP on port {PORT} from '{ui_dir}'...")
-            print(f"Game simulation running in background. Access UI at http://localhost:{PORT}/")
+        with socketserver.TCPServer(("", port), Handler) as httpd:
+            print(f"Serving HTTP on port {port} from '{ui_dir}'...")
+            print(f"Game simulation running in background. Access UI at http://localhost:{port}/")
             print("Press Ctrl+C to stop server and simulation.")
-            trigger_initial_ui_fetch(PORT)
+            trigger_initial_ui_fetch(port)
             httpd.serve_forever()
     except KeyboardInterrupt:
         print("\nCtrl+C received. Shutting down server and simulation...")
     finally:
+        global simulation_running
         simulation_running = False # Signal simulation thread to stop
         if httpd:
             httpd.shutdown() # Stop the HTTP server
@@ -686,3 +702,7 @@ if __name__ == "__main__":
             sim_thread.join() # Wait for simulation thread to finish
 
     print("Exited gracefully.")
+
+
+if __name__ == "__main__":
+    run_server()

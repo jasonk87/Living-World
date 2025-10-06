@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Any, Dict, List
 from unittest.mock import patch
 
 import pytest
@@ -283,3 +283,139 @@ def test_cultural_event_boosts_characters_and_spirit():
 
     assert world.active_cultural_event is None
     assert not any(key for key in world.active_world_effects if str(key).startswith("cultural_event"))
+
+
+def test_training_sessions_launch_and_award_experience():
+    world, game_time = _make_world()
+
+    instructor = Character(
+        name="Maris Foreman",
+        personality="Pragmatic",
+        traits=["Diligent"],
+        skills={"Construction": 4},
+        job="Master Craftsman",
+        needs=_standard_needs(),
+    )
+    apprentice_one = Character(
+        name="Toma Mason",
+        personality="Studious",
+        traits=["Curious"],
+        skills={"Construction": 0},
+        job="Builder",
+        needs=_standard_needs(),
+    )
+    apprentice_two = Character(
+        name="Ren Brick",
+        personality="Steadfast",
+        traits=["Patient"],
+        skills={"Construction": 0},
+        job="Builder",
+        needs=_standard_needs(),
+    )
+
+    world.add_character(instructor)
+    world.add_character(apprentice_one)
+    world.add_character(apprentice_two)
+
+    economy_payload: Dict[str, Dict[str, object]] = {}
+    day_one_report = world.process_training_daily(economy_payload)
+
+    assert economy_payload.get("training") == day_one_report
+    assert len(world.active_training_sessions) == 1
+    session = world.active_training_sessions[0]
+    assert session["instructor"] == instructor.name
+    assert set(session["trainees"]) == {apprentice_one.name, apprentice_two.name}
+
+    apprentice_experience = apprentice_one.skills["Construction"]["experience"]
+    assert apprentice_experience > 0
+    expected_esteem = min(
+        config.NEED_SCORE_MAX,
+        config.NEED_ESTEEM_DEFAULT + config.TRAINING_ESTEEM_BOOST,
+    )
+    assert apprentice_one.needs["Esteem"] == expected_esteem
+
+    game_time.current_tick = game_time.ticks_per_day - 1
+    game_time.tick()
+
+    followup_payload: Dict[str, Dict[str, object]] = {}
+    day_two_report = world.process_training_daily(followup_payload)
+
+    assert len(world.active_training_sessions) == 0
+    assert day_two_report.get("concluded_sessions")
+    conclusion = day_two_report["concluded_sessions"][0]
+    assert conclusion["reason"] == "completed"
+    assert any(outcome["name"] == apprentice_one.name for outcome in conclusion["outcomes"])
+    assert apprentice_one.skills["Construction"]["experience"] >= apprentice_experience
+
+
+def test_workforce_crews_deliver_resources_and_queue_backlog():
+    world, _ = _make_world()
+
+    stockpile = Stockpile("Central Stockpile", 0, 0, 2, 2, allowed_resources=None, capacity_per_resource=8)
+    world.add_stockpile(stockpile)
+
+    woodcutter = Character(
+        name="Darin", 
+        personality="Stoic",
+        traits=[],
+        skills={"Woodcutting": 2},
+        job="Woodcutter",
+        needs=_standard_needs(),
+    )
+    hauler = Character(
+        name="Mira",
+        personality="Helpful",
+        traits=[],
+        skills={},
+        job="Builder",
+        needs=_standard_needs(),
+    )
+
+    world.add_character(woodcutter)
+    world.add_character(hauler)
+
+    world.work_shift_definitions = {
+        "logging": {
+            "title": "Logging Crews",
+            "jobs": ["Woodcutter"],
+            "task": "Chop Wood",
+            "resource": "Wood",
+            "skill": "Woodcutting",
+            "shift_ticks": 6,
+            "carry_capacity_per_worker": 3,
+            "hauler_jobs": ["Builder"],
+            "hauler_capacity": 4,
+            "skill_yield_bonus": 0.0,
+            "preferred_stockpiles": ["Central Stockpile"],
+        }
+    }
+    world.work_shift_backlog = {"logging": 0.0}
+
+    daily_report: Dict[str, Any] = {}
+    report_one = world.process_workforce_daily(daily_report)
+
+    assert daily_report.get("workforce") == report_one
+    assert report_one["gathered_total"] >= 1
+    assert report_one["delivered_total"] == stockpile.inventory.get("Wood", 0)
+
+    logging_entry = report_one["crews"][0]
+    assert logging_entry["key"] == "logging"
+    assert logging_entry["delivered"] == report_one["delivered_total"]
+    assert logging_entry["backlog"] >= 0
+
+    previous_backlog = logging_entry["backlog"]
+
+    # Saturate the stockpile so new deliveries cannot be stored.
+    current_wood = stockpile.inventory.get("Wood", 0)
+    stockpile.capacity_per_resource = current_wood
+    stockpile.total_capacity = current_wood
+
+    world.game_time.current_day += 1
+
+    follow_report = world.process_workforce_daily({})
+    follow_entry = follow_report["crews"][0]
+
+    assert follow_report["gathered_total"] >= report_one["gathered_total"]
+    assert follow_entry["backlog"] >= previous_backlog
+    assert follow_report["backlog_total"] >= follow_entry["backlog"]
+    assert follow_report["delivered_total"] <= stockpile.capacity_per_resource

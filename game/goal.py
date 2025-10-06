@@ -45,6 +45,8 @@ class GoalType(Enum):
     MAINTAIN_PEACE_IN_SETTLEMENT = auto() # Sheriff
     PATROL_AREA = auto() # Deputy, Militia Captain
     INVESTIGATE_DISTURBANCE = auto() # Sheriff
+    PREPARE_TRIAL_CASE = auto() # Sheriff legal prep
+    ATTEND_TRIAL = auto() # Court appearances
 
     # Medical
     OVERSEE_MEDICAL_OPERATIONS = auto() # CMO
