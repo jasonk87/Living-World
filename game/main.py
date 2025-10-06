@@ -13,6 +13,7 @@ from game.stockpile import Stockpile
 from game.work_order import WorkOrder
 from game.data import BLUEPRINTS, JOB_TASK_DEFINITIONS, STRUCTURE_BLUEPRINTS
 from game.building import Building
+from game.rumor import Rumor
 from game import config
 
 import random
@@ -187,6 +188,28 @@ def tick_simulation():
                     char_daily_reset.add_memory("Fell ill.")
                     char_daily_reset.needs['Safety'] = max(config.NEED_SCORE_MIN, char_daily_reset.needs.get('Safety', config.NEED_SAFETY_DEFAULT) - 15) # Sickness reduces safety
                     char_daily_reset.add_memory(f"Sickness reduced my safety. Safety: {char_daily_reset.needs['Safety']}")
+                    # Generate a rumor and notable event for sickness
+                    game_world.add_notable_event(
+                        "CharacterSickness",
+                        {
+                            "summary": f"{char_daily_reset.name} has fallen ill.",
+                            "character": char_daily_reset.name,
+                            "severity": char_daily_reset.sickness_severity,
+                        },
+                    )
+                    rumor_content_key = "has_fallen_ill_negative"
+                    rumor_strength = config.RUMOR_INITIAL_STRENGTH_SMALL_EVENT
+                    new_rumor = Rumor(
+                        subject_char_id=char_daily_reset.name,
+                        content_key=rumor_content_key,
+                        initial_strength=rumor_strength,
+                        creation_day=game_time_obj.current_day,
+                        is_positive=False,
+                        original_source_char_id=char_daily_reset.name
+                    )
+                    game_world.add_rumor(new_rumor)
+                    char_daily_reset.known_rumor_ids.add(new_rumor.rumor_id)
+                    char_daily_reset.add_memory(f"My falling ill might start a rumor ({new_rumor.rumor_id[:4]}).")
 
 
                 injury_chance = 0.002 # Base 0.2% chance
@@ -199,6 +222,28 @@ def tick_simulation():
                     char_daily_reset.add_memory("Got injured.")
                     char_daily_reset.needs['Safety'] = max(config.NEED_SCORE_MIN, char_daily_reset.needs.get('Safety', config.NEED_SAFETY_DEFAULT) - 20) # Injury significantly reduces safety
                     char_daily_reset.add_memory(f"Injury reduced my safety. Safety: {char_daily_reset.needs['Safety']}")
+                    # Generate a rumor and notable event for injury
+                    game_world.add_notable_event(
+                        "CharacterInjury",
+                        {
+                            "summary": f"{char_daily_reset.name} has been injured.",
+                            "character": char_daily_reset.name,
+                            "severity": char_daily_reset.injury_severity,
+                        },
+                    )
+                    rumor_content_key = "has_been_injured_negative"
+                    rumor_strength = config.RUMOR_INITIAL_STRENGTH_SMALL_EVENT
+                    new_rumor = Rumor(
+                        subject_char_id=char_daily_reset.name,
+                        content_key=rumor_content_key,
+                        initial_strength=rumor_strength,
+                        creation_day=game_time_obj.current_day,
+                        is_positive=False,
+                        original_source_char_id=char_daily_reset.name
+                    )
+                    game_world.add_rumor(new_rumor)
+                    char_daily_reset.known_rumor_ids.add(new_rumor.rumor_id)
+                    char_daily_reset.add_memory(f"My injury might start a rumor ({new_rumor.rumor_id[:4]}).")
 
                 char_daily_reset.needs['Hunger'] = max(0, char_daily_reset.needs.get('Hunger', 100) - random.randint(10, 20))
                 char_daily_reset.needs['Thirst'] = max(0, char_daily_reset.needs.get('Thirst', 100) - random.randint(15, 25))
@@ -605,29 +650,9 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_error(404, f"No building or stockpile found at ({x},{y})")
         else:
             # Serve files from a 'ui' subdirectory if they exist (for the frontend)
-            # This part makes SimpleHTTPRequestHandler serve files from 'ui' instead of current dir.
-            # We need to ensure 'ui' directory exists at the project root.
-            ui_dir = os.path.join(project_root, "ui")
-            # Temporarily change directory for file serving. This is a bit hacky for SimpleHTTPRequestHandler.
-            # A more robust server (Flask/FastAPI) would handle static files better.
-            original_cwd = os.getcwd()
-            try:
-                os.chdir(ui_dir)
-                # SimpleHTTPRequestHandler uses self.path directly.
-                # Ensure self.path is relative to the new CWD (ui_dir) for the superclass method.
-                # Most browsers request '/' for index.html, or '/style.css', etc.
-                # So, self.path might be '/', '/style.css'. We need to ensure this path
-                # is correctly interpreted by the parent class after chdir.
-                # SimpleHTTPRequestHandler.translate_path will use os.getcwd() + self.path
-
-                # The path for super().do_GET() should be relative to the ui_dir.
-                # If self.path is "/style.css", it should remain so.
-                # If self.path is "/", SimpleHTTPRequestHandler typically serves "index.html".
-                super().do_GET() # Call without path argument
-            except FileNotFoundError:
-                self.send_error(404, "File not found in UI directory or API endpoint not supported")
-            finally:
-                os.chdir(original_cwd) # Change back to original CWD
+            # The server is now initialized with the correct directory, so we can just
+            # fall back to the default handler.
+            super().do_GET()
 
 # --- Main Execution ---
 if __name__ == "__main__":
@@ -637,10 +662,15 @@ if __name__ == "__main__":
     sim_thread.start()
 
     httpd = None
+    ui_dir = os.path.join(project_root, "ui")
+    class Handler(GameDataHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=ui_dir, **kwargs)
+
     try:
-        with socketserver.TCPServer(("", PORT), GameDataHandler) as httpd:
-            print(f"Serving HTTP on port {PORT}...")
-            print(f"Game simulation running in background. Access UI at http://localhost:{PORT}/ (assuming index.html in ui folder)")
+        with socketserver.TCPServer(("", PORT), Handler) as httpd:
+            print(f"Serving HTTP on port {PORT} from '{ui_dir}'...")
+            print(f"Game simulation running in background. Access UI at http://localhost:{PORT}/")
             print("Press Ctrl+C to stop server and simulation.")
             trigger_initial_ui_fetch(PORT)
             httpd.serve_forever()
