@@ -224,3 +224,62 @@ def test_population_departure_under_hardship_and_low_mood():
     assert world.population_stats["departures_today"] == 1
     assert "Hard Luck" not in [char.name for char in world.characters]
     assert any(event["type"] == "departure" for event in report.get("population_events", []))
+
+
+def test_cultural_snapshot_lists_upcoming_events():
+    world, _ = _make_world()
+
+    world.daily_environment_tick()
+
+    snapshot = world.get_cultural_snapshot()
+    assert 0.0 <= snapshot["community_spirit"] <= 1.0
+    assert snapshot["upcoming_events"], "Expected cultural calendar to provide upcoming events"
+    for event in snapshot["upcoming_events"]:
+        assert "name" in event and "day" in event
+        assert event["day"] >= world.game_time.current_day
+
+
+def test_cultural_event_boosts_characters_and_spirit():
+    world, _ = _make_world()
+    celebrant = Character(
+        name="Aela",
+        personality="Cheerful",
+        traits=["Empath"],
+        skills={},
+        needs={
+            "Hunger": 70,
+            "Thirst": 70,
+            "Energy": 80,
+            "Social": 60,
+            "Belonging": 50,
+            "Esteem": 45,
+        },
+    )
+    world.add_character(celebrant)
+
+    world.daily_environment_tick()
+
+    assert world.cultural_calendar, "Cultural calendar should populate after the first daily tick"
+    first_event = world.cultural_calendar[0]
+
+    pre_spirit = world.community_spirit
+    pre_belonging = celebrant.needs["Belonging"]
+
+    world.game_time.current_day = first_event["day"]
+    world.daily_environment_tick()
+
+    assert world.active_cultural_event is not None
+    assert celebrant.needs["Belonging"] >= pre_belonging
+    assert world.community_spirit > pre_spirit
+
+    env_snapshot = world.get_environment_snapshot()
+    assert env_snapshot["cultural_event"]
+    assert env_snapshot["cultural_event"]["name"] == world.active_cultural_event["name"]
+
+    end_day = first_event["day"] + max(1, int(first_event.get("duration", 1))) - 1
+    for day in range(first_event["day"] + 1, end_day + 2):
+        world.game_time.current_day = day
+        world.daily_environment_tick()
+
+    assert world.active_cultural_event is None
+    assert not any(key for key in world.active_world_effects if str(key).startswith("cultural_event"))

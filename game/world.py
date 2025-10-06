@@ -106,6 +106,14 @@ class World:
         self._tile_reservations: Dict[Tuple[int, int], str] = {}
         self._reservation_by_character: Dict[str, Tuple[int, int]] = {}
         self._pathfinder = Pathfinder()
+        self.cultural_calendar: List[Dict[str, Any]] = []
+        self._generated_cultural_years: Set[int] = set()
+        self._active_cultural_event_data: Optional[Dict[str, Any]] = None
+        self.active_cultural_event: Optional[Dict[str, Any]] = None
+        self._active_cultural_event_end_day: Optional[int] = None
+        self.community_spirit: float = getattr(config, "CULTURAL_SPIRIT_BASELINE", 0.4)
+        self.cultural_history: List[Dict[str, Any]] = []
+        self._last_cultural_update_day: Optional[int] = None
 
     def update_rumors_daily(self):
         """Decays strength of all rumors and removes very weak ones."""
@@ -1459,6 +1467,9 @@ class World:
         }
         snapshot["phase"] = self.get_current_phase()
         snapshot["weather_event"] = self.get_active_weather_event()
+        snapshot["community_spirit"] = round(self.community_spirit, 3)
+        snapshot["cultural_event"] = deepcopy(self.active_cultural_event) if self.active_cultural_event else None
+        snapshot["upcoming_cultural_events"] = self._get_upcoming_cultural_events(limit=3)
         self.environment_effect_snapshot = snapshot
 
         if previous_snapshot != snapshot:
@@ -2651,6 +2662,267 @@ class World:
                 self._handle_surplus_trade(resource, severity)
                 self._spawn_conversion_work_order(resource, severity)
 
+    # --- Cultural Life & Festivals ---
+
+    def _ensure_cultural_calendar(self) -> None:
+        if not self.game_time:
+            return
+
+        days_per_season = getattr(config, "DAYS_PER_SEASON", 10)
+        year_length = days_per_season * len(self.SEASONS)
+        current_year = (self.game_time.current_day - 1) // year_length
+
+        for year in range(current_year, current_year + 2):
+            if year in self._generated_cultural_years:
+                continue
+            events = self._generate_cultural_calendar_for_year(year)
+            if events:
+                self.cultural_calendar.extend(events)
+                self._generated_cultural_years.add(year)
+
+        if self.cultural_calendar:
+            self.cultural_calendar.sort(key=lambda entry: entry["day"])
+
+    def _generate_cultural_calendar_for_year(self, year_index: int) -> List[Dict[str, Any]]:
+        days_per_season = getattr(config, "DAYS_PER_SEASON", 10)
+        year_length = days_per_season * len(self.SEASONS)
+        start_day = year_index * year_length
+
+        events: List[Dict[str, Any]] = []
+        library = getattr(config, "CULTURAL_EVENT_LIBRARY", {})
+        for season_idx, season in enumerate(self.SEASONS):
+            definitions = library.get(season, [])
+            if not definitions:
+                continue
+            base_day = start_day + season_idx * days_per_season
+            for definition in definitions:
+                anchor = int(definition.get("anchor_day", 1))
+                anchor = max(1, min(days_per_season, anchor))
+                scheduled_day = base_day + anchor
+                event = {
+                    "year": year_index,
+                    "season": season,
+                    "day": scheduled_day,
+                    "key": definition.get("key", f"{season.lower()}_{anchor}"),
+                    "name": definition.get("name", f"{season} Gathering"),
+                    "description": definition.get("description"),
+                    "duration": max(1, int(definition.get("duration", 1))),
+                    "belonging_bonus": int(definition.get("belonging_bonus", 0)),
+                    "esteem_bonus": int(definition.get("esteem_bonus", 0)),
+                    "social_bonus": int(definition.get("social_bonus", 0)),
+                    "mood_bonus": int(definition.get("mood_bonus", 0)),
+                    "community_spirit_delta": float(definition.get("community_spirit_delta", 0.0)),
+                    "travel_speed_multiplier": definition.get("travel_speed_multiplier"),
+                    "market_price_adjustment": deepcopy(definition.get("market_price_adjustment"))
+                    if definition.get("market_price_adjustment")
+                    else None,
+                    "resource_yield_bonus": deepcopy(definition.get("resource_yield_bonus"))
+                    if definition.get("resource_yield_bonus")
+                    else None,
+                    "flavor": list(definition.get("flavor", [])),
+                    "has_triggered": False,
+                }
+                events.append(event)
+
+        events.sort(key=lambda entry: entry["day"])
+        return events
+
+    def _daily_cultural_tick(self) -> None:
+        if not self.game_time:
+            return
+
+        current_day = self.game_time.current_day
+        if self._last_cultural_update_day == current_day:
+            return
+
+        self._ensure_cultural_calendar()
+
+        if (
+            self._active_cultural_event_data
+            and self._active_cultural_event_end_day is not None
+            and current_day > self._active_cultural_event_end_day
+        ):
+            self._conclude_cultural_event()
+
+        decay = getattr(config, "CULTURAL_SPIRIT_DECAY", 0.0)
+        if decay > 0:
+            self.community_spirit = max(0.0, self.community_spirit - decay)
+
+        if (
+            self._active_cultural_event_data
+            and self._active_cultural_event_end_day is not None
+            and current_day <= self._active_cultural_event_end_day
+        ):
+            self._broadcast_cultural_flavor()
+
+        for event in self.cultural_calendar:
+            if event.get("has_triggered"):
+                continue
+            if event["day"] == current_day:
+                self._begin_cultural_event(event)
+
+        self._last_cultural_update_day = current_day
+
+    def _begin_cultural_event(self, event: Dict[str, Any]) -> None:
+        if not self.game_time:
+            return
+
+        if self._active_cultural_event_data and self._active_cultural_event_end_day is not None:
+            if self.game_time.current_day <= self._active_cultural_event_end_day:
+                self._conclude_cultural_event()
+
+        event["has_triggered"] = True
+        duration = max(1, int(event.get("duration", 1)))
+        current_day = self.game_time.current_day
+        end_day = current_day + duration - 1
+        self._active_cultural_event_end_day = end_day
+
+        self._active_cultural_event_data = deepcopy(event)
+        if self._active_cultural_event_data is not None:
+            self._active_cultural_event_data["last_flavor_day"] = None
+
+        sanitized: Dict[str, Any] = {
+            "key": event.get("key"),
+            "name": event.get("name"),
+            "season": event.get("season"),
+            "description": event.get("description"),
+            "start_day": current_day,
+            "end_day": end_day,
+            "duration": duration,
+        }
+        bonuses: Dict[str, int] = {}
+        for template_key, label in [
+            ("belonging_bonus", "belonging"),
+            ("esteem_bonus", "esteem"),
+            ("social_bonus", "social"),
+            ("mood_bonus", "mood"),
+        ]:
+            value = int(event.get(template_key, 0))
+            if value:
+                bonuses[label] = value
+        if bonuses:
+            sanitized["bonuses"] = bonuses
+        spirit_delta = max(0.0, float(event.get("community_spirit_delta", 0.0)))
+        sanitized["community_spirit_delta"] = spirit_delta
+        if spirit_delta:
+            self.community_spirit = min(1.0, self.community_spirit + spirit_delta)
+        self.active_cultural_event = sanitized
+
+        effect_data: Dict[str, Any] = {"expires_day": end_day}
+        has_effect = False
+        travel_multiplier = event.get("travel_speed_multiplier")
+        if travel_multiplier:
+            effect_data["travel_speed_multiplier"] = float(travel_multiplier)
+            has_effect = True
+        market_adjustment = event.get("market_price_adjustment")
+        if market_adjustment:
+            effect_data["market_price_adjustment"] = deepcopy(market_adjustment)
+            has_effect = True
+        resource_bonus = event.get("resource_yield_bonus")
+        if resource_bonus:
+            effect_data["resource_yield_bonus"] = deepcopy(resource_bonus)
+            has_effect = True
+        if has_effect:
+            effect_key = f"cultural_event_{event.get('key')}_{current_day}"
+            event["effect_key"] = effect_key
+            self.add_temporary_world_effect(effect_key, effect_data)
+        else:
+            event["effect_key"] = None
+
+        for character in list(self.characters):
+            if hasattr(character, "receive_cultural_event_boost"):
+                character.receive_cultural_event_boost(event, self)
+
+        description = event.get("description") or "Villagers gather for a communal celebration."
+        self.add_event_log_message(f"Cultural event '{event.get('name')}' begins. {description}")
+        self.add_notable_event(
+            "CulturalEvent",
+            {
+                "summary": f"{event.get('name')} underway.",
+                "name": event.get("name"),
+                "season": event.get("season"),
+            },
+        )
+
+        history_entry = {
+            "day": current_day,
+            "name": event.get("name"),
+            "season": event.get("season"),
+            "spirit": round(self.community_spirit, 3),
+            "participants": len(self.characters),
+        }
+        self.cultural_history.append(history_entry)
+        if len(self.cultural_history) > 25:
+            self.cultural_history.pop(0)
+
+        self._broadcast_cultural_flavor()
+
+    def _conclude_cultural_event(self) -> None:
+        if not self._active_cultural_event_data:
+            self.active_cultural_event = None
+            self._active_cultural_event_end_day = None
+            return
+
+        event = self._active_cultural_event_data
+        message = f"{event.get('name')} winds down as the town settles back into routine."
+        self.add_event_log_message(message)
+        self.add_notable_event(
+            "CulturalEventEnd",
+            {
+                "summary": message,
+                "name": event.get("name"),
+                "season": event.get("season"),
+            },
+        )
+        self._active_cultural_event_data = None
+        self.active_cultural_event = None
+        self._active_cultural_event_end_day = None
+
+    def _broadcast_cultural_flavor(self) -> None:
+        if not self._active_cultural_event_data or not self.game_time:
+            return
+        last_flavor_day = self._active_cultural_event_data.get("last_flavor_day")
+        if last_flavor_day == self.game_time.current_day:
+            return
+        flavor_lines = self._active_cultural_event_data.get("flavor") or []
+        if not flavor_lines:
+            return
+        snippet = random.choice(flavor_lines)
+        self.add_event_log_message(f"Festival mood: {snippet}")
+        self._active_cultural_event_data["last_flavor_day"] = self.game_time.current_day
+
+    def _get_upcoming_cultural_events(self, limit: int = 3) -> List[Dict[str, Any]]:
+        if not self.game_time:
+            return []
+        current_day = self.game_time.current_day
+        upcoming: List[Dict[str, Any]] = []
+        for event in self.cultural_calendar:
+            if event.get("has_triggered"):
+                continue
+            if event["day"] < current_day:
+                continue
+            upcoming.append(
+                {
+                    "key": event.get("key"),
+                    "name": event.get("name"),
+                    "season": event.get("season"),
+                    "day": event.get("day"),
+                    "description": event.get("description"),
+                }
+            )
+            if len(upcoming) >= limit:
+                break
+        return upcoming
+
+    def get_cultural_snapshot(self) -> Dict[str, Any]:
+        snapshot = {
+            "community_spirit": round(self.community_spirit, 3),
+            "active_event": deepcopy(self.active_cultural_event) if self.active_cultural_event else None,
+            "upcoming_events": self._get_upcoming_cultural_events(limit=4),
+            "recent_history": deepcopy(self.cultural_history[-5:]),
+        }
+        return snapshot
+
     def daily_environment_tick(self):
         if not self.game_time:
             return
@@ -2678,6 +2950,7 @@ class World:
 
         self._maybe_trigger_weather_event()
         self._cleanup_world_effects()
+        self._daily_cultural_tick()
         self.expire_resource_directives()
         self._recalculate_environment_effects()
         self._advance_resource_regrowth()
