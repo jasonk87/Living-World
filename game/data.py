@@ -162,6 +162,20 @@ JOB_TASK_DEFINITIONS = {
         "base_yield": 1,
         "base_time_per_yield": 6
     },
+    "Saw Lumber": {
+        "required_tool_type": "Saw",
+        "skill_used": "Carpentry",
+        "resource_produced": "Lumber",
+        "base_yield": 1,
+        "base_time_per_yield": 3,
+    },
+    "Assemble Furniture": {
+        "required_tool_type": "Hammer",
+        "skill_used": "Carpentry",
+        "resource_produced": "Furniture",
+        "base_yield": 1,
+        "base_time_per_yield": 4,
+    },
     "Construct Building": { # Generic task for working on any building
         "required_tool_type": None,
         "skill_used": "Construction",
@@ -770,6 +784,9 @@ MARKET_PRICES = {
     "Bandages": 5,
     "Wood": 2, # Price to buy 1 unit of wood
     "Stone": 3, # Price to buy 1 unit of stone
+    "Iron Ore": 6,
+    "Lumber": 5,
+    "Furniture": 18,
     "Food": 4, # Price to buy 1 unit of food
     "Water": 2,
     "Arrow Bundle": 8,

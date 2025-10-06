@@ -32,7 +32,9 @@ include:
 - **Workforce logistics:** configurable work crews for logging, quarrying, and
   farming now estimate daily production, coordinate haulers, and push gathered
   goods into available stockpiles while tracking backlogs when storage or
-  carry-capacity runs short.
+  carry-capacity runs short. Fresh trade skills extend the loop with dedicated
+  iron miners, sawyers, and carpenters who transform raw timber into furniture
+  while drawing directly from shared stockpiles.
 - **Training grounds:** apprenticeship programs queue under-skilled citizens,
   select instructors, and report active sessions alongside waitlists to the UI.
 - **Civic services:** the legal system, healthcare triage, and housing reviews

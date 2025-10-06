@@ -60,6 +60,9 @@ class World:
         self.resource_yield_multipliers: Dict[str, float] = {
             "Wood": 1.0,
             "Stone": 1.0,
+            "Iron Ore": 1.0,
+            "Lumber": 1.0,
+            "Furniture": 1.0,
             "Herbs": 1.0,
             "Food": 1.0,
             "Water": 1.0,
@@ -2344,6 +2347,9 @@ class World:
             total += character.inventory.get(resource_name, 0)
         return total
 
+    def _get_stockpile_quantity(self, resource_name: str) -> int:
+        return sum(stockpile.inventory.get(resource_name, 0) for stockpile in self.stockpiles)
+
     def _withdraw_from_stockpiles(self, resource_name: str, quantity: int) -> int:
         if quantity <= 0:
             return 0
@@ -2457,7 +2463,16 @@ class World:
     def identify_resource_pressures(self) -> List[Dict[str, Any]]:
         """Returns resource pressure descriptors sorted by severity."""
         pressures: List[Dict[str, Any]] = []
-        resources_to_check = ["Wood", "Stone", "Herbs", "Food", "Water"]
+        resources_to_check = [
+            "Wood",
+            "Stone",
+            "Iron Ore",
+            "Lumber",
+            "Furniture",
+            "Herbs",
+            "Food",
+            "Water",
+        ]
         for resource in resources_to_check:
             quantity = self.get_total_resource_quantity(resource)
             low_threshold = getattr(config, "MAYOR_RESOURCE_LOW_THRESHOLD", 20)
@@ -3644,6 +3659,16 @@ class World:
 
             worker_details: List[Dict[str, Any]] = []
             sector_output = 0.0
+            inputs_required = definition.get("inputs") or {}
+            discrete_output_flag = definition.get("discrete_output")
+            discrete_output = (
+                discrete_output_flag
+                if discrete_output_flag is not None
+                else bool(inputs_required)
+            )
+            inputs_consumed: Dict[str, int] = {}
+            input_shortage = False
+            input_shortage_details: Dict[str, int] = {}
             directive_bonus = 1.0
             if resource and resource in self.resource_collection_directives:
                 directive_bonus += 0.1
@@ -3680,6 +3705,63 @@ class World:
                         "estimated_output": round(worker_output, 1),
                     }
                 )
+
+            if inputs_required:
+                raw_output_units = int(sector_output)
+                if discrete_output:
+                    sector_output = float(int(sector_output))
+                max_units_possible: Optional[int] = None
+                for resource_name, amount_per_unit in inputs_required.items():
+                    if amount_per_unit <= 0:
+                        continue
+                    available = self._get_stockpile_quantity(resource_name)
+                    if available < amount_per_unit:
+                        input_shortage_details[resource_name] = amount_per_unit - available
+                    possible_units = available // amount_per_unit
+                    if max_units_possible is None or possible_units < max_units_possible:
+                        max_units_possible = possible_units
+                if max_units_possible is None:
+                    max_units_possible = int(sector_output) if discrete_output else int(sector_output)
+                if max_units_possible <= 0:
+                    if workers:
+                        input_shortage = True
+                    sector_output = 0.0
+                else:
+                    if discrete_output:
+                        sector_output = float(min(int(sector_output), max_units_possible))
+                    else:
+                        sector_output = min(sector_output, float(max_units_possible))
+                actual_units = int(sector_output)
+                if actual_units > 0:
+                    min_supported_units = actual_units
+                    for resource_name, amount_per_unit in inputs_required.items():
+                        if amount_per_unit <= 0:
+                            continue
+                        needed = actual_units * amount_per_unit
+                        consumed = self._withdraw_from_stockpiles(resource_name, needed)
+                        inputs_consumed[resource_name] = consumed
+                        if consumed < needed:
+                            shortage_amount = needed - consumed
+                            if shortage_amount > 0:
+                                input_shortage_details[resource_name] = shortage_amount
+                            supported = consumed // amount_per_unit if amount_per_unit else actual_units
+                        else:
+                            supported = consumed // amount_per_unit if amount_per_unit else actual_units
+                        if supported < min_supported_units:
+                            min_supported_units = supported
+                    if min_supported_units < actual_units:
+                        actual_units = min_supported_units
+                    sector_output = float(actual_units)
+                if raw_output_units > actual_units and raw_output_units > 0:
+                    input_shortage = True
+                    for resource_name, amount_per_unit in inputs_required.items():
+                        if amount_per_unit <= 0:
+                            continue
+                        missing_amount = (raw_output_units - actual_units) * amount_per_unit
+                        if missing_amount > 0:
+                            input_shortage_details.setdefault(resource_name, missing_amount)
+                if (int(sector_output) <= 0) and workers:
+                    input_shortage = True
 
             gathered_units = int(sector_output)
             total_gathered += gathered_units
@@ -3724,12 +3806,43 @@ class World:
                 "workers_detail": worker_details,
             }
 
+            if inputs_consumed:
+                crew_entry["inputs_consumed"] = inputs_consumed
+
             if not workers and backlog_existing <= 0:
                 crew_entry.setdefault("notes", []).append("No crew reported for duty.")
             elif not workers and backlog_existing > 0:
                 crew_entry.setdefault("notes", []).append(
                     "Haulers awaiting gathered stock from previous days."
                 )
+
+            if input_shortage:
+                shortage_parts = [
+                    f"{amount} {resource_name}"
+                    for resource_name, amount in inputs_required.items()
+                    if amount > 0
+                ]
+                shortage_specifics = [
+                    f"{missing} {resource_name}"
+                    for resource_name, missing in input_shortage_details.items()
+                    if missing > 0
+                ]
+                if shortage_specifics:
+                    shortage_text = ", ".join(shortage_specifics)
+                else:
+                    shortage_text = ", ".join(shortage_parts)
+                if shortage_text:
+                    crew_entry.setdefault("notes", []).append(
+                        f"Awaiting inputs ({shortage_text})."
+                    )
+                    alerts.append(
+                        f"{definition.get('title', key.title())} needs {shortage_text} to resume work."
+                    )
+                else:
+                    crew_entry.setdefault("notes", []).append("Awaiting input deliveries.")
+                    alerts.append(
+                        f"{definition.get('title', key.title())} lacks production inputs."
+                    )
 
             if deposit_result and deposit_result.get("routes"):
                 crew_entry.setdefault("notes", []).append(

@@ -460,6 +460,15 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (crew.backlog) {
                         parts.push(`backlog ${crew.backlog}`);
                     }
+                    const inputsConsumed = crew.inputs_consumed && typeof crew.inputs_consumed === 'object'
+                        ? Object.entries(crew.inputs_consumed).filter(([, qty]) => typeof qty === 'number' && qty > 0)
+                        : [];
+                    if (inputsConsumed.length) {
+                        const usedSummary = inputsConsumed
+                            .map(([inputName, qty]) => `${qty} ${inputName}`)
+                            .join(', ');
+                        parts.push(`used ${usedSummary}`);
+                    }
                     const details = parts.join(' • ');
                     const notes = Array.isArray(crew.notes) ? crew.notes.join(' • ') : '';
                     const noteHtml = notes ? `<small class="muted">${notes}</small>` : '';

@@ -419,3 +419,156 @@ def test_workforce_crews_deliver_resources_and_queue_backlog():
     assert follow_entry["backlog"] >= previous_backlog
     assert follow_report["backlog_total"] >= follow_entry["backlog"]
     assert follow_report["delivered_total"] <= stockpile.capacity_per_resource
+
+
+def test_manufacturing_crews_transform_inputs_into_outputs():
+    world, _ = _make_world()
+
+    stockpile = Stockpile(
+        "Central Stockpile",
+        0,
+        0,
+        2,
+        2,
+        allowed_resources=None,
+        capacity_per_resource=50,
+    )
+    world.add_stockpile(stockpile)
+    added = stockpile.add_item("Wood", 20)
+    assert added == (True, 20)
+
+    sawyer = Character(
+        name="Rhea",
+        personality="Focused",
+        traits=[],
+        skills={"Carpentry": 2},
+        job="Sawyer",
+        needs=_standard_needs(),
+    )
+    carpenter = Character(
+        name="Orrin",
+        personality="Patient",
+        traits=[],
+        skills={"Carpentry": 3},
+        job="Carpenter",
+        needs=_standard_needs(),
+    )
+    hauler = Character(
+        name="Jess",
+        personality="Helpful",
+        traits=[],
+        skills={},
+        job="Builder",
+        needs=_standard_needs(),
+    )
+
+    for character in (sawyer, carpenter, hauler):
+        world.add_character(character)
+
+    world.work_shift_definitions = {
+        "sawmill": {
+            "title": "Sawmill Crew",
+            "jobs": ["Sawyer"],
+            "task": "Saw Lumber",
+            "resource": "Lumber",
+            "skill": "Carpentry",
+            "shift_ticks": 6,
+            "carry_capacity_per_worker": 4,
+            "hauler_jobs": ["Builder"],
+            "hauler_capacity": 6,
+            "skill_yield_bonus": 0.1,
+            "inputs": {"Wood": 2},
+            "preferred_stockpiles": ["Central Stockpile"],
+            "discrete_output": True,
+        },
+        "carpentry": {
+            "title": "Carpenter's Shop",
+            "jobs": ["Carpenter"],
+            "task": "Assemble Furniture",
+            "resource": "Furniture",
+            "skill": "Carpentry",
+            "shift_ticks": 6,
+            "carry_capacity_per_worker": 3,
+            "hauler_jobs": ["Builder"],
+            "hauler_capacity": 6,
+            "skill_yield_bonus": 0.12,
+            "inputs": {"Lumber": 2},
+            "preferred_stockpiles": ["Central Stockpile"],
+            "discrete_output": True,
+        },
+    }
+    world.work_shift_backlog = {"sawmill": 0.0, "carpentry": 0.0}
+
+    daily_report: Dict[str, Any] = {}
+    report = world.process_workforce_daily(daily_report)
+
+    assert daily_report.get("workforce") == report
+    assert report["alerts"] and any("Carpenter's Shop" in alert for alert in report["alerts"])
+
+    sawmill_entry = next(entry for entry in report["crews"] if entry["key"] == "sawmill")
+    carpentry_entry = next(entry for entry in report["crews"] if entry["key"] == "carpentry")
+
+    assert sawmill_entry["delivered"] >= 1
+    sawmill_inputs = sawmill_entry.get("inputs_consumed", {})
+    assert sawmill_inputs.get("Wood", 0) == sawmill_entry["gathered"] * 2
+    lumber_used = carpentry_entry.get("inputs_consumed", {}).get("Lumber", 0)
+    if carpentry_entry["delivered"]:
+        assert lumber_used == carpentry_entry["delivered"] * 2
+
+    starting_wood = 20
+    remaining_wood = stockpile.inventory.get("Wood", 0)
+    assert remaining_wood == starting_wood - sawmill_inputs.get("Wood", 0)
+    assert stockpile.inventory.get("Furniture", 0) == carpentry_entry["delivered"]
+
+
+def test_manufacturing_crews_surface_shortages():
+    world, _ = _make_world()
+
+    stockpile = Stockpile(
+        "Central Stockpile",
+        0,
+        0,
+        2,
+        2,
+        allowed_resources=None,
+        capacity_per_resource=10,
+    )
+    world.add_stockpile(stockpile)
+
+    carpenter = Character(
+        name="Lysa",
+        personality="Stubborn",
+        traits=[],
+        skills={"Carpentry": 2},
+        job="Carpenter",
+        needs=_standard_needs(),
+    )
+    world.add_character(carpenter)
+
+    world.work_shift_definitions = {
+        "carpentry": {
+            "title": "Carpenter's Shop",
+            "jobs": ["Carpenter"],
+            "task": "Assemble Furniture",
+            "resource": "Furniture",
+            "skill": "Carpentry",
+            "shift_ticks": 6,
+            "carry_capacity_per_worker": 3,
+            "hauler_jobs": ["Builder"],
+            "hauler_capacity": 6,
+            "skill_yield_bonus": 0.12,
+            "inputs": {"Lumber": 2},
+            "preferred_stockpiles": ["Central Stockpile"],
+            "discrete_output": True,
+        }
+    }
+    world.work_shift_backlog = {"carpentry": 0.0}
+
+    report = world.process_workforce_daily({})
+
+    carpentry_entry = report["crews"][0]
+
+    assert carpentry_entry["gathered"] == 0
+    assert "notes" in carpentry_entry and any("Awaiting inputs" in note for note in carpentry_entry["notes"])
+    assert report["alerts"] and any("Lumber" in alert for alert in report["alerts"])
+    assert "inputs_consumed" not in carpentry_entry or not carpentry_entry["inputs_consumed"]

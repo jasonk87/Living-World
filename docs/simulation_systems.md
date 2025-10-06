@@ -21,6 +21,7 @@ This document summarizes the systemic layers that drive the Living World settlem
 - `WORK_SHIFT_DEFINITIONS` configure sector crews (logging, quarrying, farming) with shift lengths, haul capacity, and preferred stockpiles.
 - `World.process_workforce_daily()` tallies per-worker yields, applies skill and environment modifiers, and hands production to haulers.
 - Deliveries call `_deposit_work_output()` to route goods into stockpiles while recording backlogs and alerts if storage or carriers fall short.
+- Manufacturing crews can declare `inputs` so sawyers, carpenters, and other specialists withdraw raw materials before producing goods. Input shortages automatically appear in daily alerts and the HUD alongside the resources each crew consumed.
 - The HUD's Work Crews panel surfaces gathered totals, outstanding loads, and the latest shipment routes so shortages are visible at a glance.
 
 ## Population Churn

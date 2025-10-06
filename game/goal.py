@@ -105,6 +105,8 @@ class GoalType(Enum):
     PERFORM_FARMER_DUTIES = auto()
     PERFORM_HUNTER_DUTIES = auto()
     PERFORM_FLETCHER_DUTIES = auto()
+    PERFORM_SAWYER_DUTIES = auto()
+    PERFORM_CARPENTER_DUTIES = auto()
 
 
 class GoalStatus(Enum):
@@ -206,6 +208,8 @@ def create_goal_from_job(job_name: str, char_name: str) -> Goal:
                 "Perform Farmer Duties": GoalType.PERFORM_FARMER_DUTIES,
                 "Perform Hunter Duties": GoalType.PERFORM_HUNTER_DUTIES,
                 "Perform Fletcher Duties": GoalType.PERFORM_FLETCHER_DUTIES,
+                "Perform Sawyer Duties": GoalType.PERFORM_SAWYER_DUTIES,
+                "Perform Carpenter Duties": GoalType.PERFORM_CARPENTER_DUTIES,
                 "Assess Production Needs": GoalType.ASSESS_PRODUCTION_NEEDS,
                 "Manage Subordinates": GoalType.MANAGE_SUBORDINATES,
                 "Maintain Ledger": GoalType.MAINTAIN_LEDGER,
