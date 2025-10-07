@@ -358,10 +358,73 @@ STRUCTURE_BLUEPRINTS = {
             {"name": "Framing Walls", "work_required": 15, "map_char_during": "|"},
             {"name": "Roofing", "work_required": 10, "map_char_during": "^"}
         ],
-        "functionality": {"provides_shelter": 1, "tags": ["indoor", "residential", "housing"]},
+        "functionality": {
+            "provides_shelter": 2,
+            "tags": ["indoor", "residential", "housing"],
+            "wealth_tier": "modest",
+        },
         "required_skill": {"Construction": 1},
         "map_char_initial": ".", # Initial representation on map before construction starts
-        "map_char_complete": "H"
+        "map_char_complete": "H",
+        "interior_tile": "Floor",
+    },
+    "stone_cottage": {
+        "display_name": "Stone Cottage",
+        "size": (3, 3),
+        "required_resources": {"Wood": 40, "Stone": 45},
+        "construction_phases": [
+            {"name": "Foundation", "work_required": 20, "map_char_during": "_"},
+            {"name": "Walls", "work_required": 28, "map_char_during": "#"},
+            {"name": "Roof & Hearth", "work_required": 22, "map_char_during": "^"}
+        ],
+        "functionality": {
+            "provides_shelter": 3,
+            "tags": ["indoor", "residential", "housing"],
+            "wealth_tier": "comfortable",
+        },
+        "required_skill": {"Construction": 3},
+        "map_char_initial": ".",
+        "map_char_complete": "C",
+        "interior_tile": "Flagstone",
+    },
+    "merchant_manor": {
+        "display_name": "Merchant Manor",
+        "size": (4, 3),
+        "required_resources": {"Wood": 60, "Stone": 70, "Furniture": 4},
+        "construction_phases": [
+            {"name": "Estate Footing", "work_required": 28, "map_char_during": "_"},
+            {"name": "Grand Hall", "work_required": 36, "map_char_during": "M"},
+            {"name": "Finishes", "work_required": 24, "map_char_during": "m"}
+        ],
+        "functionality": {
+            "provides_shelter": 5,
+            "tags": ["indoor", "residential", "housing"],
+            "wealth_tier": "prosperous",
+        },
+        "required_skill": {"Construction": 4},
+        "map_char_initial": ".",
+        "map_char_complete": "M",
+        "interior_tile": "Parquet",
+    },
+    "noble_estate": {
+        "display_name": "Noble Estate",
+        "size": (4, 4),
+        "required_resources": {"Wood": 80, "Stone": 120, "Furniture": 8},
+        "construction_phases": [
+            {"name": "Manor Grounds", "work_required": 32, "map_char_during": "_"},
+            {"name": "Wing Construction", "work_required": 48, "map_char_during": "N"},
+            {"name": "Great Hall", "work_required": 36, "map_char_during": "n"},
+            {"name": "Finishing Touches", "work_required": 28, "map_char_during": "^"}
+        ],
+        "functionality": {
+            "provides_shelter": 6,
+            "tags": ["indoor", "residential", "housing"],
+            "wealth_tier": "noble",
+        },
+        "required_skill": {"Construction": 5},
+        "map_char_initial": ".",
+        "map_char_complete": "N",
+        "interior_tile": "Marble",
     },
     "small_workshop": {
         "display_name": "Small Workshop",

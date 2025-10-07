@@ -162,6 +162,23 @@ BUSINESS_TEMPLATES = [
 ]
 JEALOUSY_THEFT_PRESSURE = 0.25
 
+RESIDENTIAL_TIER_BLUEPRINTS = [
+    {"status": "destitute", "blueprint": "wooden_hut"},
+    {"status": "modest", "blueprint": "wooden_hut"},
+    {"status": "comfortable", "blueprint": "stone_cottage"},
+    {"status": "prosperous", "blueprint": "merchant_manor"},
+    {"status": "noble", "blueprint": "noble_estate"},
+]
+RESIDENTIAL_TIER_PRIORITY = {
+    "noble": 0,
+    "prosperous": 1,
+    "comfortable": 2,
+    "modest": 3,
+    "destitute": 4,
+}
+RESIDENTIAL_FALLBACK_TIER = "modest"
+RESIDENTIAL_ANCHOR = (4, 4)
+
 # Career & Profession Simulation
 CAREER_DEFAULT_STAGE = "Apprentice"
 CAREER_STAGE_THRESHOLDS = {

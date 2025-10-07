@@ -26,7 +26,11 @@ def _residential_building(location: tuple[int, int] = (0, 0), capacity: int = 4)
         location=location,
         size=(1, 1),
         required_resources={},
-        functionality={"provides_shelter": capacity, "tags": ["residential"]},
+        functionality={
+            "provides_shelter": capacity,
+            "tags": ["residential"],
+            "wealth_tier": "modest",
+        },
         required_skill={},
     )
     building.is_operational = True
@@ -224,6 +228,60 @@ def test_population_departure_under_hardship_and_low_mood():
     assert world.population_stats["departures_today"] == 1
     assert "Hard Luck" not in [char.name for char in world.characters]
     assert any(event["type"] == "departure" for event in report.get("population_events", []))
+
+
+def test_estate_allocation_matches_wealth_tiers():
+    world, _ = _make_world()
+
+    comfortable = Character(
+        name="Clara",
+        personality="Pragmatic",
+        traits=[],
+        skills={},
+        job="Craftswoman",
+        needs=_standard_needs(),
+    )
+    comfortable.wealth_status = "comfortable"
+
+    prosperous = Character(
+        name="Merin",
+        personality="Ambitious",
+        traits=[],
+        skills={},
+        job="Merchant",
+        needs=_standard_needs(),
+    )
+    prosperous.wealth_status = "prosperous"
+
+    noble = Character(
+        name="Lord Bren",
+        personality="Stoic",
+        traits=[],
+        skills={},
+        job="Noble",
+        needs=_standard_needs(),
+        rank="Noble Lord",
+    )
+    noble.wealth_status = "prosperous"
+
+    world.add_character(comfortable)
+    world.add_character(prosperous)
+    world.add_character(noble)
+
+    report: Dict[str, Any] = {"food_deficit": 0, "water_deficit": 0}
+    world._evaluate_housing_daily(report)
+
+    assignments = report["housing"]["assignments"]
+    assert assignments[comfortable.name].startswith("Stone Cottage")
+    assert assignments[prosperous.name].startswith("Merchant Manor")
+    assert assignments[noble.name].startswith("Noble Estate")
+
+    tiers = {
+        building.functionality.get("wealth_tier")
+        for building in world.buildings
+        if world._is_residential(building)
+    }
+    assert {"comfortable", "prosperous", "noble"}.issubset(tiers)
 
 
 def test_cultural_snapshot_lists_upcoming_events():

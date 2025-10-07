@@ -6,7 +6,13 @@ import random
 from .llm_integration import generate_dialogue # Kept as it's used
 # from .stockpile import Stockpile # Not directly used by Character methods
 # from .work_order import WorkOrder # Not directly used by Character methods
-from .data import BLUEPRINTS, JOB_TASK_DEFINITIONS, STRUCTURE_BLUEPRINTS, JOB_SALARIES
+from .data import (
+    BLUEPRINTS,
+    JOB_TASK_DEFINITIONS,
+    STRUCTURE_BLUEPRINTS,
+    JOB_SALARIES,
+    NOBLE_RANKS_OR_JOBS,
+)
 from . import config
 from .goal import Goal, GoalType, GoalStatus, DEFAULT_IDLE_GOAL, create_goal_from_job
 from .rumor import Rumor # Added for rumor generation
@@ -1641,7 +1647,7 @@ class Character:
 
         noble_threshold = getattr(config, "NOBILITY_WEALTH_THRESHOLD", 0)
         noble_title = getattr(config, "NOBILITY_TITLE", "Noble Lord")
-        noble_ranks = set(getattr(config, "NOBLE_RANKS_OR_JOBS", []))
+        noble_ranks = set(getattr(config, "NOBLE_RANKS_OR_JOBS", []) or NOBLE_RANKS_OR_JOBS)
         if (
             noble_threshold
             and net >= noble_threshold
@@ -6593,7 +6599,8 @@ class Character:
     def _ensure_home_assignment(self, world: 'World'):
         if not hasattr(world, "claim_residential_spot"):
             return None
-        building = world.claim_residential_spot(self)
+        preferred_tier = world.determine_estate_tier(self) if hasattr(world, "determine_estate_tier") else None
+        building = world.claim_residential_spot(self, preferred_tier=preferred_tier)
         if building:
             self.home_location = building.location
         return building

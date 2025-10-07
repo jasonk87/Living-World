@@ -20,6 +20,7 @@ from .data import (
     CITIZEN_PERSONALITY_POOL,
     CITIZEN_TRAIT_POOL,
     MIGRANT_ARCHETYPES,
+    NOBLE_RANKS_OR_JOBS,
 )
 from .rumor import Rumor
 from . import config
@@ -370,22 +371,52 @@ class World:
         provides = building.functionality.get("provides_shelter", 0) if building.functionality else 0
         return building.is_operational and "residential" in tags and provides
 
-    def claim_residential_spot(self, character: 'Character') -> Optional[Building]:
+    def _get_building_tier(self, building: Building) -> str:
+        if not building.functionality:
+            return getattr(config, "RESIDENTIAL_FALLBACK_TIER", "modest")
+        tier = building.functionality.get("wealth_tier")
+        if tier:
+            return tier
+        return getattr(config, "RESIDENTIAL_FALLBACK_TIER", "modest")
+
+    def claim_residential_spot(
+        self,
+        character: 'Character',
+        preferred_tier: Optional[str] = None,
+    ) -> Optional[Building]:
         existing_location = self._residential_assignments.get(character.name)
         assigned_building: Optional[Building] = None
         if existing_location:
             existing = self.get_building_by_location(existing_location)
             if existing and self._is_residential(existing):
-                if character.name not in existing.occupants:
-                    existing.add_occupant(character.name)
-                assigned_building = existing
+                if preferred_tier and self._get_building_tier(existing) != preferred_tier:
+                    existing.remove_occupant(character.name)
+                    if character.name in self._residential_assignments:
+                        del self._residential_assignments[character.name]
+                    existing = None
+                else:
+                    if character.name not in existing.occupants:
+                        existing.add_occupant(character.name)
+                    assigned_building = existing
         if assigned_building:
             self.latest_housing_snapshot = self.get_housing_snapshot()
+            if hasattr(character, "home_location"):
+                character.home_location = assigned_building.location
             return assigned_building
 
+        candidate_buildings: List[Building] = []
+        if preferred_tier:
+            for building in self.buildings:
+                if self._is_residential(building) and self._get_building_tier(building) == preferred_tier:
+                    candidate_buildings.append(building)
         for building in self.buildings:
             if not self._is_residential(building):
                 continue
+            if building in candidate_buildings:
+                continue
+            candidate_buildings.append(building)
+
+        for building in candidate_buildings:
             capacity = int(building.functionality.get("provides_shelter", 0))
             if character.name in building.occupants:
                 self._residential_assignments[character.name] = building.location
@@ -399,6 +430,8 @@ class World:
 
         if assigned_building:
             self.latest_housing_snapshot = self.get_housing_snapshot()
+            if hasattr(character, "home_location"):
+                character.home_location = assigned_building.location
         return assigned_building
 
     def release_residential_spot(self, character: 'Character'):
@@ -416,6 +449,8 @@ class World:
             target_building.remove_occupant(character.name)
         if character.name in self._residential_assignments:
             del self._residential_assignments[character.name]
+        if hasattr(character, "home_location"):
+            character.home_location = None
         self.latest_housing_snapshot = self.get_housing_snapshot()
 
     def get_housing_snapshot(self) -> Dict[str, Any]:
@@ -477,6 +512,211 @@ class World:
             "resting_characters": resting_characters,
         }
         return snapshot
+
+    def _can_place_structure(
+        self,
+        origin: Tuple[int, int],
+        size: Tuple[int, int],
+        resource_tiles: Set[Tuple[int, int]],
+    ) -> bool:
+        width, height = size
+        ox, oy = origin
+        for dx in range(width):
+            for dy in range(height):
+                tx = ox + dx
+                ty = oy + dy
+                if not (0 <= tx < self.grid_size[0] and 0 <= ty < self.grid_size[1]):
+                    return False
+                if self.get_building_at(tx, ty):
+                    return False
+                if (tx, ty) in self.stockpile_tiles:
+                    return False
+                if self._tile_reservations.get((tx, ty)):
+                    return False
+                if self._characters_by_tile.get((tx, ty)):
+                    return False
+                tile_type = self.grid[tx][ty]
+                if tile_type in getattr(config, "IMPASSABLE_TERRAINS", set()):
+                    return False
+                if (tx, ty) in resource_tiles:
+                    return False
+        return True
+
+    def _find_structure_site(
+        self,
+        size: Tuple[int, int],
+        *,
+        anchor: Optional[Tuple[int, int]] = None,
+    ) -> Optional[Tuple[int, int]]:
+        width, height = size
+        if width <= 0 or height <= 0:
+            return None
+        max_x = self.grid_size[0] - width + 1
+        max_y = self.grid_size[1] - height + 1
+        if max_x <= 0 or max_y <= 0:
+            return None
+
+        resource_tiles: Set[Tuple[int, int]] = set()
+        for node_list in self.resources.values():
+            for node in node_list:
+                loc = node.get("location")
+                if isinstance(loc, (list, tuple)) and len(loc) == 2:
+                    resource_tiles.add((int(loc[0]), int(loc[1])))
+
+        anchor_point = anchor or getattr(config, "RESIDENTIAL_ANCHOR", None) or self.market_location
+        candidates: List[Tuple[Tuple[int, int], int]] = []
+        for x in range(max_x):
+            for y in range(max_y):
+                if not self._can_place_structure((x, y), size, resource_tiles):
+                    continue
+                distance = abs(anchor_point[0] - x) + abs(anchor_point[1] - y)
+                candidates.append(((x, y), distance))
+
+        if not candidates:
+            return None
+
+        candidates.sort(key=lambda item: (item[1], item[0][0], item[0][1]))
+        return candidates[0][0]
+
+    def _place_structure_from_blueprint(self, blueprint_key: str) -> Optional[Building]:
+        blueprint = STRUCTURE_BLUEPRINTS.get(blueprint_key)
+        if not blueprint:
+            return None
+        size = tuple(blueprint.get("size", (1, 1)))
+        location = self._find_structure_site(size)
+        if not location:
+            return None
+
+        building = Building(
+            structure_type=blueprint_key,
+            display_name=blueprint.get("display_name", blueprint_key.replace("_", " ").title()),
+            location=location,
+            size=size,
+            required_resources=deepcopy(blueprint.get("required_resources", {})),
+            functionality=deepcopy(blueprint.get("functionality", {})),
+            required_skill=deepcopy(blueprint.get("required_skill")),
+            construction_phases=deepcopy(blueprint.get("construction_phases")),
+            map_char_initial=blueprint.get("map_char_initial", "X"),
+            map_char_complete=blueprint.get("map_char_complete", "B"),
+        )
+        building.is_operational = True
+        building.current_phase_index = len(building.phases)
+        building.current_progress = building.build_time
+        building.current_phase_progress = 0.0
+        self.add_building(building)
+
+        interior_tile = blueprint.get("interior_tile")
+        if interior_tile:
+            for tx, ty in building.get_tiles_occupied():
+                if 0 <= tx < self.grid_size[0] and 0 <= ty < self.grid_size[1]:
+                    self.grid[tx][ty] = interior_tile
+            self.map_revision += 1
+
+        tier = building.functionality.get("wealth_tier") if building.functionality else None
+        tier_label = tier or "residential"
+        self.add_event_log_message(
+            f"Raised {building.display_name} ({tier_label}) at {building.location} to meet housing demand."
+        )
+        return building
+
+    def determine_estate_tier(self, character: 'Character') -> str:
+        tier_configs = getattr(config, "RESIDENTIAL_TIER_BLUEPRINTS", [])
+        available_tiers = {entry.get("status") for entry in tier_configs if entry.get("status")}
+        fallback = getattr(config, "RESIDENTIAL_FALLBACK_TIER", "modest")
+        noble_ranks = set(getattr(config, "NOBLE_RANKS_OR_JOBS", []) or NOBLE_RANKS_OR_JOBS)
+        if character.rank in noble_ranks and "noble" in available_tiers:
+            return "noble"
+        status = getattr(character, "wealth_status", fallback)
+        if status in available_tiers:
+            return status
+        if fallback in available_tiers:
+            return fallback
+        if tier_configs:
+            return tier_configs[0].get("status", fallback)
+        return fallback
+
+    def _synchronize_estate_expectations(self, snapshot: Dict[str, Any]) -> bool:
+        tier_configs = getattr(config, "RESIDENTIAL_TIER_BLUEPRINTS", [])
+        if not tier_configs or not self.characters:
+            return False
+
+        tier_lookup = {
+            entry["status"]: entry
+            for entry in tier_configs
+            if entry.get("status") and entry.get("blueprint")
+        }
+        fallback_tier = getattr(config, "RESIDENTIAL_FALLBACK_TIER", "modest")
+
+        tier_priority = getattr(config, "RESIDENTIAL_TIER_PRIORITY", {})
+        default_priority = max(tier_priority.values(), default=5) + 1
+
+        buildings_by_tier: Dict[str, List[Building]] = defaultdict(list)
+        for building in self.buildings:
+            if not self._is_residential(building):
+                continue
+            tier = self._get_building_tier(building)
+            buildings_by_tier[tier].append(building)
+
+        desired_counts: Counter[str] = Counter()
+        for character in self.characters:
+            desired_tier = self.determine_estate_tier(character)
+            desired_counts[desired_tier] += 1
+
+        shortage_logged: Set[str] = set()
+        changed = False
+        sorted_desired = sorted(
+            desired_counts.items(),
+            key=lambda item: tier_priority.get(item[0], default_priority),
+        )
+        for tier, resident_count in sorted_desired:
+            config_entry = tier_lookup.get(tier) or tier_lookup.get(fallback_tier)
+            if not config_entry:
+                continue
+            capacity = sum(
+                int(building.functionality.get("provides_shelter", 0))
+                for building in buildings_by_tier.get(tier, [])
+            )
+            while capacity < resident_count:
+                new_building = self._place_structure_from_blueprint(config_entry.get("blueprint"))
+                if not new_building:
+                    if tier not in shortage_logged:
+                        shortage_logged.add(tier)
+                        self.add_event_log_message(
+                            f"Unable to expand {tier} housing—no suitable plots remain for that estate tier."
+                        )
+                    break
+                buildings_by_tier.setdefault(tier, []).append(new_building)
+                capacity += int(new_building.functionality.get("provides_shelter", 0))
+                changed = True
+
+        for building in self.buildings:
+            if not self._is_residential(building):
+                continue
+            tier = self._get_building_tier(building)
+            for occupant_name in list(building.occupants):
+                occupant = self.get_character_by_name(occupant_name)
+                desired_tier = self.determine_estate_tier(occupant) if occupant else None
+                if not occupant or desired_tier != tier:
+                    building.remove_occupant(occupant_name)
+                    if occupant_name in self._residential_assignments:
+                        del self._residential_assignments[occupant_name]
+                    changed = True
+
+        sorted_characters = sorted(
+            self.characters,
+            key=lambda char: tier_priority.get(self.determine_estate_tier(char), default_priority),
+        )
+
+        for character in sorted_characters:
+            preferred_tier = self.determine_estate_tier(character)
+            building = self.claim_residential_spot(character, preferred_tier=preferred_tier)
+            if not building:
+                changed = True
+
+        if changed:
+            self.latest_housing_snapshot = self.get_housing_snapshot()
+
+        return changed
 
     def get_operational_buildings_of_type(self, structure_type_str: str) -> List[Building]:
         return [b for b in self.buildings if b.structure_type == structure_type_str and b.is_operational]
@@ -4180,6 +4420,10 @@ class World:
                 if not character:
                     continue
                 character.update_mood_score(rest_bonus, "Recovered in warm shelter")
+
+        if self._synchronize_estate_expectations(snapshot):
+            snapshot = self.latest_housing_snapshot
+            report["housing"] = snapshot
 
         self.last_housing_evaluation_day = today
         return snapshot

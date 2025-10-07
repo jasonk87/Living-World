@@ -7,32 +7,20 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <header class="app-header">
-        <div class="brand">
-            <h1>Living World Command</h1>
-            <p>Stay on the map, steer every heartbeat of the settlement.</p>
-        </div>
-        <div class="header-controls">
-            <div id="game-status-header" class="status-pill-group">
-                <span class="status-pill muted">Awaiting world state…</span>
-            </div>
-            <div id="controls" class="control-deck">
-                <button id="pause-button" class="primary-control" type="button">Pause</button>
-                <div class="speed-group" aria-label="Simulation speed">
-                    <span>Speed</span>
-                    <button class="speed-button" data-speed="0.5" type="button">0.5x</button>
-                    <button class="speed-button" data-speed="1" type="button">1x</button>
-                    <button class="speed-button" data-speed="2" type="button">2x</button>
-                    <button class="speed-button" data-speed="5" type="button">5x</button>
-                </div>
-            </div>
-        </div>
-    </header>
-
     <main class="main-stage">
         <div id="map-stage" class="map-stage" aria-label="World map viewport">
-            <div class="map-hud-bar" aria-label="World intel">
-                <div class="hud-statline">
+            <div class="map-hud" aria-label="Settlement command ribbon">
+                <div class="hud-brand">
+                    <span class="hud-brand-mark" aria-hidden="true">⬢</span>
+                    <div class="hud-brand-stack">
+                        <span class="hud-brand-title">Living World Command</span>
+                        <span id="map-meta" class="map-meta">Awaiting telemetry…</span>
+                        <div id="game-status-header" class="status-pill-group" aria-live="polite">
+                            <span class="status-pill muted">Awaiting world state…</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="hud-statline" role="list">
                     <article class="hud-chip">
                         <span class="hud-chip-label">Population</span>
                         <span id="hud-population-value" class="hud-chip-value">—</span>
@@ -74,135 +62,183 @@
                         <span id="hud-housing-value" class="hud-chip-value">—</span>
                     </article>
                 </div>
-                <div class="hud-meta-row">
-                    <span id="map-meta" class="map-meta">Awaiting telemetry…</span>
+                <div class="hud-controls">
+                    <div class="command-controls" role="toolbar" aria-label="Simulation controls">
+                        <button id="pause-button" class="command-button" type="button" aria-label="Pause or resume simulation">
+                            <span class="hud-icon-glyph" aria-hidden="true">⏯</span>
+                        </button>
+                        <div class="speed-dial" role="group" aria-label="Simulation speed">
+                            <button class="speed-button" data-speed="0.5" type="button" aria-label="Set speed to 0.5×">0.5×</button>
+                            <button class="speed-button" data-speed="1" type="button" aria-label="Set speed to 1×">1×</button>
+                            <button class="speed-button" data-speed="2" type="button" aria-label="Set speed to 2×">2×</button>
+                            <button class="speed-button" data-speed="5" type="button" aria-label="Set speed to 5×">5×</button>
+                        </div>
+                    </div>
+                    <div class="hud-icon-group" role="toolbar" aria-label="Intel drawers">
+                        <button class="hud-icon-button" type="button" data-popover-target="hud-popover-world" aria-expanded="false" aria-controls="hud-popover-world" aria-label="Toggle world events intel">
+                            <span class="hud-icon-glyph" aria-hidden="true">🌍</span>
+                            <span id="hud-badge-world" class="hud-icon-badge" aria-hidden="true"></span>
+                        </button>
+                        <button class="hud-icon-button" type="button" data-popover-target="hud-popover-economy" aria-expanded="false" aria-controls="hud-popover-economy" aria-label="Toggle economy intel">
+                            <span class="hud-icon-glyph" aria-hidden="true">📊</span>
+                            <span id="hud-badge-economy" class="hud-icon-badge" aria-hidden="true"></span>
+                        </button>
+                        <button class="hud-icon-button" type="button" data-popover-target="hud-popover-civic" aria-expanded="false" aria-controls="hud-popover-civic" aria-label="Toggle civic ledger intel">
+                            <span class="hud-icon-glyph" aria-hidden="true">⚖️</span>
+                            <span id="hud-badge-civic" class="hud-icon-badge" aria-hidden="true"></span>
+                        </button>
+                        <button class="hud-icon-button" type="button" data-popover-target="hud-popover-families" aria-expanded="false" aria-controls="hud-popover-families" aria-label="Toggle family stories intel">
+                            <span class="hud-icon-glyph" aria-hidden="true">👪</span>
+                            <span id="hud-badge-families" class="hud-icon-badge" aria-hidden="true"></span>
+                        </button>
+                    </div>
+                    <div class="overlay-controls hud-icon-group" role="toolbar" aria-label="Overlay toggles">
+                        <button class="overlay-toggle hud-icon-button" data-panel="characters-panel" type="button" aria-label="Open Citizens panel">
+                            <span class="hud-icon-glyph" aria-hidden="true">👥</span>
+                            <span class="visually-hidden">Citizens</span>
+                        </button>
+                        <button class="overlay-toggle hud-icon-button" data-panel="event-panel" type="button" aria-label="Open Chronicle panel">
+                            <span class="hud-icon-glyph" aria-hidden="true">📜</span>
+                            <span class="visually-hidden">Chronicle</span>
+                        </button>
+                    </div>
                 </div>
-                <div class="hud-collapsible-row">
-                    <details class="intel-drawer">
-                        <summary>World Events</summary>
-                        <div class="drawer-body columns">
-                            <section>
-                                <h3>Latest</h3>
-                                <div id="event-feed" class="compact-event-feed">
-                                    <p class="empty">No events logged yet.</p>
-                                </div>
-                            </section>
-                            <section>
-                                <h3>Population</h3>
-                                <ul id="population-event-list" class="mini-list">
-                                    <li class="empty">No changes today.</li>
-                                </ul>
-                            </section>
-                            <section>
-                                <h3>Rumors</h3>
-                                <ul id="rumor-feed-list" class="mini-list">
-                                    <li class="empty">No rumors circulating.</li>
-                                </ul>
-                            </section>
-                        </div>
-                    </details>
-                    <details class="intel-drawer">
-                        <summary>Economy &amp; Logistics</summary>
-                        <div class="drawer-body columns">
-                            <section>
-                                <h3>Markets</h3>
-                                <ul id="economy-market-list" class="mini-list">
-                                    <li class="empty">No market data.</li>
-                                </ul>
-                                <h3>Resource Pressures</h3>
-                                <ul id="economy-pressure-list" class="mini-list">
-                                    <li class="empty">No active pressures.</li>
-                                </ul>
-                                <h3>Wages</h3>
-                                <ul id="economy-wage-list" class="mini-list">
-                                    <li class="empty">No outstanding wages.</li>
-                                </ul>
-                            </section>
-                            <section>
-                                <h3>Security</h3>
-                                <p id="economy-crime-note" class="mini-note">No incidents reported.</p>
-                                <h3>Environment</h3>
-                                <ul id="environment-modifier-list" class="mini-list">
-                                    <li class="empty">No modifiers active.</li>
-                                </ul>
-                                <h3>Weather Event</h3>
-                                <p id="environment-weather-event" class="mini-note muted">Calm skies.</p>
-                                <h3>Campaigns</h3>
-                                <ul id="economy-campaign-list" class="mini-list">
-                                    <li class="empty">No promises active.</li>
-                                </ul>
-                            </section>
-                            <section>
-                                <h3>Resources</h3>
-                                <ul id="resource-node-list" class="mini-list">
-                                    <li class="empty">No tracked nodes.</li>
-                                </ul>
-                                <h3>Housing</h3>
-                                <ul id="housing-status-list" class="mini-list">
-                                    <li class="empty">No housing data.</li>
-                                </ul>
-                                <h3>Work Crews</h3>
-                                <p id="work-crew-note" class="mini-note muted">Crews waiting on orders.</p>
-                                <ul id="work-crew-list" class="mini-list compact">
-                                    <li class="empty">No assignments processed yet.</li>
-                                </ul>
-                                <ul id="work-shipment-list" class="mini-list compact subtle">
-                                    <li class="empty">No deliveries dispatched.</li>
-                                </ul>
-                                <h3>Training Grounds</h3>
-                                <p id="training-needs-note" class="mini-note muted">No programs flagged.</p>
-                                <ul id="training-session-list" class="mini-list compact">
-                                    <li class="empty">No active sessions.</li>
-                                </ul>
-                                <ul id="training-waitlist-list" class="mini-list compact subtle">
-                                    <li class="empty">No one queued.</li>
-                                </ul>
-                            </section>
-                        </div>
-                    </details>
-                    <details class="intel-drawer">
-                        <summary>Civic Ledger</summary>
-                        <div class="drawer-body columns">
-                            <section>
-                                <h3>Law Code</h3>
-                                <ul id="law-code-list" class="mini-list compact">
-                                    <li class="empty">No civic laws enacted.</li>
-                                </ul>
-                                <h3>Petitions</h3>
-                                <ul id="law-petition-list" class="mini-list compact subtle">
-                                    <li class="empty">No petitions awaiting review.</li>
-                                </ul>
-                            </section>
-                            <section>
-                                <h3>Investigations</h3>
-                                <ul id="law-investigation-list" class="mini-list compact subtle">
-                                    <li class="empty">No interviews assigned.</li>
-                                </ul>
-                            </section>
-                        </div>
-                    </details>
-                    <details class="intel-drawer">
-                        <summary>Families</summary>
-                        <div class="drawer-body columns">
-                            <section>
-                                <h3>Spotlight</h3>
-                                <p id="family-spotlight" class="mini-note muted">No family stories logged.</p>
-                            </section>
-                            <section>
-                                <h3>Recent Moments</h3>
-                                <ul id="family-stories-list" class="mini-list compact">
-                                    <li class="empty">No family events recorded.</li>
-                                </ul>
-                            </section>
-                            <section>
-                                <h3>Households</h3>
-                                <ul id="family-household-list" class="mini-list compact subtle">
-                                    <li class="empty">No families registered.</li>
-                                </ul>
-                            </section>
-                        </div>
-                    </details>
-                </div>
+            </div>
+            <div id="hud-popover-container" class="hud-popover-container" aria-live="polite">
+                <section id="hud-popover-world" class="hud-popover" aria-hidden="true" role="dialog" aria-label="World events intel">
+                    <header class="hud-popover-header">
+                        <h3>World Events</h3>
+                        <p class="hud-popover-subtitle">Daily happenings, migrations, and rumors.</p>
+                    </header>
+                    <div class="hud-popover-body columns">
+                        <section>
+                            <h4>Latest</h4>
+                            <div id="event-feed" class="compact-event-feed">
+                                <p class="empty">No events logged yet.</p>
+                            </div>
+                        </section>
+                        <section>
+                            <h4>Population</h4>
+                            <ul id="population-event-list" class="mini-list">
+                                <li class="empty">No changes today.</li>
+                            </ul>
+                        </section>
+                        <section>
+                            <h4>Rumors</h4>
+                            <ul id="rumor-feed-list" class="mini-list">
+                                <li class="empty">No rumors circulating.</li>
+                            </ul>
+                        </section>
+                    </div>
+                </section>
+                <section id="hud-popover-economy" class="hud-popover" aria-hidden="true" role="dialog" aria-label="Economy and logistics intel">
+                    <header class="hud-popover-header">
+                        <h3>Economy &amp; Logistics</h3>
+                        <p class="hud-popover-subtitle">Markets, supplies, and civic pressures.</p>
+                    </header>
+                    <div class="hud-popover-body columns">
+                        <section>
+                            <h4>Markets</h4>
+                            <ul id="economy-market-list" class="mini-list">
+                                <li class="empty">No market data.</li>
+                            </ul>
+                            <h4>Resource Pressures</h4>
+                            <ul id="economy-pressure-list" class="mini-list">
+                                <li class="empty">No active pressures.</li>
+                            </ul>
+                            <h4>Wages</h4>
+                            <ul id="economy-wage-list" class="mini-list">
+                                <li class="empty">No outstanding wages.</li>
+                            </ul>
+                        </section>
+                        <section>
+                            <h4>Security &amp; Weather</h4>
+                            <p id="economy-crime-note" class="mini-note">No incidents reported.</p>
+                            <ul id="environment-modifier-list" class="mini-list">
+                                <li class="empty">No modifiers active.</li>
+                            </ul>
+                            <p id="environment-weather-event" class="mini-note muted">Calm skies.</p>
+                            <h4>Campaigns</h4>
+                            <ul id="economy-campaign-list" class="mini-list">
+                                <li class="empty">No promises active.</li>
+                            </ul>
+                        </section>
+                        <section>
+                            <h4>Resources &amp; Labor</h4>
+                            <ul id="resource-node-list" class="mini-list">
+                                <li class="empty">No tracked nodes.</li>
+                            </ul>
+                            <h4>Housing</h4>
+                            <ul id="housing-status-list" class="mini-list">
+                                <li class="empty">No housing data.</li>
+                            </ul>
+                            <h4>Work Crews</h4>
+                            <p id="work-crew-note" class="mini-note muted">Crews waiting on orders.</p>
+                            <ul id="work-crew-list" class="mini-list compact">
+                                <li class="empty">No assignments processed yet.</li>
+                            </ul>
+                            <ul id="work-shipment-list" class="mini-list compact subtle">
+                                <li class="empty">No deliveries dispatched.</li>
+                            </ul>
+                            <h4>Training Grounds</h4>
+                            <p id="training-needs-note" class="mini-note muted">No programs flagged.</p>
+                            <ul id="training-session-list" class="mini-list compact">
+                                <li class="empty">No active sessions.</li>
+                            </ul>
+                            <ul id="training-waitlist-list" class="mini-list compact subtle">
+                                <li class="empty">No one queued.</li>
+                            </ul>
+                        </section>
+                    </div>
+                </section>
+                <section id="hud-popover-civic" class="hud-popover" aria-hidden="true" role="dialog" aria-label="Civic ledger intel">
+                    <header class="hud-popover-header">
+                        <h3>Civic Ledger</h3>
+                        <p class="hud-popover-subtitle">Laws, petitions, and investigations.</p>
+                    </header>
+                    <div class="hud-popover-body columns">
+                        <section>
+                            <h4>Law Code</h4>
+                            <ul id="law-code-list" class="mini-list compact">
+                                <li class="empty">No civic laws enacted.</li>
+                            </ul>
+                            <h4>Petitions</h4>
+                            <ul id="law-petition-list" class="mini-list compact subtle">
+                                <li class="empty">No petitions awaiting review.</li>
+                            </ul>
+                        </section>
+                        <section>
+                            <h4>Investigations</h4>
+                            <ul id="law-investigation-list" class="mini-list compact subtle">
+                                <li class="empty">No interviews assigned.</li>
+                            </ul>
+                        </section>
+                    </div>
+                </section>
+                <section id="hud-popover-families" class="hud-popover" aria-hidden="true" role="dialog" aria-label="Family stories intel">
+                    <header class="hud-popover-header">
+                        <h3>Families</h3>
+                        <p class="hud-popover-subtitle">Spotlights and household changes.</p>
+                    </header>
+                    <div class="hud-popover-body columns">
+                        <section>
+                            <h4>Spotlight</h4>
+                            <p id="family-spotlight" class="mini-note muted">No family stories logged.</p>
+                        </section>
+                        <section>
+                            <h4>Recent Moments</h4>
+                            <ul id="family-stories-list" class="mini-list compact">
+                                <li class="empty">No family events recorded.</li>
+                            </ul>
+                        </section>
+                        <section>
+                            <h4>Households</h4>
+                            <ul id="family-household-list" class="mini-list compact subtle">
+                                <li class="empty">No families registered.</li>
+                            </ul>
+                        </section>
+                    </div>
+                </section>
             </div>
             <div class="map-canvas" id="map-canvas">
                 <div id="map-viewport" class="map-viewport">
@@ -210,11 +246,6 @@
                     <div id="map-characters" class="map-characters" aria-live="polite"></div>
                 </div>
             </div>
-        </div>
-
-        <div class="overlay-controls" role="toolbar" aria-label="Overlay toggles">
-            <button class="overlay-toggle" data-panel="characters-panel" type="button">Citizens</button>
-            <button class="overlay-toggle" data-panel="event-panel" type="button">Chronicle</button>
         </div>
 
         <section id="characters-panel" class="overlay-panel" aria-hidden="true">

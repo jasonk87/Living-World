@@ -27,6 +27,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const hudRationsValue = document.getElementById('hud-rations-value');
     const hudHydrationValue = document.getElementById('hud-hydration-value');
     const hudHousingValue = document.getElementById('hud-housing-value');
+    const hudBadgeWorld = document.getElementById('hud-badge-world');
+    const hudBadgeEconomy = document.getElementById('hud-badge-economy');
+    const hudBadgeCivic = document.getElementById('hud-badge-civic');
+    const hudBadgeFamilies = document.getElementById('hud-badge-families');
     const economyMarketList = document.getElementById('economy-market-list');
     const economyPressureList = document.getElementById('economy-pressure-list');
     const economyWageList = document.getElementById('economy-wage-list');
@@ -52,6 +56,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const lawInvestigationList = document.getElementById('law-investigation-list');
     const characterSearchInput = document.getElementById('character-search');
     const infoPanel = document.getElementById('info-panel');
+    const hudPopoverButtons = document.querySelectorAll('[data-popover-target]');
+    const hudPopovers = document.querySelectorAll('.hud-popover');
+    const hudPopoverContainer = document.getElementById('hud-popover-container');
 
     // --- API & State ---
     const DEFAULT_API_BASE_URL = 'http://localhost:5000';
@@ -70,6 +77,8 @@ document.addEventListener('DOMContentLoaded', () => {
     let characterSearchTerm = '';
     let pendingAutoCenter = false;
     let autoFollowCamera = true;
+    let worldBadgeBase = 0;
+    let worldBadgeSupplement = 0;
 
     const characterMarkers = new Map();
     let mapDimensions = { rows: 0, cols: 0 };
@@ -104,6 +113,70 @@ document.addEventListener('DOMContentLoaded', () => {
         if (typeof value !== 'number' || Number.isNaN(value)) return '—';
         const percent = Math.max(0, Math.min(100, Math.round(value * 100)));
         return `${percent}%`;
+    }
+
+    function updateHudBadge(element, count) {
+        if (!element) return;
+        const safeCount = Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
+        if (safeCount > 0) {
+            element.textContent = safeCount > 99 ? '99+' : String(safeCount);
+            element.classList.add('active');
+        } else {
+            element.textContent = '';
+            element.classList.remove('active');
+        }
+    }
+
+    function refreshWorldBadge() {
+        updateHudBadge(hudBadgeWorld, worldBadgeBase + worldBadgeSupplement);
+    }
+
+    function closeHudPopovers(exceptId = null) {
+        hudPopovers.forEach(popover => {
+            const shouldOpen = exceptId && popover.id === exceptId;
+            popover.classList.toggle('open', shouldOpen);
+            popover.setAttribute('aria-hidden', shouldOpen ? 'false' : 'true');
+        });
+        hudPopoverButtons.forEach(button => {
+            const targetId = button.dataset.popoverTarget;
+            const expanded = exceptId && targetId === exceptId;
+            button.classList.toggle('active', Boolean(expanded));
+            button.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+        });
+    }
+
+    function setupHudPopovers() {
+        if (!hudPopoverButtons.length) return;
+        hudPopoverButtons.forEach(button => {
+            button.setAttribute('aria-expanded', 'false');
+            button.addEventListener('click', event => {
+                event.stopPropagation();
+                const targetId = button.dataset.popoverTarget;
+                if (!targetId) return;
+                const target = document.getElementById(targetId);
+                if (!target) return;
+                const isOpen = target.classList.contains('open');
+                if (isOpen) {
+                    closeHudPopovers(null);
+                } else {
+                    closeHudPopovers(targetId);
+                }
+            });
+        });
+
+        document.addEventListener('click', event => {
+            if (event.target.closest('[data-popover-target]')) return;
+            if (event.target.closest('.hud-popover')) return;
+            closeHudPopovers(null);
+        });
+
+        document.addEventListener('keydown', event => {
+            if (event.key === 'Escape') {
+                closeHudPopovers(null);
+            }
+        });
+
+        closeHudPopovers(null);
     }
 
     function openPanel(panelId) {
@@ -261,6 +334,36 @@ document.addEventListener('DOMContentLoaded', () => {
         const trainingReport = gameState.training || report.training || {};
         const workforceReport = gameState.workforce || report.workforce || {};
         const governance = gameState.governance || {};
+        let economyBadgeCount = 0;
+        let civicBadgeCount = 0;
+        let worldBadgeExtras = 0;
+
+        const normalizeCount = (value) => {
+            if (Array.isArray(value)) return value.length;
+            if (typeof value === 'number' && Number.isFinite(value)) return value;
+            return 0;
+        };
+
+        const addEconomyCount = (value) => {
+            const amount = normalizeCount(value);
+            if (amount > 0) {
+                economyBadgeCount += amount;
+            }
+        };
+
+        const addCivicCount = (value) => {
+            const amount = normalizeCount(value);
+            if (amount > 0) {
+                civicBadgeCount += amount;
+            }
+        };
+
+        const addWorldExtra = (value) => {
+            const amount = normalizeCount(value);
+            if (amount > 0) {
+                worldBadgeExtras += amount;
+            }
+        };
 
         if (hudPopulationValue) {
             const totalPopulation = typeof populationSnapshot.population === 'number'
@@ -363,6 +466,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (lawPetitionList) {
             const petitions = Array.isArray(governance.petitions) ? governance.petitions : [];
+            const activePetitions = petitions.filter(petition => petition.status !== 'enacted');
+            addCivicCount(activePetitions);
             if (!petitions.length) {
                 lawPetitionList.innerHTML = '<li class="empty">No petitions awaiting review.</li>';
             } else {
@@ -384,6 +489,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (lawInvestigationList) {
             const interviews = Array.isArray(governance.interviews) ? governance.interviews : [];
+            addCivicCount(interviews);
             if (!interviews.length) {
                 lawInvestigationList.innerHTML = '<li class="empty">No interviews assigned.</li>';
             } else {
@@ -421,6 +527,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (economyPressureList) {
             const pressures = Array.isArray(gameState.resource_pressures) ? gameState.resource_pressures : [];
+            addEconomyCount(pressures);
             if (!pressures.length) {
                 economyPressureList.innerHTML = '<li class="empty">No active pressures.</li>';
             } else {
@@ -436,6 +543,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (economyWageList) {
             const arrears = Array.isArray(gameState.pending_wages) ? gameState.pending_wages : [];
+            addEconomyCount(arrears);
             if (!arrears.length) {
                 economyWageList.innerHTML = '<li class="empty">No outstanding wages.</li>';
             } else {
@@ -498,6 +606,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const deliveredTotal = typeof workforceReport.delivered_total === 'number' ? workforceReport.delivered_total : 0;
             const backlogTotal = typeof workforceReport.backlog_total === 'number' ? workforceReport.backlog_total : 0;
             const alerts = Array.isArray(workforceReport.alerts) ? workforceReport.alerts : [];
+            addEconomyCount(alerts);
 
             if (!gatheredTotal && !deliveredTotal && !backlogTotal && !alerts.length) {
                 workCrewNote.textContent = 'Crews waiting on orders.';
@@ -610,6 +719,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (trainingWaitlistList) {
             const waitlists = Array.isArray(trainingReport.waitlists) ? trainingReport.waitlists : [];
             const queued = waitlists.filter(entry => Array.isArray(entry.queued) && entry.queued.length);
+            const queuedCount = queued.reduce((sum, entry) => sum + (Array.isArray(entry.queued) ? entry.queued.length : 0), 0);
+            addEconomyCount(queuedCount);
             if (!queued.length) {
                 trainingWaitlistList.innerHTML = '<li class="empty">No one queued.</li>';
             } else {
@@ -634,6 +745,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const flagged = needs
                 .filter(entry => (entry.under_target || 0) > 0)
                 .sort((a, b) => (b.under_target || 0) - (a.under_target || 0));
+            addEconomyCount(flagged);
             if (!flagged.length) {
                 trainingNeedsNote.textContent = 'No programs flagged.';
                 trainingNeedsNote.classList.add('muted');
@@ -655,6 +767,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (populationEventList) {
             const popEvents = Array.isArray(report.population_events) ? report.population_events : [];
+            addWorldExtra(popEvents);
             if (!popEvents.length) {
                 populationEventList.innerHTML = '<li class="empty">No changes today.</li>';
             } else {
@@ -726,6 +839,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const homelessNames = Array.isArray(housingSnapshot.homeless_characters)
                 ? housingSnapshot.homeless_characters
                 : [];
+            addEconomyCount(homelessNames.length);
 
             if (totalBeds !== null && claimedBeds !== null && availableBeds !== null) {
                 const summaryBits = [`${claimedBeds}/${totalBeds} occupied`, `${availableBeds} open`];
@@ -769,6 +883,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const reportCrimes = Array.isArray(report.crime_events) ? report.crime_events : [];
             const historyCrimes = Array.isArray(gameState.crime_reports) ? gameState.crime_reports : [];
             const pendingCrimes = Array.isArray(gameState.pending_crimes) ? gameState.pending_crimes : [];
+            addCivicCount(pendingCrimes);
             let latestCrime = null;
             if (reportCrimes.length) {
                 latestCrime = reportCrimes[reportCrimes.length - 1];
@@ -807,6 +922,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const allPromises = Object.entries(promisesByCandidate)
                 .flatMap(([candidate, entries]) => (Array.isArray(entries) ? entries : [])
                     .map(promise => ({ ...promise, candidate })));
+            const outstandingPromises = allPromises.filter(promise => promise.status !== 'enacted');
+            addCivicCount(outstandingPromises);
 
             if (!allPromises.length) {
                 economyCampaignList.innerHTML = '<li class="empty">No promises active.</li>';
@@ -854,6 +971,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (rumorFeedList) {
             const rumors = Array.isArray(gameState.rumors) ? gameState.rumors : [];
+            addWorldExtra(rumors);
             if (!rumors.length) {
                 rumorFeedList.innerHTML = '<li class="empty">No rumors circulating.</li>';
             } else {
@@ -871,6 +989,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 }).join('');
             }
         }
+
+        worldBadgeSupplement = worldBadgeExtras;
+        refreshWorldBadge();
+        updateHudBadge(hudBadgeEconomy, economyBadgeCount);
+        updateHudBadge(hudBadgeCivic, civicBadgeCount);
     }
 
     function updateFamilyIntel(gameState) {
@@ -943,6 +1066,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 familySpotlight.textContent = `${dayLabel}: ${summary} (${familyLabel})`;
             }
         }
+
+        updateHudBadge(hudBadgeFamilies, recentHistory.length);
     }
 
     function togglePanel(panelId) {
@@ -1204,7 +1329,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function updateEventFeed(log) {
         if (!eventFeedDiv) return;
-        if (!log || !log.length) {
+        const count = Array.isArray(log) ? log.length : 0;
+        worldBadgeBase = count;
+        refreshWorldBadge();
+        if (!count) {
             eventFeedDiv.innerHTML = '<p class="empty">No events logged yet.</p>';
             return;
         }
@@ -2356,6 +2484,8 @@ document.addEventListener('DOMContentLoaded', () => {
     window.addEventListener('resize', () => {
         refreshMapLayout();
     });
+
+    setupHudPopovers();
 
     // --- Initial State ---
     updateViewportTransform();
