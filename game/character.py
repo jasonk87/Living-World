@@ -36,6 +36,15 @@ class Character:
                  arrival_day: Optional[int] = None):
         self.name = name; self.personality = personality; self.traits = traits;
         self.money: int = money
+        self.net_worth: int = money
+        self.wealth_status: str = "modest"
+        self.wealth_history: Deque[Tuple[int, int]] = deque(maxlen=getattr(config, "WEALTH_HISTORY_MAX_ENTRIES", 30))
+        self.businesses_owned: List[str] = []
+        self.business_roles: Dict[str, str] = {}
+        self.retired: bool = False
+        self._last_business_check_day: Optional[int] = None
+        self._last_wealth_evaluation_day: Optional[int] = None
+        self._last_jealousy_day: Optional[int] = None
         self.family_members: List[str] = family_members if family_members else []
         self.skills: Dict[str, Dict[str, Any]] = {}
         if skills:
@@ -917,6 +926,188 @@ class Character:
         if owed_amount > 0:
             self.add_memory(f"Still owed {owed_amount} coins for {reason}.")
             self.update_mood_score(getattr(config, "MOOD_CHANGE_PAYMENT_DELAY", -5), "Wages delayed")
+
+    def receive_income(self, amount: int, source: str, mood_reason: Optional[str] = None) -> None:
+        """Receive personal income that does not route through the public treasury."""
+        if amount <= 0:
+            return
+
+        self.money += amount
+        coins_text = "coin" if amount == 1 else "coins"
+        self.add_memory(f"Earned {amount} {coins_text} from {source}.")
+        mood_bonus = getattr(config, "BUSINESS_INCOME_MOOD_BONUS", 0)
+        if mood_bonus:
+            self.update_mood_score(mood_bonus, mood_reason or f"Income from {source}")
+
+    def assign_business_role(self, business_id: str, role: str) -> None:
+        """Track business ownership or employment for this character."""
+        self.business_roles[business_id] = role
+        if role == "owner":
+            if business_id not in self.businesses_owned:
+                self.businesses_owned.append(business_id)
+        else:
+            if business_id in self.businesses_owned:
+                self.businesses_owned.remove(business_id)
+
+    def leave_business_role(self, business_id: str, reason: Optional[str] = None) -> None:
+        role = self.business_roles.pop(business_id, None)
+        if role == "owner" and business_id in self.businesses_owned:
+            self.businesses_owned.remove(business_id)
+        if reason:
+            self.add_memory(reason)
+
+    def is_entrepreneurial(self) -> bool:
+        personalities = set(getattr(config, "ENTREPRENEURIAL_PERSONALITIES", []))
+        traits = set(getattr(config, "ENTREPRENEURIAL_TRAITS", []))
+        return (self.personality in personalities) or bool(traits.intersection(self.traits))
+
+    def calculate_net_worth(self, world: Optional['World'] = None) -> int:
+        """Estimate the character's total wealth, including business equity."""
+        wealth_total = int(self.money)
+        multiplier = getattr(config, "BUSINESS_NETWORTH_MULTIPLIER", 1.0)
+        if world and hasattr(world, "businesses"):
+            for business_id in self.businesses_owned:
+                business = world.businesses.get(business_id) if business_id in world.businesses else None
+                if not business or business.get("status") not in {"active", "paused"}:
+                    continue
+                capital_value = int(business.get("capital", 0))
+                cash_reserve = int(business.get("cash_reserve", 0))
+                wealth_total += int(capital_value * multiplier) + cash_reserve
+
+        self.net_worth = max(0, wealth_total)
+
+        thresholds = getattr(config, "WEALTH_STATUS_THRESHOLDS", {})
+        previous_status = self.wealth_status
+        if thresholds:
+            sorted_thresholds = sorted(thresholds.items(), key=lambda item: item[1])
+            chosen_status = previous_status
+            for status_label, threshold in sorted_thresholds:
+                if self.net_worth >= threshold:
+                    chosen_status = status_label
+            self.wealth_status = chosen_status
+        else:
+            self.wealth_status = "modest"
+
+        return self.net_worth
+
+    def evaluate_daily_wealth(self, world: 'World') -> Dict[str, Any]:
+        """Daily wealth upkeep — consider promotions, business ventures, and retirement."""
+        if not world or not world.game_time:
+            return {}
+
+        today = world.game_time.current_day
+        if self._last_wealth_evaluation_day == today:
+            return {}
+        self._last_wealth_evaluation_day = today
+
+        updates: Dict[str, Any] = {}
+
+        previous_status = self.wealth_status
+        previous_rank = self.rank
+        previous_net = self.net_worth
+
+        net = self.calculate_net_worth(world)
+        self.wealth_history.append((today, net))
+
+        if previous_status != self.wealth_status:
+            summary = f"Wealth status shifted to {self.wealth_status} (net worth {net} coins)."
+            self.add_memory(summary)
+            self.record_life_event(
+                world,
+                "wealth_status_change",
+                summary,
+                tags=["wealth"],
+                significance=2,
+                details={"net_worth": net, "previous_status": previous_status},
+            )
+            updates["status_change"] = {"status": self.wealth_status, "net_worth": net}
+
+        noble_threshold = getattr(config, "NOBILITY_WEALTH_THRESHOLD", 0)
+        noble_title = getattr(config, "NOBILITY_TITLE", "Noble Lord")
+        noble_ranks = set(getattr(config, "NOBLE_RANKS_OR_JOBS", []))
+        if (
+            noble_threshold
+            and net >= noble_threshold
+            and self.rank not in noble_ranks
+            and self.rank != noble_title
+            and f"nobility_{noble_title}" not in self._life_event_flags
+        ):
+            previous_rank = self.rank
+            self.rank = noble_title
+            self._life_event_flags.add(f"nobility_{noble_title}")
+            self.add_memory(f"Elevated to the rank of {noble_title} thanks to amassed fortunes.")
+            self.record_life_event(
+                world,
+                "nobility_elevation",
+                f"Elevated to {noble_title} through wealth and influence.",
+                tags=["nobility", "wealth"],
+                significance=4,
+                details={"net_worth": net, "previous_rank": previous_rank},
+                propagate_to_family=True,
+            )
+            world.add_event_log_message(f"{self.name} is recognized as a {noble_title} after amassing considerable wealth.")
+            updates["nobility"] = {"title": noble_title, "net_worth": net}
+
+        if not self.retired and self.job not in {"Mayor", "Reeve"}:
+            retirement_personalities = set(getattr(config, "RETIREMENT_PERSONALITIES", []))
+            wealth_threshold = getattr(config, "RETIREMENT_WEALTH_THRESHOLD", 0)
+            min_age = getattr(config, "RETIREMENT_MIN_AGE", 60)
+            chance = getattr(config, "RETIREMENT_DAILY_CHANCE", 0.0)
+            if (
+                self.age_years >= min_age
+                and net >= wealth_threshold
+                and self.personality in retirement_personalities
+                and random.random() < chance
+            ):
+                old_job = self.job
+                self.job = "Retiree"
+                self.retired = True
+                self.add_memory(f"Retired from life as a {old_job} after securing {net} coins in wealth.")
+                self.record_life_event(
+                    world,
+                    "retirement",
+                    f"Retired from {old_job} with a nest egg of {net} coins.",
+                    tags=["retirement", "wealth"],
+                    significance=3,
+                    details={"net_worth": net, "former_job": old_job},
+                )
+                world.add_event_log_message(f"{self.name} retires from the workforce with savings of {net} coins.")
+                updates["retired"] = {"former_job": old_job, "net_worth": net}
+
+        max_owned = getattr(config, "BUSINESS_MAX_OWNERSHIP", 1)
+        startup_funds = getattr(config, "BUSINESS_START_MIN_FUNDS", 9999)
+        if (
+            not self.retired
+            and len(self.businesses_owned) < max_owned
+            and self.money >= startup_funds
+            and net >= startup_funds
+        ):
+            if self._last_business_check_day != today:
+                self._last_business_check_day = today
+                if self.is_entrepreneurial() and hasattr(world, "launch_business"):
+                    business = world.launch_business(self)
+                    if business:
+                        updates["business_started"] = {
+                            "id": business.get("id"),
+                            "name": business.get("name"),
+                            "industry": business.get("industry"),
+                        }
+
+        updates["net_worth"] = net
+        updates["previous_net_worth"] = previous_net
+        return updates
+
+    def handle_business_closure(self, business_id: str, world: Optional['World'], reason: str) -> None:
+        if business_id in self.business_roles:
+            self.leave_business_role(business_id, reason)
+            self.record_life_event(
+                world,
+                "business_closure",
+                reason,
+                tags=["business"],
+                significance=2,
+                details={"business_id": business_id},
+            )
 
     def interact(self, other: 'Character', world: 'World') -> bool:
         """Trigger a lightweight social interaction with another character."""

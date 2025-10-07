@@ -52,6 +52,10 @@ class World:
         self.game_time: Optional[Time] = game_time_ref
         self.work_orders: List[WorkOrder] = []
         self.event_log: List[str] = []
+        self.businesses: Dict[str, Dict[str, Any]] = {}
+        self._business_counter: int = 0
+        self.latest_wealth_snapshot: Dict[str, Any] = {}
+        self._last_wealth_tension_day: Optional[int] = None
         self.active_world_effects: Dict[str, Any] = {}
         self.recent_notable_events: List[Dict[str, Any]] = [] # For rumor spreading
         self.rumors: List[Rumor] = [] # Added for rumor system
@@ -863,6 +867,9 @@ class World:
     def remove_character(self, character: 'Character'):
         if character not in self.characters:
             return
+        if hasattr(character, "business_roles"):
+            for business_id, role in list(character.business_roles.items()):
+                self._handle_character_departure_from_business(business_id, character.name, role == "owner")
         self.characters.remove(character)
         self.clear_reservations_for_character(character.name)
         if character.name in self._resident_registry:
@@ -4012,6 +4019,344 @@ class World:
         self.last_housing_evaluation_day = today
         return snapshot
 
+    def _next_business_id(self) -> str:
+        self._business_counter += 1
+        return f"biz_{self._business_counter}"
+
+    def launch_business(
+        self,
+        owner: 'Character',
+        template: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        if owner is None:
+            return None
+
+        templates = list(getattr(config, "BUSINESS_TEMPLATES", []))
+        if template is None:
+            if not templates:
+                return None
+            template = random.choice(templates)
+
+        startup_cost = int(template.get("startup_cost", getattr(config, "BUSINESS_STARTUP_COST", 0)))
+        if owner.money < startup_cost:
+            return None
+
+        owner.money -= startup_cost
+        business_id = self._next_business_id()
+        display_name = template.get("display_name", template.get("key", "Enterprise"))
+        business_name = f"{owner.name}'s {display_name}"
+        base_capital = int(template.get("base_capital", startup_cost))
+        revenue_range = template.get("revenue_range") or getattr(config, "BUSINESS_DAILY_REVENUE_RANGE", (4, 9))
+        business = {
+            "id": business_id,
+            "name": business_name,
+            "owner": owner.name,
+            "industry": template.get("industry", "general"),
+            "capital": base_capital,
+            "revenue_range": tuple(revenue_range),
+            "status": "active",
+            "founded_day": self.game_time.current_day if self.game_time else 0,
+            "employees": [],
+            "cash_reserve": 0,
+            "history": [],
+        }
+        self.businesses[business_id] = business
+
+        owner.assign_business_role(business_id, "owner")
+        owner.add_memory(f"Invested {startup_cost} coins to establish {business_name}.")
+        owner.record_life_event(
+            self,
+            "business_founded",
+            f"Founded {business_name} in the {business['industry']} trade.",
+            tags=["business"],
+            significance=3,
+            details={"business_id": business_id, "industry": business["industry"]},
+        )
+        owner.update_mood_score(getattr(config, "MOOD_CHANGE_STARTED_PROJECT", 5), f"Founded {business_name}")
+        owner.update_reputation(getattr(config, "BUSINESS_REPUTATION_BONUS", 0), f"Founded {business_name}", self)
+
+        self.add_event_log_message(f"{owner.name} establishes {business_name} ({business['industry']}).")
+        self.add_notable_event(
+            "BusinessFounded",
+            {
+                "summary": f"{owner.name} opened {business_name}.",
+                "owner": owner.name,
+                "industry": business["industry"],
+                "business_id": business_id,
+            },
+        )
+
+        max_employees = getattr(config, "BUSINESS_MAX_EMPLOYEES", 0)
+        if max_employees > 0:
+            candidate_pool: List['Character'] = []
+            for character in self.characters:
+                if character.name == owner.name:
+                    continue
+                if getattr(character, "retired", False):
+                    continue
+                if business_id in getattr(character, "business_roles", {}):
+                    continue
+                if character.job in {"Unemployed", "Laborer", "Apprentice", None}:
+                    candidate_pool.append(character)
+            random.shuffle(candidate_pool)
+            for candidate in candidate_pool:
+                if len(business["employees"]) >= max_employees:
+                    break
+                business["employees"].append(candidate.name)
+                candidate.assign_business_role(business_id, "employee")
+                candidate.add_memory(f"Hired to work at {business_name}.")
+                candidate.record_life_event(
+                    self,
+                    "business_employment",
+                    f"Began working at {business_name}.",
+                    tags=["business", "employment"],
+                    significance=2,
+                    details={"business_id": business_id, "role": "employee"},
+                )
+
+        return business
+
+    def _handle_character_departure_from_business(
+        self,
+        business_id: str,
+        character_name: str,
+        owner_departure: bool = False,
+    ) -> None:
+        business = self.businesses.get(business_id)
+        if not business:
+            return
+
+        if owner_departure:
+            self._close_business(business, f"owner {character_name} departed")
+            return
+
+        if character_name in business.get("employees", []):
+            business["employees"] = [name for name in business["employees"] if name != character_name]
+            employee = self.get_character_by_name(character_name)
+            if employee:
+                employee.leave_business_role(business_id, f"Left employment at {business['name']}.")
+
+    def _close_business(self, business: Dict[str, Any], reason: str) -> None:
+        if business.get("status") == "closed":
+            return
+
+        business["status"] = "closed"
+        business["closed_day"] = self.game_time.current_day if self.game_time else 0
+        owner = self.get_character_by_name(business.get("owner", ""))
+        if owner:
+            owner.handle_business_closure(business["id"], self, f"{business['name']} closed ({reason}).")
+        for employee_name in list(business.get("employees", [])):
+            employee = self.get_character_by_name(employee_name)
+            if employee:
+                employee.handle_business_closure(business["id"], self, f"{business['name']} closed ({reason}).")
+        business["employees"] = []
+        business["cash_reserve"] = 0
+        self.add_event_log_message(f"{business['name']} closed: {reason}.")
+        self.add_notable_event(
+            "BusinessClosed",
+            {
+                "summary": f"{business['name']} closed due to {reason}.",
+                "business_id": business.get("id"),
+                "owner": business.get("owner"),
+                "reason": reason,
+            },
+        )
+
+    def _update_businesses(self, report: Dict[str, Any]) -> List[Dict[str, Any]]:
+        events: List[Dict[str, Any]] = []
+        if not self.businesses:
+            report["business_events"] = events
+            return events
+
+        revenue_variance = getattr(config, "BUSINESS_REVENUE_VARIANCE", 0.0)
+        retention = getattr(config, "BUSINESS_CAPITAL_RETENTION", 0.5)
+        base_cost = getattr(config, "BUSINESS_BASE_OPERATING_COST", 2)
+        wage = getattr(config, "BUSINESS_EMPLOYEE_WAGE", 3)
+        owner_draw_limit = getattr(config, "BUSINESS_OWNER_DRAW", 0)
+        capital_factor = getattr(config, "BUSINESS_CAPITAL_PROFIT_FACTOR", 0.0)
+        failure_threshold = getattr(config, "BUSINESS_FAILURE_THRESHOLD", -15)
+        recovery_bonus = getattr(config, "BUSINESS_RECOVERY_BONUS", 0.0)
+        reputation_bonus = getattr(config, "BUSINESS_REPUTATION_BONUS", 0)
+
+        for business_id, business in list(self.businesses.items()):
+            if business.get("status") != "active":
+                continue
+
+            revenue_range = business.get("revenue_range") or getattr(
+                config, "BUSINESS_DAILY_REVENUE_RANGE", (4, 9)
+            )
+            revenue_low, revenue_high = revenue_range
+            if revenue_low > revenue_high:
+                revenue_low, revenue_high = revenue_high, revenue_low
+
+            gross = random.randint(int(revenue_low), int(revenue_high))
+            gross += int(business.get("capital", 0) * capital_factor)
+            if revenue_variance:
+                gross = max(0, int(gross * random.uniform(1 - revenue_variance, 1 + revenue_variance)))
+
+            payroll_total = 0
+            paid_workers: List[str] = []
+            for employee_name in list(business.get("employees", [])):
+                employee = self.get_character_by_name(employee_name)
+                if not employee or getattr(employee, "retired", False):
+                    continue
+                employee.receive_income(wage, f"work at {business['name']}")
+                payroll_total += wage
+                paid_workers.append(employee.name)
+
+            expenses = base_cost + payroll_total
+            owner_draw = 0
+            owner = self.get_character_by_name(business.get("owner", ""))
+            if owner and gross > expenses and owner_draw_limit > 0:
+                available_profit = gross - expenses
+                owner_draw = min(owner_draw_limit, available_profit)
+                if owner_draw > 0:
+                    owner.receive_income(owner_draw, f"profits from {business['name']}")
+                    expenses += owner_draw
+
+            net_profit = gross - expenses
+            if net_profit >= 0:
+                retained = int(net_profit * retention)
+                bonus = int(gross * recovery_bonus)
+                business["capital"] = business.get("capital", 0) + retained + bonus
+            else:
+                business["capital"] = business.get("capital", 0) + net_profit
+            business["cash_reserve"] = max(0, business.get("cash_reserve", 0) + net_profit)
+
+            if owner and net_profit > 0 and reputation_bonus:
+                owner.update_reputation(reputation_bonus, f"Profitable day at {business['name']}", self)
+
+            history_entry = {
+                "day": self.game_time.current_day if self.game_time else -1,
+                "gross": gross,
+                "net": net_profit,
+                "payroll": payroll_total,
+                "owner_draw": owner_draw,
+            }
+            business.setdefault("history", []).append(history_entry)
+            business["history"] = business["history"][-14:]
+
+            if business.get("capital", 0) <= failure_threshold:
+                self._close_business(business, "insolvency")
+                events.append(
+                    {
+                        "id": business_id,
+                        "name": business.get("name"),
+                        "status": "closed",
+                        "net": net_profit,
+                        "reason": "insolvency",
+                    }
+                )
+                continue
+
+            events.append(
+                {
+                    "id": business_id,
+                    "name": business.get("name"),
+                    "gross": gross,
+                    "net": net_profit,
+                    "payroll": payroll_total,
+                    "owner_draw": owner_draw,
+                    "status": "active",
+                    "employees_paid": paid_workers,
+                }
+            )
+
+        report["business_events"] = events
+        return events
+
+    def _update_character_wealth(self, report: Dict[str, Any]) -> Dict[str, Any]:
+        wealth_events: List[Dict[str, Any]] = []
+        wealth_entries: List[Dict[str, Any]] = []
+        for character in self.characters:
+            if not hasattr(character, "evaluate_daily_wealth"):
+                continue
+            updates = character.evaluate_daily_wealth(self)
+            net = updates.get("net_worth", getattr(character, "net_worth", character.money))
+            wealth_entries.append(
+                {
+                    "name": character.name,
+                    "net_worth": net,
+                    "status": getattr(character, "wealth_status", "modest"),
+                }
+            )
+            event_payload = {k: v for k, v in updates.items() if k not in {"net_worth", "previous_net_worth"}}
+            if event_payload:
+                wealth_events.append({"character": character.name, **event_payload})
+
+        wealth_entries.sort(key=lambda entry: entry["net_worth"])
+        richest = sorted(wealth_entries, key=lambda entry: entry["net_worth"], reverse=True)[:3]
+        poorest = wealth_entries[:3]
+
+        snapshot = {
+            "entries": wealth_entries,
+            "richest": richest,
+            "poorest": poorest,
+        }
+        self.latest_wealth_snapshot = snapshot
+        report["wealth_snapshot"] = snapshot
+        if wealth_events:
+            report["wealth_events"] = wealth_events
+        return snapshot
+
+    def _evaluate_wealth_tensions(
+        self,
+        report: Dict[str, Any],
+        wealth_data: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if not self.game_time:
+            return
+        if wealth_data is None:
+            wealth_data = self.latest_wealth_snapshot
+        if not wealth_data:
+            return
+
+        today = self.game_time.current_day
+        if self._last_wealth_tension_day == today:
+            return
+        threshold = getattr(config, "WEALTH_JEALOUSY_THRESHOLD", 0)
+        if threshold <= 0:
+            return
+
+        richest = wealth_data.get("richest", [])
+        jealousy_records: List[Dict[str, Any]] = []
+        for character in self.characters:
+            if not hasattr(character, "net_worth"):
+                continue
+            target_name = None
+            gap_value = 0
+            for entry in richest:
+                if entry["name"] == character.name:
+                    continue
+                diff = entry["net_worth"] - getattr(character, "net_worth", character.money)
+                if diff > gap_value:
+                    gap_value = diff
+                    target_name = entry["name"]
+            if target_name and gap_value >= threshold:
+                if character._last_jealousy_day == today:
+                    continue
+                character._last_jealousy_day = today
+                character.add_memory(
+                    f"Jealous of {target_name}'s fortune (gap {gap_value} coins)."
+                )
+                character.update_mood_score(
+                    getattr(config, "WEALTH_JEALOUSY_MOOD_PENALTY", -3),
+                    f"Jealous of {target_name}'s wealth",
+                )
+                character.modify_relationship(
+                    target_name,
+                    getattr(config, "WEALTH_JEALOUSY_RELATIONSHIP_HIT", -2),
+                    self,
+                    reason="Envious of their wealth",
+                )
+                jealousy_records.append(
+                    {"character": character.name, "target": target_name, "gap": gap_value}
+                )
+
+        if jealousy_records:
+            report.setdefault("wealth_tensions", []).extend(jealousy_records)
+            self._last_wealth_tension_day = today
+
     def _get_security_modifier(self) -> float:
         modifier = 1.0
         if any(char.job == "Sheriff" for char in self.characters):
@@ -4064,6 +4409,20 @@ class World:
                 desperation += (hunger_threshold - hunger) / max(1, hunger_threshold)
             if character.money < low_funds_threshold:
                 desperation += 0.5
+            if self.latest_wealth_snapshot:
+                richest_list = self.latest_wealth_snapshot.get("richest", [])
+                richest_entry = next(
+                    (entry for entry in richest_list if entry.get("name") != character.name),
+                    None,
+                )
+                if richest_entry:
+                    wealth_gap = richest_entry.get("net_worth", 0) - getattr(
+                        character, "net_worth", character.money
+                    )
+                    if wealth_gap > 0:
+                        jealousy_pressure = getattr(config, "JEALOUSY_THEFT_PRESSURE", 0.0)
+                        threshold = getattr(config, "WEALTH_JEALOUSY_THRESHOLD", 1)
+                        desperation += (wealth_gap / max(1, threshold)) * jealousy_pressure
             if desperation <= 0:
                 continue
 
@@ -5126,7 +5485,10 @@ class World:
         self._apply_daily_food_consumption(report)
         self._apply_daily_water_consumption(report)
         housing_snapshot = self._evaluate_housing_daily(report)
+        business_events = self._update_businesses(report)
+        wealth_snapshot = self._update_character_wealth(report)
         self._resolve_theft_attempts(report)
+        self._evaluate_wealth_tensions(report, wealth_snapshot)
         self.process_workforce_daily(report)
         report["pending_crimes"] = len(self.pending_crimes)
         report["surplus_trades"] = list(self.today_surplus_sales)
@@ -5162,6 +5524,16 @@ class World:
                     f"Training grounds: {active_count} session{'s' if active_count != 1 else ''} active, "
                     f"{queued_total} queued for instruction."
                 )
+        for business_event in business_events:
+            if business_event.get("status") == "closed":
+                self.add_event_log_message(
+                    f"Business closed: {business_event.get('name')} ({business_event.get('reason', 'closure')})."
+                )
+            else:
+                net = business_event.get("net", 0)
+                self.add_event_log_message(
+                    f"{business_event.get('name')} netted {net} coin{'s' if net != 1 else ''} after payroll."
+                )
         for crime_event in report.get("crime_events", []):
             self.add_event_log_message(f"Security report: {crime_event['description']}.")
 
@@ -5171,6 +5543,28 @@ class World:
                 for trade in report["surplus_trades"]
             )
             self.add_event_log_message(f"Trade ledger: {trade_summaries} exported to market.")
+
+        for wealth_event in report.get("wealth_events", []):
+            if "business_started" in wealth_event:
+                started = wealth_event["business_started"]
+                self.add_event_log_message(
+                    f"{wealth_event['character']} opened {started.get('name')} ({started.get('industry')})."
+                )
+            if "retired" in wealth_event:
+                retired = wealth_event["retired"]
+                self.add_event_log_message(
+                    f"{wealth_event['character']} retires from {retired.get('former_job')} with {retired.get('net_worth')} coins saved."
+                )
+            if "nobility" in wealth_event:
+                nobility = wealth_event["nobility"]
+                self.add_event_log_message(
+                    f"{wealth_event['character']} earns the title {nobility.get('title')} through amassed wealth."
+                )
+        if report.get("wealth_tensions"):
+            for tension in report["wealth_tensions"]:
+                self.add_event_log_message(
+                    f"Jealousy simmers: {tension['character']} eyes {tension['target']}'s fortune (gap {tension['gap']}c)."
+                )
 
         self.last_daily_economic_report = report
         self.today_surplus_sales = []

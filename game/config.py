@@ -98,6 +98,70 @@ WEATHER_EVENT_DEFINITIONS = {
 
 WEATHER_EVENT_MESSAGE_LIMIT = 4
 
+# Wealth & Business Simulation
+WEALTH_HISTORY_MAX_ENTRIES = 45
+WEALTH_STATUS_THRESHOLDS = {
+    "destitute": 5,
+    "modest": 20,
+    "comfortable": 55,
+    "prosperous": 110,
+}
+WEALTH_JEALOUSY_THRESHOLD = 35
+WEALTH_JEALOUSY_RELATIONSHIP_HIT = -3
+WEALTH_JEALOUSY_MOOD_PENALTY = -4
+WEALTH_RESPECT_RELATIONSHIP_BONUS = 2
+RETIREMENT_MIN_AGE = 55
+RETIREMENT_WEALTH_THRESHOLD = 80
+RETIREMENT_PERSONALITIES = ["Stoic", "Introspective", "Compassionate"]
+RETIREMENT_DAILY_CHANCE = 0.25
+NOBILITY_WEALTH_THRESHOLD = 160
+NOBILITY_TITLE = "Noble Lord"
+BUSINESS_INCOME_MOOD_BONUS = 2
+BUSINESS_START_MIN_FUNDS = 45
+BUSINESS_STARTUP_COST = 30
+BUSINESS_MAX_OWNERSHIP = 2
+BUSINESS_OWNER_DRAW = 6
+BUSINESS_EMPLOYEE_WAGE = 4
+BUSINESS_BASE_OPERATING_COST = 3
+BUSINESS_CAPITAL_RETENTION = 0.55
+BUSINESS_CAPITAL_PROFIT_FACTOR = 0.08
+BUSINESS_DAILY_REVENUE_RANGE = (5, 13)
+BUSINESS_REVENUE_VARIANCE = 0.25
+BUSINESS_FAILURE_THRESHOLD = -18
+BUSINESS_RECOVERY_BONUS = 0.12
+BUSINESS_NETWORTH_MULTIPLIER = 1.2
+BUSINESS_MAX_EMPLOYEES = 4
+BUSINESS_REPUTATION_BONUS = 3
+ENTREPRENEURIAL_PERSONALITIES = ["Ambitious", "Pragmatic", "Cheerful"]
+ENTREPRENEURIAL_TRAITS = ["Resourceful", "Organized"]
+BUSINESS_TEMPLATES = [
+    {
+        "key": "market_stall",
+        "display_name": "Market Stall",
+        "industry": "trade",
+        "startup_cost": 24,
+        "base_capital": 20,
+        "revenue_range": (4, 9),
+    },
+    {
+        "key": "artisan_workshop",
+        "display_name": "Artisan Workshop",
+        "industry": "crafting",
+        "startup_cost": 30,
+        "base_capital": 24,
+        "revenue_range": (6, 12),
+    },
+    {
+        "key": "wayside_tavern",
+        "display_name": "Wayside Tavern",
+        "industry": "hospitality",
+        "startup_cost": 36,
+        "base_capital": 28,
+        "revenue_range": (7, 14),
+    },
+]
+JEALOUSY_THEFT_PRESSURE = 0.25
+
 # Workforce & Logistics
 DEFAULT_WORK_SHIFT_TICKS = 6
 WORK_SHIFT_DEFINITIONS = {
