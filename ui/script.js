@@ -2,6 +2,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Element Selectors ---
     const gameStatusHeader = document.getElementById('game-status-header');
     const mapStage = document.getElementById('map-stage');
+    const mapCanvas = document.getElementById('map-canvas');
     const mapViewport = document.getElementById('map-viewport');
     const mapGridDiv = document.getElementById('game-map');
     const mapCharactersLayer = document.getElementById('map-characters');
@@ -1833,13 +1834,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function centerViewportOn(x, y) {
-        if (!mapStage || !mapViewport) return;
+        const surface = mapCanvas || mapStage;
+        if (!surface || !mapViewport) return;
         const tileSize = getTileSize();
-        const stageRect = mapStage.getBoundingClientRect();
+        const surfaceRect = surface.getBoundingClientRect();
         const targetX = (x + 0.5) * tileSize;
         const targetY = (y + 0.5) * tileSize;
-        viewportPan.x = stageRect.width / 2 - targetX * viewportZoom;
-        viewportPan.y = stageRect.height / 2 - targetY * viewportZoom;
+        viewportPan.x = surfaceRect.width / 2 - targetX * viewportZoom;
+        viewportPan.y = surfaceRect.height / 2 - targetY * viewportZoom;
         updateViewportTransform();
     }
 
@@ -1918,7 +1920,11 @@ document.addEventListener('DOMContentLoaded', () => {
             const heightCells = building.height ?? 1;
             const overlayType = building.structure_type === 'Stockpile' ? 'stockpile' : 'building';
             const label = building.display_name || building.structure_type || 'Structure';
-            const signature = `${overlayType}|${label}|${originX},${originY}`;
+            const rawType = building.structure_type || label;
+            const slug = rawType
+                ? String(rawType).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+                : '';
+            const signature = JSON.stringify({ overlayType, label, originX, originY, slug });
             for (let r = 0; r < heightCells; r++) {
                 for (let c = 0; c < widthCells; c++) {
                     const x = originX + c;
@@ -1940,11 +1946,12 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             if (prevSignature && prevSignature !== nextSignature) {
-                cell.classList.remove('building-cell', 'stockpile-cell');
+                cell.classList.remove('building-cell', 'stockpile-cell', 'building-origin');
                 delete cell.dataset.building;
                 delete cell.dataset.buildingOriginX;
                 delete cell.dataset.buildingOriginY;
                 delete cell.dataset.buildingName;
+                delete cell.dataset.buildingType;
                 const baseTitle = cell.dataset.baseTitle || mapTerrainCache[index] || 'Unknown';
                 const x = index % cols;
                 const y = Math.floor(index / cols);
@@ -1961,16 +1968,31 @@ document.addEventListener('DOMContentLoaded', () => {
                 continue;
             }
 
-            const [type, label, origin] = nextSignature.split('|');
-            const [originX, originY] = origin.split(',').map(Number);
-            cell.classList.toggle('stockpile-cell', type === 'stockpile');
-            cell.classList.toggle('building-cell', type !== 'stockpile');
+            let overlayDescriptor;
+            try {
+                overlayDescriptor = JSON.parse(nextSignature);
+            } catch (error) {
+                overlayDescriptor = null;
+            }
+            if (!overlayDescriptor) {
+                continue;
+            }
+            const { overlayType, label, originX, originY, slug } = overlayDescriptor;
+            const isStockpile = overlayType === 'stockpile';
+            cell.classList.toggle('stockpile-cell', isStockpile);
+            cell.classList.toggle('building-cell', !isStockpile);
             cell.dataset.building = 'true';
             cell.dataset.buildingOriginX = originX;
             cell.dataset.buildingOriginY = originY;
             cell.dataset.buildingName = label;
+            if (slug) {
+                cell.dataset.buildingType = slug;
+            } else {
+                delete cell.dataset.buildingType;
+            }
             const x = index % cols;
             const y = Math.floor(index / cols);
+            cell.classList.toggle('building-origin', x === originX && y === originY);
             cell.title = `${label} (${x}, ${y})`;
         }
 
@@ -2223,9 +2245,11 @@ document.addEventListener('DOMContentLoaded', () => {
         event.preventDefault();
         const zoomFactor = event.deltaY < 0 ? 1.1 : 0.9;
         const newZoom = Math.min(3, Math.max(0.5, viewportZoom * zoomFactor));
-        const rect = mapStage.getBoundingClientRect();
-        const cursorX = event.clientX - rect.left;
-        const cursorY = event.clientY - rect.top;
+        const surfaceElement = mapCanvas || mapStage;
+        if (!surfaceElement) return;
+        const surfaceRect = surfaceElement.getBoundingClientRect();
+        const cursorX = event.clientX - surfaceRect.left;
+        const cursorY = event.clientY - surfaceRect.top;
         const offsetX = (cursorX - viewportPan.x) / viewportZoom;
         const offsetY = (cursorY - viewportPan.y) / viewportZoom;
         viewportZoom = newZoom;
@@ -2235,11 +2259,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function beginMapDrag(event) {
+        const dragSurface = mapCanvas || mapStage;
+        if (!dragSurface) return;
         if (event.pointerType === 'mouse' && event.button !== 0) return;
         if (activePointerId !== null) return;
         activePointerId = event.pointerId;
         lastPointerPosition = { x: event.clientX, y: event.clientY };
-        mapStage.setPointerCapture(activePointerId);
+        dragSurface.setPointerCapture(activePointerId);
         autoFollowCamera = false;
     }
 
@@ -2255,7 +2281,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function endMapDrag(event) {
         if (activePointerId !== event.pointerId) return;
-        mapStage.releasePointerCapture(activePointerId);
+        const dragSurface = mapCanvas || mapStage;
+        if (dragSurface) {
+            dragSurface.releasePointerCapture(activePointerId);
+        }
         activePointerId = null;
     }
 
@@ -2300,12 +2329,13 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    if (mapStage) {
-        mapStage.addEventListener('pointerdown', beginMapDrag);
-        mapStage.addEventListener('pointermove', moveMapDrag);
-        mapStage.addEventListener('pointerup', endMapDrag);
-        mapStage.addEventListener('pointerleave', endMapDrag);
-        mapStage.addEventListener('wheel', handleWheelZoom, { passive: false });
+    const dragSurface = mapCanvas || mapStage;
+    if (dragSurface) {
+        dragSurface.addEventListener('pointerdown', beginMapDrag);
+        dragSurface.addEventListener('pointermove', moveMapDrag);
+        dragSurface.addEventListener('pointerup', endMapDrag);
+        dragSurface.addEventListener('pointerleave', endMapDrag);
+        dragSurface.addEventListener('wheel', handleWheelZoom, { passive: false });
     }
 
     if (followOverlay) {
@@ -2328,7 +2358,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // --- Initial State ---
-    openPanel('hud-panel');
     updateViewportTransform();
 
     // --- Initial Load & Interval ---
