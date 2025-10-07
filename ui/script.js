@@ -2344,7 +2344,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function performControlAction(url) {
         try {
-            await fetch(url, { method: 'POST' });
+            const response = await fetch(url, { method: 'GET' });
+            if (!response.ok) {
+                console.error(`Control action failed (${response.status}): ${url}`);
+                return;
+            }
             updateUI();
         } catch (error) {
             console.error('Error performing control action:', error);
