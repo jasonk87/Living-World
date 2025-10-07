@@ -41,6 +41,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const economyMarketList = document.getElementById('economy-market-list');
     const economyPressureList = document.getElementById('economy-pressure-list');
     const economyWageList = document.getElementById('economy-wage-list');
+    const economyIndustryList = document.getElementById('economy-industry-list');
     const economyCrimeNote = document.getElementById('economy-crime-note');
     const economyCampaignList = document.getElementById('economy-campaign-list');
     const environmentModifierList = document.getElementById('environment-modifier-list');
@@ -414,6 +415,24 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         };
 
+        const formatResourceMap = (mapping) => {
+            if (!mapping || typeof mapping !== 'object') {
+                return '';
+            }
+            return Object.entries(mapping)
+                .filter(([, amount]) => amount)
+                .map(([resource, amount]) => `${amount} ${resource}`)
+                .join(', ');
+        };
+
+        const businessLedgers = Array.isArray(report.business_ledgers) ? report.business_ledgers : [];
+        const businessSupplyAlerts = Array.isArray(report.business_supply_alerts)
+            ? report.business_supply_alerts
+            : [];
+        const findSupplyAlert = (id) => businessSupplyAlerts.find(alert => alert.id === id) || null;
+
+        addEconomyCount(businessSupplyAlerts);
+
         addEconomyCount(neighborhoodGatherings.length);
 
         if (hudPopulationValue) {
@@ -609,6 +628,47 @@ document.addEventListener('DOMContentLoaded', () => {
                         return `<li><strong>${entry.character}</strong>: ${amount}c for ${reason}${day}</li>`;
                     })
                     .join('');
+            }
+        }
+
+        if (economyIndustryList) {
+            if (!businessLedgers.length) {
+                economyIndustryList.innerHTML = '<li class="empty">No workshops active.</li>';
+            } else {
+                const items = businessLedgers.slice(0, 6).map(entry => {
+                    const industryLabel = entry.industry
+                        ? entry.industry.replace(/_/g, ' ')
+                        : 'enterprise';
+                    const details = [];
+                    if (typeof entry.net === 'number') {
+                        details.push(`Net ${entry.net}c`);
+                    }
+                    if (typeof entry.procurement === 'number' && entry.procurement) {
+                        details.push(`Supply cost ${entry.procurement}c`);
+                    }
+                    if (typeof entry.supply_ratio === 'number') {
+                        details.push(`${Math.round(entry.supply_ratio * 100)}% supply`);
+                    }
+                    const alert = findSupplyAlert(entry.id);
+                    const shortages = alert ? formatResourceMap(alert.shortages) : '';
+                    if (shortages) {
+                        details.push(`Needs ${shortages}`);
+                    } else {
+                        const outputs = formatResourceMap(entry.outputs);
+                        if (outputs) {
+                            details.push(`Made ${outputs}`);
+                        }
+                    }
+                    const primaryNote = Array.isArray(entry.notes)
+                        ? entry.notes.find(note => typeof note === 'string' && note.trim())
+                        : null;
+                    if (primaryNote) {
+                        details.push(primaryNote);
+                    }
+                    const subtitle = details.length ? details.join(' • ') : 'Stable output';
+                    return `<li><strong>${entry.name}</strong><small>${industryLabel} • ${subtitle}</small></li>`;
+                });
+                economyIndustryList.innerHTML = items.join('');
             }
         }
 

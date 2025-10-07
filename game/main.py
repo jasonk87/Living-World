@@ -53,7 +53,15 @@ def initialize_game_world():
     test_characters_list = [] # Reset for this initialization
 
     # Stockpiles (example setup)
-    wood_stockpile = Stockpile(name="WoodStore", x=0, y=3, width=1, height=1, allowed_resources=["Wood"], total_capacity=100)
+    wood_stockpile = Stockpile(
+        name="WoodStore",
+        x=0,
+        y=3,
+        width=1,
+        height=1,
+        allowed_resources=["Wood", "Lumber"],
+        total_capacity=100,
+    )
     wood_stockpile.add_item("Wood", 40)
     game_world.add_stockpile(wood_stockpile)
     game_world.ledger.update_stockpile_record(wood_stockpile.name, wood_stockpile.inventory, game_time_obj.current_day)

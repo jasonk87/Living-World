@@ -803,6 +803,95 @@ def test_manufacturing_crews_surface_shortages():
     assert report["alerts"] and any("Lumber" in alert for alert in report["alerts"])
     assert "inputs_consumed" not in carpentry_entry or not carpentry_entry["inputs_consumed"]
 
+
+def test_business_industry_consumes_inputs_and_reports():
+    world, _ = _make_world()
+
+    stockpile = Stockpile(
+        "Central",
+        0,
+        0,
+        2,
+        2,
+        allowed_resources=None,
+    )
+    world.add_stockpile(stockpile)
+    stockpile.add_item("Wood", 12)
+
+    owner = Character(
+        name="Mae",
+        personality="Driven",
+        traits=[],
+        skills={"Woodcutting": 2, "Carpentry": 3},
+        job="Sawyer",
+        needs=_standard_needs(),
+    )
+    owner.money = 100
+    world.add_character(owner)
+
+    template = {
+        "key": "test_lumber",
+        "display_name": "Test Lumberyard",
+        "industry": "lumberworks",
+        "startup_cost": 0,
+        "base_capital": 10,
+        "revenue_range": (0, 0),
+    }
+    business = world.launch_business(owner, template=template)
+    assert business is not None
+
+    report: Dict[str, Any] = {}
+    events = world._update_businesses(report)
+    assert events
+    event = next(evt for evt in events if evt["id"] == business["id"])
+    industry_report = event.get("industry_report")
+    assert industry_report
+    assert industry_report.get("cycles", 0) >= 1
+    assert industry_report.get("inputs_consumed", {}).get("Wood", 0) > 0
+    assert industry_report.get("outputs_created", {}).get("Lumber", 0) >= 1
+    assert stockpile.inventory.get("Wood", 0) < 12
+    assert not report.get("business_supply_alerts")
+
+
+def test_business_industry_shortage_creates_alert():
+    world, _ = _make_world()
+
+    owner = Character(
+        name="Darin",
+        personality="Steady",
+        traits=[],
+        skills={"Woodcutting": 1},
+        job="Sawyer",
+        needs=_standard_needs(),
+    )
+    owner.money = 50
+    world.add_character(owner)
+
+    template = {
+        "key": "test_lumber",
+        "display_name": "Test Lumberyard",
+        "industry": "lumberworks",
+        "startup_cost": 0,
+        "base_capital": 5,
+        "revenue_range": (0, 0),
+    }
+    business = world.launch_business(owner, template=template)
+    assert business is not None
+
+    report: Dict[str, Any] = {}
+    events = world._update_businesses(report)
+    assert events
+    event = next(evt for evt in events if evt["id"] == business["id"])
+    industry_report = event.get("industry_report")
+    assert industry_report
+    assert industry_report.get("cycles", 0) == 0
+    alerts = report.get("business_supply_alerts")
+    assert alerts
+    alert = next(alert for alert in alerts if alert["id"] == business["id"])
+    assert alert["shortages"].get("Wood", 0) > 0
+    assert any("Awaiting" in note for note in industry_report.get("notes", []))
+
+
 def test_family_arrival_event_and_profile():
     world, _ = _make_world()
     alice = Character(

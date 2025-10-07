@@ -1,6 +1,7 @@
 # game/world.py
 from __future__ import annotations
 
+import math
 import random
 from collections import Counter, defaultdict
 from copy import deepcopy
@@ -5325,6 +5326,7 @@ class World:
             "employees": [],
             "cash_reserve": 0,
             "history": [],
+            "inventory": {},
         }
         self.businesses[business_id] = business
 
@@ -5402,6 +5404,220 @@ class World:
             if employee:
                 employee.leave_business_role(business_id, f"Left employment at {business['name']}.")
 
+    def _restock_business_inputs(
+        self,
+        business: Dict[str, Any],
+        profile: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        inventory: Dict[str, int] = business.setdefault("inventory", {})
+        restock_days = max(1, int(profile.get("restock_days", 1) or 1))
+        procurement_multiplier = max(
+            0.0, float(profile.get("procurement_cost_multiplier", 0.0) or 0.0)
+        )
+
+        restocked: Dict[str, int] = {}
+        shortages: Dict[str, int] = {}
+        total_cost = 0
+
+        for resource_name, per_cycle in profile.get("inputs", {}).items():
+            required_per_cycle = int(math.ceil(per_cycle)) if per_cycle else 0
+            if required_per_cycle <= 0:
+                continue
+            target_quantity = required_per_cycle * restock_days
+            current_quantity = int(inventory.get(resource_name, 0))
+            needed = max(0, target_quantity - current_quantity)
+            if needed <= 0:
+                continue
+
+            taken = self._withdraw_from_stockpiles(resource_name, needed)
+            if taken > 0:
+                inventory[resource_name] = current_quantity + taken
+                restocked[resource_name] = restocked.get(resource_name, 0) + taken
+                unit_price = self.get_market_price(resource_name)
+                total_cost += int(round(unit_price * procurement_multiplier * taken))
+            shortage = needed - taken
+            if shortage > 0:
+                shortages[resource_name] = shortage
+
+        return {
+            "restocked": restocked,
+            "shortages": shortages,
+            "procurement_cost": total_cost,
+        }
+
+    def _run_business_industry_cycle(
+        self,
+        business: Dict[str, Any],
+        profile: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        inventory: Dict[str, int] = business.setdefault("inventory", {})
+        report: Dict[str, Any] = {
+            "restocked": {},
+            "shortages": {},
+            "inputs_consumed": {},
+            "outputs_created": {},
+            "notes": [],
+            "procurement_cost": 0,
+            "sale_value": 0,
+            "cycles": 0,
+            "supply_ratio": 0.0,
+            "efficiency_multiplier": float(profile.get("base_efficiency", 1.0)),
+        }
+
+        restock_report = self._restock_business_inputs(business, profile)
+        report["restocked"] = restock_report.get("restocked", {})
+        report["shortages"] = dict(restock_report.get("shortages", {}))
+        report["procurement_cost"] = restock_report.get("procurement_cost", 0)
+
+        active_employees: List['Character'] = []
+        for employee_name in business.get("employees", []):
+            employee = self.get_character_by_name(employee_name)
+            if not employee or getattr(employee, "retired", False):
+                continue
+            active_employees.append(employee)
+
+        available_cycles = max(0.0, float(profile.get("base_cycles", 1.0)))
+        available_cycles += len(active_employees) * float(profile.get("per_employee_cycles", 0.0))
+
+        owner = self.get_character_by_name(business.get("owner", ""))
+        participants: List['Character'] = []
+        if owner and not getattr(owner, "retired", False):
+            participants.append(owner)
+        participants.extend(active_employees)
+
+        skill_weights = profile.get("skill_weights", {})
+        raw_skill = 0.0
+        for character in participants:
+            skills = getattr(character, "skills", {})
+            for skill_name, weight in skill_weights.items():
+                if weight <= 0:
+                    continue
+                skill_entry = skills.get(skill_name, 0)
+                if isinstance(skill_entry, dict):
+                    skill_level = skill_entry.get("level", 0)
+                else:
+                    skill_level = skill_entry
+                raw_skill += float(skill_level) * float(weight)
+
+        skill_target = max(1.0, float(profile.get("skill_target", 8.0)))
+        normalized_skill = raw_skill / skill_target
+        available_cycles += normalized_skill * float(profile.get("skill_cycle_bonus", 0.0))
+
+        max_cycles = int(round(available_cycles))
+        if available_cycles > 0 and max_cycles == 0:
+            max_cycles = 1
+        if max_cycles < 0:
+            max_cycles = 0
+
+        inputs: Dict[str, int] = {}
+        inventory_levels: Dict[str, int] = {}
+        for resource_name, amount in profile.get("inputs", {}).items():
+            required = int(math.ceil(amount)) if amount else 0
+            if required <= 0:
+                continue
+            inputs[resource_name] = required
+            inventory_levels[resource_name] = int(inventory.get(resource_name, 0))
+
+        if inputs:
+            cycle_limits: List[int] = []
+            for resource_name, required in inputs.items():
+                available = inventory_levels.get(resource_name, 0)
+                if required <= 0:
+                    continue
+                cycle_limits.append(available // required)
+            max_cycles_by_inventory = min(cycle_limits) if cycle_limits else 0
+        else:
+            max_cycles_by_inventory = max_cycles
+
+        cycles = min(max_cycles, max_cycles_by_inventory)
+        supply_ratio = 0.0 if max_cycles <= 0 else cycles / max(1, max_cycles)
+        report["cycles"] = cycles
+        report["supply_ratio"] = supply_ratio
+
+        base_efficiency = float(profile.get("base_efficiency", 1.0))
+        supply_weight = float(profile.get("supply_weight", 0.0))
+        skill_weight = float(profile.get("skill_weight", 0.0))
+        efficiency = base_efficiency + (supply_ratio * supply_weight) + (max(0.0, normalized_skill) * skill_weight)
+        floor = float(profile.get("efficiency_floor", 0.0))
+        ceiling = float(profile.get("efficiency_ceiling", 2.0))
+        report["efficiency_multiplier"] = max(floor, min(ceiling, efficiency))
+
+        if cycles <= 0:
+            if max_cycles == 0:
+                report["notes"].append("No staffed shifts to run production.")
+            elif inputs:
+                lacking: List[tuple[str, int]] = []
+                for resource_name, required in inputs.items():
+                    available = inventory_levels.get(resource_name, 0)
+                    if available < required:
+                        deficit = required - available
+                        lacking.append((resource_name, deficit))
+                        report["shortages"][resource_name] = max(
+                            report["shortages"].get(resource_name, 0), deficit
+                        )
+                if lacking:
+                    formatted = ", ".join(f"{amount} {resource}" for resource, amount in lacking)
+                    report["notes"].append(f"Awaiting inputs: {formatted}")
+            return report
+
+        consumed: Dict[str, int] = {}
+        for resource_name, required in inputs.items():
+            if required <= 0:
+                continue
+            total_needed = required * cycles
+            if total_needed <= 0:
+                continue
+            current_quantity = inventory.get(resource_name, 0)
+            new_quantity = max(0, current_quantity - total_needed)
+            inventory[resource_name] = new_quantity
+            if new_quantity == 0:
+                inventory.pop(resource_name, None)
+            consumed[resource_name] = total_needed
+        if consumed:
+            report["inputs_consumed"] = consumed
+
+        sale_value = float(profile.get("sale_value_per_cycle", 0)) * cycles
+        sale_multiplier = float(profile.get("sale_value_multiplier", 0.0))
+        outputs_created: Dict[str, int] = {}
+        deposited: Dict[str, int] = {}
+
+        for resource_name, amount in profile.get("outputs", {}).items():
+            output_per_cycle = int(math.ceil(amount)) if amount else 0
+            if output_per_cycle <= 0:
+                continue
+            produced = output_per_cycle * cycles
+            if produced <= 0:
+                continue
+            outputs_created[resource_name] = produced
+            unit_price = self.get_market_price(resource_name)
+            if sale_multiplier:
+                sale_value += int(round(unit_price * sale_multiplier * produced))
+            if profile.get("store_outputs"):
+                inventory[resource_name] = inventory.get(resource_name, 0) + produced
+            if profile.get("deposit_outputs"):
+                deposit_result = self._deposit_work_output(resource_name, produced)
+                delivered = deposit_result.get("delivered", 0)
+                if delivered:
+                    deposited[resource_name] = deposited.get(resource_name, 0) + delivered
+                overflow = deposit_result.get("overflow", 0)
+                if overflow:
+                    report.setdefault("overflow", {})[resource_name] = overflow
+
+        if outputs_created:
+            report["outputs_created"] = outputs_created
+        if deposited:
+            report["deposited"] = deposited
+
+        report["sale_value"] = int(round(sale_value))
+
+        if report["shortages"]:
+            formatted = ", ".join(
+                f"{amount} {resource}" for resource, amount in report["shortages"].items()
+            )
+            report["notes"].append(f"Short on {formatted} for future orders.")
+
+        return report
+
     def _close_business(self, business: Dict[str, Any], reason: str) -> None:
         if business.get("status") == "closed":
             return
@@ -5443,6 +5659,10 @@ class World:
         failure_threshold = getattr(config, "BUSINESS_FAILURE_THRESHOLD", -15)
         recovery_bonus = getattr(config, "BUSINESS_RECOVERY_BONUS", 0.0)
         reputation_bonus = getattr(config, "BUSINESS_REPUTATION_BONUS", 0)
+        industry_profiles = getattr(config, "BUSINESS_INDUSTRY_PROFILES", {})
+
+        supply_alerts: List[Dict[str, Any]] = report.setdefault("business_supply_alerts", [])
+        ledgers: List[Dict[str, Any]] = report.setdefault("business_ledgers", [])
 
         for business_id, business in list(self.businesses.items()):
             if business.get("status") != "active":
@@ -5455,10 +5675,25 @@ class World:
             if revenue_low > revenue_high:
                 revenue_low, revenue_high = revenue_high, revenue_low
 
-            gross = random.randint(int(revenue_low), int(revenue_high))
-            gross += int(business.get("capital", 0) * capital_factor)
+            base_gross = random.randint(int(revenue_low), int(revenue_high))
+            base_gross += int(business.get("capital", 0) * capital_factor)
             if revenue_variance:
-                gross = max(0, int(gross * random.uniform(1 - revenue_variance, 1 + revenue_variance)))
+                base_gross = max(
+                    0, int(base_gross * random.uniform(1 - revenue_variance, 1 + revenue_variance))
+                )
+
+            profile = industry_profiles.get(business.get("industry"))
+            industry_report: Optional[Dict[str, Any]] = None
+            gross = base_gross
+            procurement_cost = 0
+            if profile:
+                industry_report = self._run_business_industry_cycle(business, profile)
+                procurement_cost = int(industry_report.get("procurement_cost", 0))
+                efficiency_multiplier = float(industry_report.get("efficiency_multiplier", 1.0) or 0.0)
+                gross = max(0, int(round(gross * efficiency_multiplier)))
+                gross += int(industry_report.get("sale_value", 0))
+            else:
+                business.pop("inventory", None)
 
             payroll_total = 0
             paid_workers: List[str] = []
@@ -5470,7 +5705,7 @@ class World:
                 payroll_total += wage
                 paid_workers.append(employee.name)
 
-            expenses = base_cost + payroll_total
+            expenses = base_cost + payroll_total + procurement_cost
             owner_draw = 0
             owner = self.get_character_by_name(business.get("owner", ""))
             if owner and gross > expenses and owner_draw_limit > 0:
@@ -5489,6 +5724,11 @@ class World:
                 business["capital"] = business.get("capital", 0) + net_profit
             business["cash_reserve"] = max(0, business.get("cash_reserve", 0) + net_profit)
 
+            if industry_report:
+                business["last_industry_report"] = dict(industry_report)
+            elif "last_industry_report" in business:
+                del business["last_industry_report"]
+
             if owner and net_profit > 0 and reputation_bonus:
                 owner.update_reputation(reputation_bonus, f"Profitable day at {business['name']}", self)
 
@@ -5498,9 +5738,44 @@ class World:
                 "net": net_profit,
                 "payroll": payroll_total,
                 "owner_draw": owner_draw,
+                "procurement": procurement_cost,
             }
+            if industry_report:
+                history_entry["supply_ratio"] = industry_report.get("supply_ratio")
+                history_entry["cycles"] = industry_report.get("cycles")
             business.setdefault("history", []).append(history_entry)
             business["history"] = business["history"][-14:]
+
+            if industry_report and industry_report.get("shortages"):
+                shortages = {
+                    resource: amount
+                    for resource, amount in industry_report.get("shortages", {}).items()
+                    if amount > 0
+                }
+                if shortages:
+                    supply_alerts.append(
+                        {
+                            "id": business_id,
+                            "name": business.get("name"),
+                            "industry": business.get("industry"),
+                            "shortages": shortages,
+                        }
+                    )
+
+            ledger_entry: Dict[str, Any] = {
+                "id": business_id,
+                "name": business.get("name"),
+                "industry": business.get("industry"),
+                "gross": gross,
+                "net": net_profit,
+                "payroll": payroll_total,
+                "procurement": procurement_cost,
+            }
+            if industry_report:
+                ledger_entry["supply_ratio"] = industry_report.get("supply_ratio")
+                ledger_entry["notes"] = list(industry_report.get("notes", []))
+                ledger_entry["outputs"] = dict(industry_report.get("outputs_created", {}))
+            ledgers.append(ledger_entry)
 
             if business.get("capital", 0) <= failure_threshold:
                 self._close_business(business, "insolvency")
@@ -5515,18 +5790,20 @@ class World:
                 )
                 continue
 
-            events.append(
-                {
-                    "id": business_id,
-                    "name": business.get("name"),
-                    "gross": gross,
-                    "net": net_profit,
-                    "payroll": payroll_total,
-                    "owner_draw": owner_draw,
-                    "status": "active",
-                    "employees_paid": paid_workers,
-                }
-            )
+            event_payload: Dict[str, Any] = {
+                "id": business_id,
+                "name": business.get("name"),
+                "gross": gross,
+                "net": net_profit,
+                "payroll": payroll_total,
+                "owner_draw": owner_draw,
+                "status": "active",
+                "employees_paid": paid_workers,
+                "industry": business.get("industry"),
+            }
+            if industry_report:
+                event_payload["industry_report"] = industry_report
+            events.append(event_payload)
 
         report["business_events"] = events
         return events
@@ -6946,6 +7223,21 @@ class World:
                 self.add_event_log_message(
                     f"{business_event.get('name')} netted {net} coin{'s' if net != 1 else ''} after payroll."
                 )
+                industry_report = business_event.get("industry_report") or {}
+                notes = industry_report.get("notes") or []
+                for note in notes:
+                    self.add_event_log_message(f"{business_event.get('name')}: {note}")
+                outputs_created = industry_report.get("outputs_created") or {}
+                if outputs_created:
+                    output_summary = ", ".join(
+                        f"{amount} {resource}"
+                        for resource, amount in outputs_created.items()
+                        if amount
+                    )
+                    if output_summary:
+                        self.add_event_log_message(
+                            f"{business_event.get('name')} produced {output_summary}."
+                        )
         for crime_event in report.get("crime_events", []):
             self.add_event_log_message(f"Security report: {crime_event['description']}.")
 
