@@ -288,6 +288,46 @@ button:focus-visible {
     transition: background 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
 }
 
+.map-cell.resource-node {
+    box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.18);
+}
+
+.map-cell.resource-node::after {
+    content: '';
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    font-size: calc(var(--tile-size) * 0.45);
+    line-height: 1;
+    pointer-events: none;
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.35));
+}
+
+.map-cell.resource-wood::after {
+    content: '🌲';
+}
+
+.map-cell.resource-stone::after {
+    content: '⛰️';
+}
+
+.map-cell.resource-herbs::after {
+    content: '🌿';
+}
+
+.map-cell.resource-food::after {
+    content: '🌾';
+}
+
+.map-cell.resource-water::after {
+    content: '💧';
+}
+
+.map-cell.resource-depleted::after {
+    opacity: 0.45;
+    filter: grayscale(0.85) drop-shadow(0 1px 2px rgba(0, 0, 0, 0.2));
+}
+
 .tile-Grass {
     background: linear-gradient(135deg, #9dd86f 0%, #6cbf59 100%);
 }
@@ -305,6 +345,28 @@ button:focus-visible {
         radial-gradient(circle at 30% 30%, rgba(22, 86, 46, 0.88) 0, rgba(22, 86, 46, 0.88) 28%, transparent 34%),
         radial-gradient(circle at 70% 70%, rgba(18, 72, 40, 0.82) 0, rgba(18, 72, 40, 0.82) 26%, transparent 34%),
         linear-gradient(135deg, #3c7a3b 0%, #2d5f2e 100%);
+}
+
+.tile-Wood {
+    background:
+        radial-gradient(circle at 25% 30%, rgba(24, 92, 48, 0.92) 0, rgba(24, 92, 48, 0.92) 24%, transparent 36%),
+        radial-gradient(circle at 70% 60%, rgba(18, 70, 38, 0.88) 0, rgba(18, 70, 38, 0.88) 22%, transparent 34%),
+        linear-gradient(135deg, #2f6b30 0%, #235229 100%);
+    border-color: rgba(12, 54, 27, 0.45);
+}
+
+.tile-Stone {
+    background:
+        linear-gradient(135deg, #a9b0ba 0%, #7a8089 45%, #5c626a 100%);
+    border-color: rgba(62, 69, 77, 0.55);
+}
+
+.tile-Herbs {
+    background:
+        radial-gradient(circle at 22% 28%, rgba(142, 202, 114, 0.9) 0, rgba(142, 202, 114, 0.9) 26%, transparent 38%),
+        radial-gradient(circle at 68% 72%, rgba(112, 180, 92, 0.85) 0, rgba(112, 180, 92, 0.85) 24%, transparent 36%),
+        linear-gradient(135deg, #b8e38c 0%, #87c768 100%);
+    border-color: rgba(102, 161, 85, 0.5);
 }
 
 .tile-River,

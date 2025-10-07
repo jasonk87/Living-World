@@ -13,6 +13,120 @@ MAX_SIMULATION_DAYS = 20 # Max days the simulation runs for in headless/test mod
 # Navigation & movement
 IMPASSABLE_TERRAINS = {"Mountain", "Water", "DeepWater", "Chasm", "Void"}
 
+# World Map Generation
+MAP_DEFAULT_SIZE = (30, 30)
+MAP_RANDOM_SEED = None  # Set to an int to make initial landscapes deterministic
+MAP_GENERATION_DISABLED = False
+MAP_RESERVED_CLEARING_RADIUS = 2
+MAP_EDGE_BUFFER = 1
+MAP_FEATURE_MARGIN = 1
+MAP_RESERVED_COORDS = []
+
+MAP_TERRAIN_FEATURES = [
+    {
+        "key": "water",
+        "tile": "Water",
+        "clusters": (2, 3),
+        "radius": (3, 4),
+        "scatter": (1, 2),
+        "roughness": 0.45,
+        "preserve_tiles": ["Water", "DeepWater"],
+        "allow_overwrite": True,
+    },
+    {
+        "key": "forest",
+        "tile": "Forest",
+        "clusters": (4, 6),
+        "radius": (3, 4),
+        "scatter": (1, 2),
+        "roughness": 0.35,
+        "avoid_tiles": ["Water", "DeepWater"],
+    },
+    {
+        "key": "meadow",
+        "tile": "Meadow",
+        "clusters": (3, 4),
+        "radius": (2, 3),
+        "scatter": (1, 2),
+        "roughness": 0.4,
+        "avoid_tiles": ["Water", "DeepWater"],
+    },
+    {
+        "key": "rockfield",
+        "tile": "Rocks",
+        "clusters": (2, 3),
+        "radius": (2, 3),
+        "scatter": 1,
+        "roughness": 0.5,
+        "avoid_tiles": ["Water", "DeepWater"],
+    },
+]
+
+MAP_SCATTERED_TILES = [
+    {"tile": "Clearing", "count": (12, 18), "avoid_tiles": ["Water", "DeepWater"]},
+    {"tile": "Path", "count": (18, 26), "avoid_tiles": ["Water", "DeepWater"]},
+]
+
+MAP_RESOURCE_CLUSTERS = [
+    {
+        "resource": "Wood",
+        "tile": "Wood",
+        "clusters": (6, 8),
+        "radius": (2, 3),
+        "scatter": 1,
+        "density": (6, 9),
+        "prefer_feature": "forest",
+        "base_tiles": ["Forest"],
+    },
+    {
+        "resource": "Stone",
+        "tile": "Stone",
+        "clusters": (3, 4),
+        "radius": (1, 2),
+        "scatter": 1,
+        "density": (4, 6),
+        "prefer_feature": "rockfield",
+        "base_tiles": ["Rocks", "Stone"],
+    },
+    {
+        "resource": "Herbs",
+        "tile": "Herbs",
+        "clusters": (3, 4),
+        "radius": (1, 2),
+        "scatter": 1,
+        "density": (4, 7),
+        "prefer_feature": "meadow",
+        "base_tiles": ["Meadow"],
+        "allow_base_conversion": True,
+        "paint_tile": "Meadow",
+    },
+    {
+        "resource": "Food",
+        "tile": "Fields",
+        "clusters": (3, 4),
+        "radius": (1, 2),
+        "scatter": 1,
+        "density": (5, 9),
+        "base_tiles": ["Fields", "Meadow", "Grass"],
+        "allow_base_conversion": True,
+        "paint_tile": "Fields",
+        "feature_key": "farmland",
+    },
+    {
+        "resource": "Water",
+        "tile": "Water",
+        "clusters": (2, 3),
+        "radius": (1, 2),
+        "scatter": 0,
+        "density": (3, 5),
+        "prefer_feature": "water",
+        "base_tiles": ["Water"],
+        "allow_base_conversion": False,
+    },
+]
+
+STRUCTURE_FOUNDATION_TILE = "Flagstone"
+
 # Day & Night Phases
 DAY_PHASE_CONFIG = [
     {"key": "dawn", "name": "Dawn Preparations", "start_tick": 0, "description": "Citizens rise, stretch, and ready for the day."},

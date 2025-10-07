@@ -42,6 +42,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const housingStoryList = document.getElementById('housing-story-list');
     const neighborhoodGatheringList = document.getElementById('neighborhood-gathering-list');
     const resourceNodeList = document.getElementById('resource-node-list');
+    const landscapeSummaryList = document.getElementById('landscape-summary-list');
     const populationEventList = document.getElementById('population-event-list');
     const weatherEventNote = document.getElementById('environment-weather-event');
     const workCrewNote = document.getElementById('work-crew-note');
@@ -90,6 +91,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let lastPointerPosition = { x: 0, y: 0 };
     let mapTerrainCache = [];
     let mapOverlayCache = [];
+    let mapResourceCache = [];
     let mapRevisionStamp = null;
 
     const rosterCardCache = new Map();
@@ -605,6 +607,38 @@ document.addEventListener('DOMContentLoaded', () => {
                         return `<li><strong>${node.resource}</strong> @ (${loc}) • ${status}</li>`;
                     })
                     .join('');
+            }
+        }
+
+        if (landscapeSummaryList) {
+            const landscape = gameState.landscape || {};
+            const tileEntries = Object.entries(landscape.tiles || {});
+            const resourceEntries = Object.entries(landscape.resources || {});
+            if (!tileEntries.length && !resourceEntries.length) {
+                landscapeSummaryList.innerHTML = '<li class="empty">Landscape survey pending.</li>';
+            } else {
+                const tileHighlights = tileEntries
+                    .filter(([name]) => name && name !== 'Grass')
+                    .sort((a, b) => (b[1] || 0) - (a[1] || 0))
+                    .slice(0, 4)
+                    .map(([name, count]) => `${name} ${Number(count || 0).toLocaleString()}`);
+                const resourceHighlights = resourceEntries
+                    .sort((a, b) => (b[1] || 0) - (a[1] || 0))
+                    .slice(0, 4)
+                    .map(([name, count]) => `${name} ${Number(count || 0).toLocaleString()}`);
+                const rows = [];
+                if (tileHighlights.length) {
+                    rows.push(`<li><strong>Terrain</strong>: ${tileHighlights.join(', ')}</li>`);
+                }
+                if (resourceHighlights.length) {
+                    rows.push(`<li><strong>Resources</strong>: ${resourceHighlights.join(', ')}</li>`);
+                }
+                if (Number.isFinite(landscape.reserved) && landscape.reserved > 0) {
+                    rows.push(`<li class="muted">Reserved tiles: ${landscape.reserved}</li>`);
+                }
+                landscapeSummaryList.innerHTML = rows.length
+                    ? rows.join('')
+                    : '<li class="empty">Landscape survey pending.</li>';
             }
         }
 
@@ -2199,9 +2233,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const incomingRevision = typeof gameState.map_revision === 'number' ? gameState.map_revision : null;
         const revisionChanged = incomingRevision !== null && incomingRevision !== mapRevisionStamp;
-        if (needsRebuild || revisionChanged || mapTerrainCache.length !== totalCells || mapOverlayCache.length !== totalCells) {
+        if (
+            needsRebuild
+            || revisionChanged
+            || mapTerrainCache.length !== totalCells
+            || mapOverlayCache.length !== totalCells
+            || mapResourceCache.length !== totalCells
+        ) {
             mapTerrainCache = new Array(totalCells).fill(null);
             mapOverlayCache = new Array(totalCells).fill(null);
+            mapResourceCache = new Array(totalCells).fill(null);
         }
         mapRevisionStamp = incomingRevision;
 
@@ -2346,6 +2387,85 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         mapOverlayCache = nextOverlayCache;
+
+        const resourceNodes = Array.isArray(gameState.resource_nodes) ? gameState.resource_nodes : [];
+        const nextResourceCache = new Array(totalCells).fill(null);
+
+        resourceNodes.forEach(node => {
+            if (!node || !Array.isArray(node.location) || node.location.length < 2) return;
+            const rawX = Number(node.location[0]);
+            const rawY = Number(node.location[1]);
+            if (!Number.isFinite(rawX) || !Number.isFinite(rawY)) return;
+            const x = Math.floor(rawX);
+            const y = Math.floor(rawY);
+            if (x < 0 || y < 0 || x >= cols || y >= rows) return;
+            const resourceName = typeof node.resource === 'string' ? node.resource : 'Resource';
+            const slug = resourceName
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, '-')
+                .replace(/^-+|-+$/g, '');
+            const depleted = Boolean(node.depleted);
+            const signature = `${resourceName}|${slug}|${depleted ? '1' : '0'}`;
+            const index = y * cols + x;
+            nextResourceCache[index] = signature;
+        });
+
+        for (let index = 0; index < totalCells; index++) {
+            const cell = cells[index];
+            if (!cell) continue;
+            const prevSignature = mapResourceCache[index];
+            const nextSignature = nextResourceCache[index];
+            if (prevSignature === nextSignature && !needsRebuild) {
+                continue;
+            }
+
+            if (prevSignature) {
+                const [, prevSlug = ''] = prevSignature.split('|');
+                cell.classList.remove('resource-node', 'resource-depleted');
+                if (prevSlug) {
+                    cell.classList.remove(`resource-${prevSlug}`);
+                }
+                if (cell.dataset.resource) {
+                    delete cell.dataset.resource;
+                    delete cell.dataset.resourceStatus;
+                }
+            }
+
+            if (nextSignature) {
+                const [resourceName = '', slug = '', flag = '0'] = nextSignature.split('|');
+                const isDepleted = flag === '1';
+                cell.classList.add('resource-node');
+                if (slug) {
+                    cell.classList.add(`resource-${slug}`);
+                }
+                cell.classList.toggle('resource-depleted', isDepleted);
+                cell.dataset.resource = resourceName;
+                cell.dataset.resourceStatus = isDepleted ? 'depleted' : 'active';
+                if (cell.dataset.building !== 'true') {
+                    const baseTitle = cell.dataset.baseTitle || mapTerrainCache[index] || 'Unknown';
+                    const x = index % cols;
+                    const y = Math.floor(index / cols);
+                    const label = isDepleted ? `${resourceName} (depleted)` : resourceName;
+                    cell.title = `${label} • ${baseTitle} (${x}, ${y})`;
+                }
+            } else {
+                const [ , prevSlug = '' ] = prevSignature ? prevSignature.split('|') : [];
+                if (prevSlug) {
+                    cell.classList.remove(`resource-${prevSlug}`);
+                }
+                cell.classList.remove('resource-node', 'resource-depleted');
+                delete cell.dataset.resource;
+                delete cell.dataset.resourceStatus;
+                if (cell.dataset.building !== 'true' && !needsRebuild) {
+                    const baseTitle = cell.dataset.baseTitle || mapTerrainCache[index] || 'Unknown';
+                    const x = index % cols;
+                    const y = Math.floor(index / cols);
+                    cell.title = `${baseTitle} (${x}, ${y})`;
+                }
+            }
+
+            mapResourceCache[index] = nextSignature;
+        }
     }
 
     function onMapCellClick(event) {

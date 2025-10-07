@@ -37,9 +37,17 @@ if TYPE_CHECKING:
 class World:
     SEASONS = ["Spring", "Summer", "Autumn", "Winter"]
 
-    def __init__(self, grid_size: tuple[int, int] = (10, 10), game_time_ref: Optional[Time] = None):
-        self.grid_size = grid_size
-        self.grid = [["Grass" for _ in range(grid_size[1])] for _ in range(grid_size[0])]
+    def __init__(
+        self,
+        grid_size: Optional[tuple[int, int]] = None,
+        game_time_ref: Optional[Time] = None,
+        map_seed: Optional[int] = None,
+    ):
+        if grid_size is None:
+            default_size = getattr(config, "MAP_DEFAULT_SIZE", (10, 10))
+            grid_size = (int(default_size[0]), int(default_size[1]))
+        self.grid_size = (int(grid_size[0]), int(grid_size[1]))
+        self.grid = [["Grass" for _ in range(self.grid_size[1])] for _ in range(self.grid_size[0])]
         self.resources: Dict[str, List[Dict[str, Any]]] = {}
         self.season_index = 0
         self.season = World.SEASONS[self.season_index]
@@ -170,6 +178,550 @@ class World:
         self._family_lookup: Dict[str, str] = {}
         self.family_history: List[Dict[str, Any]] = []
         self._character_lineage: Dict[str, Dict[str, Set[str]]] = {}
+
+        seed = map_seed if map_seed is not None else getattr(config, "MAP_RANDOM_SEED", None)
+        self._map_rng = random.Random(seed)
+        self.natural_features: Dict[str, Set[Tuple[int, int]]] = defaultdict(set)
+        self._reserved_land_tiles: Set[Tuple[int, int]] = set()
+        self._feature_margin: int = max(0, getattr(config, "MAP_FEATURE_MARGIN", 0))
+        self.landscape_profile: Dict[str, Any] = {}
+        self._generate_initial_landscape()
+
+    # --- Map & Landscape Generation -------------------------------------------------
+
+    def _generate_initial_landscape(self) -> None:
+        if getattr(config, "MAP_GENERATION_DISABLED", False):
+            total_tiles = self.grid_size[0] * self.grid_size[1]
+            self.landscape_profile = {
+                "tiles": {"Grass": total_tiles},
+                "resources": {},
+                "reserved": 0,
+            }
+            return
+
+        self._prepare_reserved_tiles()
+
+        terrain_features = getattr(config, "MAP_TERRAIN_FEATURES", None)
+        if not terrain_features:
+            terrain_features = self._default_terrain_features()
+        for feature in terrain_features:
+            self._apply_terrain_feature(feature)
+
+        scatter_defs = getattr(config, "MAP_SCATTERED_TILES", None)
+        if not scatter_defs:
+            scatter_defs = self._default_scatter_tiles()
+        for scatter in scatter_defs:
+            self._scatter_tile(scatter)
+
+        resource_defs = getattr(config, "MAP_RESOURCE_CLUSTERS", None)
+        if not resource_defs:
+            resource_defs = self._default_resource_clusters()
+        self._seed_resource_clusters(resource_defs)
+
+        self._record_landscape_profile()
+
+    def _prepare_reserved_tiles(self) -> None:
+        self._reserved_land_tiles.clear()
+        rows, cols = self.grid_size
+
+        edge_buffer = max(0, getattr(config, "MAP_EDGE_BUFFER", 0))
+        if edge_buffer:
+            for x in range(rows):
+                for y in range(cols):
+                    if (
+                        x < edge_buffer
+                        or y < edge_buffer
+                        or x >= rows - edge_buffer
+                        or y >= cols - edge_buffer
+                    ):
+                        self._reserved_land_tiles.add((x, y))
+
+        radius = max(0, getattr(config, "MAP_RESERVED_CLEARING_RADIUS", 0))
+        if radius:
+            center = (rows // 2, cols // 2)
+            for x in range(rows):
+                for y in range(cols):
+                    if abs(x - center[0]) <= radius and abs(y - center[1]) <= radius:
+                        self._reserved_land_tiles.add((x, y))
+
+        for coord in getattr(config, "MAP_RESERVED_COORDS", []):
+            if isinstance(coord, (list, tuple)) and len(coord) == 2:
+                cx, cy = int(coord[0]), int(coord[1])
+                if 0 <= cx < rows and 0 <= cy < cols:
+                    self._reserved_land_tiles.add((cx, cy))
+
+    def _default_terrain_features(self) -> List[Dict[str, Any]]:
+        return [
+            {
+                "key": "water",
+                "tile": "Water",
+                "clusters": (1, 2),
+                "radius": (2, 3),
+                "scatter": (1, 2),
+                "roughness": 0.55,
+                "preserve_tiles": ["Water", "DeepWater"],
+            },
+            {
+                "key": "forest",
+                "tile": "Forest",
+                "clusters": (3, 4),
+                "radius": (2, 3),
+                "scatter": (1, 2),
+                "roughness": 0.4,
+                "avoid_tiles": ["Water", "DeepWater"],
+            },
+            {
+                "key": "meadow",
+                "tile": "Meadow",
+                "clusters": (2, 3),
+                "radius": (2, 3),
+                "scatter": (1, 2),
+                "roughness": 0.45,
+                "avoid_tiles": ["Water", "DeepWater"],
+            },
+            {
+                "key": "rockfield",
+                "tile": "Rocks",
+                "clusters": (1, 2),
+                "radius": (1, 2),
+                "scatter": 1,
+                "roughness": 0.5,
+                "avoid_tiles": ["Water", "DeepWater"],
+            },
+        ]
+
+    def _default_scatter_tiles(self) -> List[Dict[str, Any]]:
+        return [
+            {"tile": "Clearing", "count": (6, 10), "avoid_tiles": ["Water", "DeepWater"]},
+            {"tile": "Path", "count": (12, 18), "avoid_tiles": ["Water", "DeepWater"]},
+        ]
+
+    def _default_resource_clusters(self) -> List[Dict[str, Any]]:
+        return [
+            {
+                "resource": "Wood",
+                "tile": "Wood",
+                "clusters": (3, 5),
+                "radius": (1, 2),
+                "scatter": 1,
+                "density": (4, 6),
+                "prefer_feature": "forest",
+                "base_tiles": ["Forest"],
+            },
+            {
+                "resource": "Stone",
+                "tile": "Stone",
+                "clusters": (2, 3),
+                "radius": (1, 1),
+                "scatter": 1,
+                "density": (3, 5),
+                "prefer_feature": "rockfield",
+                "base_tiles": ["Rocks", "Stone"],
+            },
+            {
+                "resource": "Herbs",
+                "tile": "Herbs",
+                "clusters": (2, 3),
+                "radius": (1, 2),
+                "scatter": 1,
+                "density": (3, 6),
+                "prefer_feature": "meadow",
+                "base_tiles": ["Meadow"],
+                "allow_base_conversion": True,
+                "paint_tile": "Meadow",
+            },
+            {
+                "resource": "Food",
+                "tile": "Fields",
+                "clusters": (2, 3),
+                "radius": (1, 2),
+                "scatter": 1,
+                "density": (4, 8),
+                "base_tiles": ["Fields", "Meadow", "Grass"],
+                "allow_base_conversion": True,
+                "paint_tile": "Fields",
+                "feature_key": "farmland",
+            },
+            {
+                "resource": "Water",
+                "tile": "Water",
+                "clusters": (1, 2),
+                "radius": (1, 1),
+                "scatter": 0,
+                "density": (2, 4),
+                "prefer_feature": "water",
+                "base_tiles": ["Water"],
+                "allow_base_conversion": False,
+            },
+        ]
+
+    def _resolve_range(self, spec: Any, default: int = 0) -> int:
+        if spec is None:
+            return default
+        if isinstance(spec, range):
+            spec = list(spec)
+        if isinstance(spec, (list, tuple)):
+            if not spec:
+                return default
+            if len(spec) == 1:
+                return int(spec[0])
+            lo, hi = spec[0], spec[1]
+            if lo > hi:
+                lo, hi = hi, lo
+            return int(self._map_rng.randint(int(lo), int(hi)))
+        if isinstance(spec, dict):
+            lo = spec.get("min", default)
+            hi = spec.get("max", lo)
+            if lo > hi:
+                lo, hi = hi, lo
+            return int(self._map_rng.randint(int(lo), int(hi)))
+        if isinstance(spec, (int, float)):
+            return int(round(spec))
+        return default
+
+    def _is_reserved_tile(self, x: int, y: int) -> bool:
+        return (x, y) in self._reserved_land_tiles
+
+    def _set_feature_tile(
+        self,
+        x: int,
+        y: int,
+        tile_type: str,
+        feature_key: Optional[str] = None,
+    ) -> None:
+        if self._is_reserved_tile(x, y):
+            return
+        previous = self.grid[x][y]
+        if previous == tile_type:
+            if feature_key:
+                self.natural_features[feature_key].add((x, y))
+            return
+        self.set_tile(x, y, tile_type)
+        if feature_key:
+            self.natural_features[feature_key].add((x, y))
+
+    def _apply_terrain_feature(self, feature: Dict[str, Any]) -> None:
+        tile = feature.get("tile")
+        if not tile:
+            return
+
+        key = feature.get("key") or tile.lower()
+        clusters = max(0, self._resolve_range(feature.get("clusters"), 0))
+        if clusters <= 0:
+            return
+
+        rows, cols = self.grid_size
+        avoid_tiles = set(feature.get("avoid_tiles", []))
+        preserve_tiles = set(feature.get("preserve_tiles", []))
+        prefer_tiles = set(feature.get("prefer_tiles", []))
+        margin = max(self._feature_margin, int(feature.get("margin", 0)))
+        roughness = float(feature.get("roughness", 0.5))
+        radius_spec = feature.get("radius", 1)
+        scatter_spec = feature.get("scatter", 0)
+        allow_overwrite = bool(feature.get("allow_overwrite", False))
+
+        candidates: List[Tuple[int, int]] = []
+        for x in range(rows):
+            if margin and (x < margin or x >= rows - margin):
+                continue
+            for y in range(cols):
+                if margin and (y < margin or y >= cols - margin):
+                    continue
+                if self._is_reserved_tile(x, y):
+                    continue
+                current_tile = self.grid[x][y]
+                if avoid_tiles and current_tile in avoid_tiles:
+                    continue
+                candidates.append((x, y))
+
+        if prefer_tiles:
+            preferred = [coord for coord in candidates if self.grid[coord[0]][coord[1]] in prefer_tiles]
+            if preferred:
+                candidates = preferred
+
+        if not candidates:
+            return
+
+        for _ in range(clusters):
+            if not candidates:
+                break
+            center = self._map_rng.choice(candidates)
+            if feature.get("unique_centers", True):
+                try:
+                    candidates.remove(center)
+                except ValueError:
+                    pass
+
+            radius = max(0, self._resolve_range(radius_spec, 1))
+            scatter = max(0, self._resolve_range(scatter_spec, 0))
+            max_radius = radius + scatter
+            radius_sq = radius * radius
+            max_sq = max_radius * max_radius
+
+            for x in range(max(0, center[0] - max_radius), min(rows, center[0] + max_radius + 1)):
+                for y in range(max(0, center[1] - max_radius), min(cols, center[1] + max_radius + 1)):
+                    if self._is_reserved_tile(x, y):
+                        continue
+                    current_tile = self.grid[x][y]
+                    if avoid_tiles and current_tile in avoid_tiles:
+                        continue
+                    if preserve_tiles and current_tile in preserve_tiles and current_tile != tile:
+                        continue
+                    distance_sq = (x - center[0]) ** 2 + (y - center[1]) ** 2
+                    if distance_sq > max_sq:
+                        continue
+                    if (
+                        distance_sq > radius_sq
+                        and scatter > 0
+                        and self._map_rng.random() < roughness
+                    ):
+                        continue
+                    if not allow_overwrite and current_tile == tile:
+                        self.natural_features[key].add((x, y))
+                        continue
+                    self._set_feature_tile(x, y, tile, key)
+
+    def _scatter_tile(self, scatter: Dict[str, Any]) -> None:
+        tile = scatter.get("tile")
+        if not tile:
+            return
+        count = max(0, self._resolve_range(scatter.get("count"), 0))
+        if count <= 0:
+            return
+
+        avoid_tiles = set(scatter.get("avoid_tiles", []))
+        prefer_tiles = set(scatter.get("prefer_tiles", []))
+        feature_key = scatter.get("key") or tile.lower()
+
+        for _ in range(count):
+            coord = self._pick_random_tile(avoid_tiles=avoid_tiles, prefer_tiles=prefer_tiles)
+            if coord is None:
+                break
+            self._set_feature_tile(coord[0], coord[1], tile, feature_key)
+
+    def _pick_random_tile(
+        self,
+        *,
+        avoid_tiles: Optional[Set[str]] = None,
+        prefer_tiles: Optional[Set[str]] = None,
+        max_attempts: int = 64,
+    ) -> Optional[Tuple[int, int]]:
+        rows, cols = self.grid_size
+        candidates: List[Tuple[int, int]] = []
+        if prefer_tiles:
+            for x in range(rows):
+                for y in range(cols):
+                    if self._is_reserved_tile(x, y):
+                        continue
+                    tile = self.grid[x][y]
+                    if avoid_tiles and tile in avoid_tiles:
+                        continue
+                    if tile in prefer_tiles:
+                        candidates.append((x, y))
+            if candidates:
+                return self._map_rng.choice(candidates)
+
+        min_x = self._feature_margin
+        min_y = self._feature_margin
+        max_x = rows - 1 - self._feature_margin
+        max_y = cols - 1 - self._feature_margin
+        if min_x > max_x or min_y > max_y:
+            min_x, max_x = 0, rows - 1
+            min_y, max_y = 0, cols - 1
+
+        for _ in range(max_attempts):
+            x = self._map_rng.randint(min_x, max_x)
+            y = self._map_rng.randint(min_y, max_y)
+            if self._is_reserved_tile(x, y):
+                continue
+            tile = self.grid[x][y]
+            if avoid_tiles and tile in avoid_tiles:
+                continue
+            return x, y
+        return None
+
+    def _seed_resource_clusters(self, cluster_defs: List[Dict[str, Any]]) -> None:
+        rows, cols = self.grid_size
+        existing_nodes: Set[Tuple[int, int]] = set()
+        for nodes in self.resources.values():
+            for node in nodes:
+                existing_nodes.add(tuple(node.get("location", (0, 0))))
+
+        for cluster in cluster_defs:
+            resource = cluster.get("resource")
+            if not resource:
+                continue
+
+            tile_override = cluster.get("tile")
+            feature_key = cluster.get("feature_key") or f"resource_{resource.lower()}"
+            cluster_count = max(0, self._resolve_range(cluster.get("clusters"), 0))
+            if cluster_count <= 0:
+                continue
+
+            radius = max(0, self._resolve_range(cluster.get("radius"), 0))
+            scatter = max(0, self._resolve_range(cluster.get("scatter"), 0))
+            density = max(1, self._resolve_range(cluster.get("density"), 1))
+            base_tiles = cluster.get("base_tiles") or []
+            if cluster.get("base_tile") and cluster.get("base_tile") not in base_tiles:
+                base_tiles.append(cluster.get("base_tile"))
+            base_tiles = [tile for tile in base_tiles if isinstance(tile, str)]
+            avoid_tiles = set(cluster.get("avoid_tiles", []))
+            allow_conversion = bool(cluster.get("allow_base_conversion", True))
+            prefer_feature = cluster.get("prefer_feature")
+            paint_tile = cluster.get("paint_tile")
+
+            candidate_centers: List[Tuple[int, int]] = []
+            if prefer_feature and prefer_feature in self.natural_features:
+                candidate_centers = list(self.natural_features[prefer_feature])
+            if not candidate_centers:
+                for x in range(rows):
+                    for y in range(cols):
+                        if self._is_reserved_tile(x, y):
+                            continue
+                        current_tile = self.grid[x][y]
+                        if base_tiles and current_tile not in base_tiles:
+                            continue
+                        if avoid_tiles and current_tile in avoid_tiles:
+                            continue
+                        candidate_centers.append((x, y))
+
+            if not candidate_centers:
+                candidate_centers = [
+                    (x, y)
+                    for x in range(rows)
+                    for y in range(cols)
+                    if not self._is_reserved_tile(x, y)
+                ]
+
+            if not candidate_centers:
+                continue
+
+            unique_centers = cluster.get("unique_centers", True)
+
+            for _ in range(cluster_count):
+                if not candidate_centers:
+                    break
+                center = self._map_rng.choice(candidate_centers)
+                if unique_centers:
+                    try:
+                        candidate_centers.remove(center)
+                    except ValueError:
+                        pass
+
+                max_radius = radius + scatter
+                max_sq = max_radius * max_radius
+                radius_sq = radius * radius
+                cluster_positions: List[Tuple[int, int]] = []
+
+                for x in range(max(0, center[0] - max_radius), min(rows, center[0] + max_radius + 1)):
+                    for y in range(max(0, center[1] - max_radius), min(cols, center[1] + max_radius + 1)):
+                        if self._is_reserved_tile(x, y):
+                            continue
+                        if (x, y) in existing_nodes:
+                            continue
+                        if self.get_building_at(x, y):
+                            continue
+                        current_tile = self.grid[x][y]
+                        if avoid_tiles and current_tile in avoid_tiles:
+                            continue
+                        if base_tiles and current_tile not in base_tiles:
+                            if not allow_conversion:
+                                continue
+                        distance_sq = (x - center[0]) ** 2 + (y - center[1]) ** 2
+                        if distance_sq > max_sq:
+                            continue
+                        if (
+                            distance_sq > radius_sq
+                            and scatter > 0
+                            and self._map_rng.random() < 0.35
+                        ):
+                            continue
+                        cluster_positions.append((x, y))
+
+                if paint_tile and cluster_positions:
+                    for x, y in cluster_positions:
+                        if base_tiles and self.grid[x][y] not in base_tiles and not allow_conversion:
+                            continue
+                        self._set_feature_tile(x, y, paint_tile, feature_key)
+
+                if not cluster_positions:
+                    continue
+
+                self._map_rng.shuffle(cluster_positions)
+                placed = 0
+
+                for x, y in cluster_positions:
+                    if placed >= density:
+                        break
+                    if (x, y) in existing_nodes:
+                        continue
+                    node_tile = tile_override or resource
+                    if base_tiles and self.grid[x][y] not in base_tiles and allow_conversion and paint_tile:
+                        self._set_feature_tile(x, y, paint_tile, feature_key)
+                    self.add_resource(resource, (x, y), tile_becomes=node_tile)
+                    existing_nodes.add((x, y))
+                    placed += 1
+                    if feature_key:
+                        self.natural_features[feature_key].add((x, y))
+
+    def _record_landscape_profile(self) -> None:
+        tile_counter: Counter[str] = Counter()
+        for x in range(self.grid_size[0]):
+            for y in range(self.grid_size[1]):
+                tile_counter[self.grid[x][y]] += 1
+
+        resource_counts = {
+            resource: sum(1 for node in nodes if not node.get("depleted", False))
+            for resource, nodes in self.resources.items()
+        }
+
+        self.landscape_profile = {
+            "tiles": dict(tile_counter),
+            "resources": resource_counts,
+            "reserved": len(self._reserved_land_tiles),
+        }
+
+    def get_landscape_profile(self) -> Dict[str, Any]:
+        return deepcopy(self.landscape_profile)
+
+    def ensure_passable_tile(self, x: int, y: int, *, tile_type: str = "Grass") -> None:
+        if not (0 <= x < self.grid_size[0] and 0 <= y < self.grid_size[1]):
+            return
+        if self.grid[x][y] in config.IMPASSABLE_TERRAINS:
+            self.set_tile(x, y, tile_type)
+            self.natural_features["clearing"].add((x, y))
+
+    def ensure_passable_patch(
+        self,
+        origin: Tuple[int, int],
+        size: Tuple[int, int],
+        *,
+        tile_type: Optional[str] = None,
+    ) -> None:
+        tile_type = tile_type or getattr(config, "STRUCTURE_FOUNDATION_TILE", "Flagstone")
+        for dx in range(size[0]):
+            for dy in range(size[1]):
+                tx, ty = origin[0] + dx, origin[1] + dy
+                if not (0 <= tx < self.grid_size[0] and 0 <= ty < self.grid_size[1]):
+                    continue
+                if self.grid[tx][ty] in config.IMPASSABLE_TERRAINS:
+                    self.set_tile(tx, ty, tile_type)
+                    self.natural_features["clearing"].add((tx, ty))
+
+    def _remove_resource_nodes_at(self, tiles: Iterable[Tuple[int, int]]) -> None:
+        to_clear = {tuple(tile) for tile in tiles}
+        if not to_clear:
+            return
+        changed = False
+        for resource, nodes in self.resources.items():
+            for idx in range(len(nodes) - 1, -1, -1):
+                node = nodes[idx]
+                loc = tuple(node.get("location", ()))
+                if loc in to_clear:
+                    nodes.pop(idx)
+                    changed = True
+        if changed:
+            self._record_landscape_profile()
 
     def update_rumors_daily(self):
         """Decays strength of all rumors and removes very weak ones."""
@@ -548,8 +1100,6 @@ class World:
                 tile_type = self.grid[tx][ty]
                 if tile_type in getattr(config, "IMPASSABLE_TERRAINS", set()):
                     return False
-                if (tx, ty) in resource_tiles:
-                    return False
         return True
 
     def _find_structure_site(
@@ -618,6 +1168,7 @@ class World:
         building.current_progress = building.build_time
         building.current_phase_progress = 0.0
         self.add_building(building)
+        self._remove_resource_nodes_at(building.get_tiles_occupied())
 
         layout = building.get_tile_layout()
         if layout:
@@ -1057,12 +1608,13 @@ class World:
             "original_tile": current_tile,
             "depleted_tile": config.RESOURCE_NODE_DEPLETED_TILES.get(resource_name, current_tile),
         }
-        node_list.append(node)
+        node_list.insert(0, node)
 
         if tile_becomes and current_tile != tile_becomes:
             self.set_tile(x, y, tile_becomes)
         elif not tile_becomes and current_tile == "Grass":
             self.set_tile(x, y, resource_name)
+        self._record_landscape_profile()
 
 
     def get_resources(self, resource_name: str) -> List[Any]:
@@ -1102,9 +1654,11 @@ class World:
                         "location": location,
                     },
                 )
+                self._record_landscape_profile()
             return
 
     def _advance_resource_regrowth(self) -> None:
+        landscape_changed = False
         for resource_name, nodes in self.resources.items():
             regrowth_days = config.RESOURCE_NODE_REGROWTH_DAYS.get(resource_name)
             if not regrowth_days:
@@ -1137,6 +1691,10 @@ class World:
                             "location": tuple(node["location"]),
                         },
                     )
+                    landscape_changed = True
+
+        if landscape_changed:
+            self._record_landscape_profile()
 
     def get_resource_nodes_snapshot(self) -> List[Dict[str, Any]]:
         snapshot: List[Dict[str, Any]] = []
@@ -1390,6 +1948,7 @@ class World:
     def add_character(self, character: 'Character'):
         if character in self.characters:
             return
+        self.ensure_passable_tile(character.x, character.y)
         self.characters.append(character)
         self.update_character_position(character, None, (character.x, character.y))
         self.clear_reservations_for_character(character.name)
@@ -2239,8 +2798,11 @@ class World:
         if stockpile not in self.stockpiles:
             self.stockpiles.append(stockpile)
             if self.game_time:
-                 self.ledger.update_stockpile_record(stockpile.name, stockpile.inventory, self.game_time.current_day)
+                self.ledger.update_stockpile_record(
+                    stockpile.name, stockpile.inventory, self.game_time.current_day
+                )
             x, y, w, h = stockpile.rect
+            self.ensure_passable_patch((x, y), (w, h))
             for r_offset in range(h):
                 for c_offset in range(w):
                     tile_x, tile_y = x + c_offset, y + r_offset

@@ -47,7 +47,8 @@ def initialize_game_world():
 
     ticks_per_day = config.TICKS_PER_DAY if hasattr(config, 'TICKS_PER_DAY') else 10 # Default if not in config
     game_time_obj = Time(ticks_per_day=ticks_per_day)
-    game_world = World(grid_size=(10, 10), game_time_ref=game_time_obj)
+    default_size = getattr(config, "MAP_DEFAULT_SIZE", (10, 10))
+    game_world = World(grid_size=(int(default_size[0]), int(default_size[1])), game_time_ref=game_time_obj)
 
     test_characters_list = [] # Reset for this initialization
 
@@ -486,6 +487,7 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "current_phase": game_world.get_current_phase() if hasattr(game_world, 'get_current_phase') else {},
                     "active_weather_event": game_world.get_active_weather_event() if hasattr(game_world, 'get_active_weather_event') else None,
                     "resource_nodes": game_world.get_resource_nodes_snapshot() if hasattr(game_world, 'get_resource_nodes_snapshot') else [],
+                    "landscape": game_world.get_landscape_profile() if hasattr(game_world, 'get_landscape_profile') else {},
                     "population": getattr(game_world, 'population_stats', {}),
                     "cultural": game_world.get_cultural_snapshot() if hasattr(game_world, 'get_cultural_snapshot') else {},
                     "training": game_world.get_training_snapshot() if hasattr(game_world, 'get_training_snapshot') else {},

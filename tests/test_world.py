@@ -1,11 +1,10 @@
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any, Dict, List
 from unittest.mock import patch
 
 import pytest
-
-from typing import Any, Dict
 
 from game import config
 from game.building import Building
@@ -49,6 +48,46 @@ def _standard_needs() -> Dict[str, int]:
         "Belonging": max(config.NEED_BELONGING_DEFAULT, 75),
         "Esteem": config.NEED_ESTEEM_DEFAULT,
     }
+
+
+def test_initial_landscape_has_resources_and_variety():
+    game_time = Time(ticks_per_day=config.TICKS_PER_DAY)
+    world = World(grid_size=(24, 24), game_time_ref=game_time, map_seed=1337)
+
+    tile_counter: Counter[str] = Counter()
+    for x in range(world.grid_size[0]):
+        for y in range(world.grid_size[1]):
+            tile_counter[world.grid[x][y]] += 1
+
+    assert len([tile for tile, count in tile_counter.items() if count > 0]) > 1
+    assert tile_counter.get("Grass", 0) < world.grid_size[0] * world.grid_size[1]
+
+    resource_snapshot = world.get_resource_nodes_snapshot()
+    resource_types = {node.get("resource") for node in resource_snapshot}
+    for expected in {"Wood", "Stone", "Herbs", "Food"}:
+        assert expected in resource_types
+
+    landscape_profile = world.get_landscape_profile()
+    assert landscape_profile.get("resources", {}).get("Wood", 0) >= 1
+    assert landscape_profile.get("reserved", 0) > 0
+
+
+def test_reserved_clearing_tiles_are_walkable():
+    radius = getattr(config, "MAP_RESERVED_CLEARING_RADIUS", 0)
+    if radius <= 0:
+        pytest.skip("No reserved clearing configured")
+
+    game_time = Time(ticks_per_day=config.TICKS_PER_DAY)
+    world = World(grid_size=(20, 20), game_time_ref=game_time, map_seed=2024)
+    center = (world.grid_size[0] // 2, world.grid_size[1] // 2)
+
+    for dx in range(-radius, radius + 1):
+        for dy in range(-radius, radius + 1):
+            x = center[0] + dx
+            y = center[1] + dy
+            if not (0 <= x < world.grid_size[0] and 0 <= y < world.grid_size[1]):
+                continue
+            assert world.grid[x][y] not in config.IMPASSABLE_TERRAINS
 
 
 def test_update_day_phase_records_single_entry_per_phase():
