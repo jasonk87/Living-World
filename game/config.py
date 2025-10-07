@@ -1146,6 +1146,68 @@ SOCIAL_DISTRESS_THRESHOLD = 25 # Score above which comfort is attempted
 ARGUMENT_RELATIONSHIP_THRESHOLD = -40 # Relationship score below which arguments may trigger
 ARGUMENT_RECENT_HISTORY_TICKS = 4 # Avoid arguing repeatedly within these ticks
 
+# Decision-Making Weights
+DECISION_BASE_WEIGHTS = {
+    "work_focus": 1.0,
+    "social_focus": 1.0,
+    "rest_threshold_adjustment": 0.0,
+    "ask_for_help_multiplier": 1.0,
+    "risk_modifier": 1.0,
+}
+DECISION_PERSONALITY_BIASES = {
+    "Ambitious": {"work_focus": 0.25, "risk_modifier": 0.1},
+    "Cautious": {"risk_modifier": -0.25, "rest_threshold_adjustment": 4.0},
+    "Gregarious": {"social_focus": 0.35},
+    "Stoic": {"social_focus": -0.2},
+    "Nurturing": {"social_focus": 0.2, "ask_for_help_multiplier": 0.2},
+    "Brooding": {"social_focus": -0.15, "rest_threshold_adjustment": 1.5},
+}
+DECISION_TRAIT_BIASES = {
+    "Generous": {"ask_for_help_multiplier": 0.35},
+    "Empathetic": {"social_focus": 0.25, "ask_for_help_multiplier": 0.25},
+    "Organized": {"work_focus": 0.15},
+    "Lazy": {"work_focus": -0.35, "rest_threshold_adjustment": 6.0},
+    "Brave": {"risk_modifier": 0.25},
+    "Hotheaded": {"risk_modifier": 0.15, "social_focus": -0.1},
+    "Brooding": {"social_focus": -0.1, "rest_threshold_adjustment": 1.0},
+}
+DECISION_JOB_FOCUS = {
+    "Builder": {"work_focus": 0.12},
+    "Farmer": {"work_focus": 0.1},
+    "Hunter": {"risk_modifier": 0.1},
+    "Merchant": {"social_focus": 0.15},
+    "Innkeeper": {"social_focus": 0.2},
+    "Herbalist": {"ask_for_help_multiplier": 0.1, "rest_threshold_adjustment": -1.0},
+    "Guard": {"risk_modifier": 0.15},
+}
+DECISION_MEMORY_LOOKBACK = 25
+DECISION_MEMORY_KEYWORD_EFFECTS = {
+    "completed": {"work_focus": 0.05},
+    "boosted": {"work_focus": 0.04},
+    "earned": {"work_focus": 0.04},
+    "failed": {"work_focus": -0.06, "rest_threshold_adjustment": 1.5},
+    "argument": {"social_focus": -0.06, "rest_threshold_adjustment": 1.5},
+    "comfort": {"social_focus": 0.05, "ask_for_help_multiplier": 0.05},
+    "rumor": {"social_focus": -0.02},
+    "unsafe": {"risk_modifier": -0.12, "rest_threshold_adjustment": 2.0},
+    "injured": {"risk_modifier": -0.15, "rest_threshold_adjustment": 2.5},
+    "sick": {"risk_modifier": -0.15, "rest_threshold_adjustment": 2.5},
+    "hungry": {"work_focus": -0.03, "ask_for_help_multiplier": 0.1},
+    "enjoyed": {"social_focus": 0.04},
+    "gathered": {"work_focus": 0.03},
+}
+DECISION_RELATIONSHIP_POSITIVE_THRESHOLD = 60
+DECISION_RELATIONSHIP_NEGATIVE_THRESHOLD = -25
+DECISION_RELATIONSHIP_POSITIVE_BONUS = 0.05
+DECISION_RELATIONSHIP_NEGATIVE_PENALTY = -0.06
+DECISION_RELATIONSHIP_STRESS_REST = 1.2
+DECISION_SOCIAL_POSITIVE_WEIGHT = 0.6
+DECISION_SOCIAL_NEGATIVE_WEIGHT = 0.6
+DECISION_JOB_SATISFACTION_WEIGHT = 0.45
+DECISION_BURNOUT_REST_BONUS = 3.5
+DECISION_SOCIAL_FROM_WORK_DRAIN = 0.45
+SAFETY_CRITICAL_WANDER_BASE_CHANCE = 0.3
+
 # Mood System Configs
 MOOD_SCORE_MIN = -100
 MOOD_SCORE_MAX = 100

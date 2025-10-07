@@ -100,3 +100,74 @@ def test_character_forced_to_rest_during_night(mock_random):  # noqa: ARG001
 
     assert worker.current_goal.type == GoalType.REST_AT_HOME
     assert worker.current_goal.parameters.get("building_location") == cottage.location
+
+
+def test_decision_profile_blends_memory_relationships():
+    world, _ = _make_world_with_time()
+    thinker = Character(
+        name="Mira",
+        personality="Cautious",
+        traits=["Generous", "Empathetic"],
+        skills={},
+        job="Builder",
+        needs=_basic_needs(),
+    )
+    thinker.job_satisfaction = 0.8
+    thinker.relationships["Ally"] = 80
+    thinker.relationships["Rival"] = -50
+    thinker.memory.extend([
+        "Completed a major workshop project today.",
+        "Earned a fair wage from the guild.",
+        "Offered comfort to a grieving neighbour.",
+        "Still feeling unsafe after the last storm.",
+    ])
+
+    profile = thinker._build_decision_profile(world)
+
+    assert profile["work_focus"] > 1.0
+    assert profile["social_focus"] > 1.0
+    assert profile["risk_modifier"] < 1.0
+    assert profile["ask_for_help_multiplier"] > 1.0
+    assert profile["rest_threshold_adjustment"] > 0
+    assert profile["relationship_summary"] == {"positive": 1, "negative": 1}
+    assert profile["memory_summary"].get("entries_considered") == len(thinker.memory)
+
+
+@patch("random.random", return_value=0.99)
+def test_decision_profile_adjusts_rest_threshold(mock_random):  # noqa: ARG001
+    world, _ = _make_world_with_time()
+    cottage = Building(
+        structure_type="House",
+        display_name="Evenfall",
+        location=(2, 2),
+        size=(1, 1),
+        required_resources={},
+        functionality={"provides_shelter": 2, "tags": ["residential"]},
+        required_skill={},
+    )
+    cottage.is_operational = True
+    world.add_building(cottage)
+
+    sleeper_needs = _basic_needs()
+    sleeper_needs["Energy"] = 45
+    reflective = Character(
+        name="Dara",
+        personality="Cautious",
+        traits=["Lazy"],
+        skills={},
+        job="Farmer",
+        needs=sleeper_needs,
+        current_goal_obj=Goal(GoalType.WANDER, assignee_id="Dara", originator_id="Test"),
+    )
+    reflective.job_satisfaction = 0.2
+    reflective.memory.extend([
+        "Injured in an accident while working the fields.",
+        "Feeling unsafe walking home after dusk.",
+    ])
+    world.add_character(reflective)
+
+    with patch.object(reflective, "_ensure_home_assignment", return_value=cottage):
+        reflective.decide_action(world)
+
+    assert reflective.current_goal.type == GoalType.REST_AT_HOME
+    assert reflective.current_goal.parameters.get("building_location") == cottage.location

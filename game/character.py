@@ -197,6 +197,19 @@ class Character:
         # self.mood_tendency: Optional[str] = None # Example: "Optimistic", "Pessimistic" - for future enhancement
         self._determine_mood_level() # Set initial mood string based on score
 
+        base_decision_weights = getattr(config, "DECISION_BASE_WEIGHTS", None)
+        if base_decision_weights:
+            self._decision_profile: Dict[str, Any] = deepcopy(base_decision_weights)
+        else:
+            self._decision_profile = {
+                "work_focus": 1.0,
+                "social_focus": 1.0,
+                "rest_threshold_adjustment": 0.0,
+                "ask_for_help_multiplier": 1.0,
+                "risk_modifier": 1.0,
+            }
+        self._decision_profile_day: Optional[int] = None
+
         # Reputation attribute
         self.reputation_score: int = 0 # Initialize reputation
         self.known_rumor_ids: Set[str] = set() # For tracking rumors known by this character
@@ -710,7 +723,8 @@ class Character:
             "known_characters": self.known_characters,
             "relationships": self.relationships,
             "opinions": self.opinions,
-            "dialogue_history": self.dialogue_history[-10:] # Return last 10 for brevity
+            "dialogue_history": self.dialogue_history[-10:], # Return last 10 for brevity
+            "decision_profile": deepcopy(self._decision_profile) if self._decision_profile else None,
         }
 
     def __str__(self):
@@ -728,6 +742,114 @@ class Character:
     def remove_subordinate(self, s: str): self.subordinates_names.remove(s) if s in self.subordinates_names else None
     def get_inventory_load(self) -> int: return sum(self.inventory.values())
     def add_memory(self, e: str): self.memory.append(e); self.memory=self.memory[-20:]
+
+    def _summarize_recent_memory(self) -> Dict[str, Any]:
+        lookback = getattr(config, "DECISION_MEMORY_LOOKBACK", 20)
+        keywords: Dict[str, Dict[str, float]] = getattr(config, "DECISION_MEMORY_KEYWORD_EFFECTS", {})
+        summary: Dict[str, Any] = {"keyword_hits": {}, "entries_considered": 0}
+        if not self.memory or not keywords:
+            return summary
+
+        recent_entries = self.memory[-lookback:]
+        summary["entries_considered"] = len(recent_entries)
+        keyword_hits: Dict[str, int] = {}
+        for entry in recent_entries:
+            entry_lower = entry.lower()
+            for keyword in keywords.keys():
+                if keyword in entry_lower:
+                    keyword_hits[keyword] = keyword_hits.get(keyword, 0) + 1
+        summary["keyword_hits"] = keyword_hits
+        return summary
+
+    def _build_decision_profile(self, world: 'World') -> Dict[str, Any]:
+        base_weights = getattr(config, "DECISION_BASE_WEIGHTS", None)
+        if base_weights:
+            profile: Dict[str, Any] = deepcopy(base_weights)
+        else:
+            profile = {
+                "work_focus": 1.0,
+                "social_focus": 1.0,
+                "rest_threshold_adjustment": 0.0,
+                "ask_for_help_multiplier": 1.0,
+                "risk_modifier": 1.0,
+            }
+
+        memory_summary = self._summarize_recent_memory()
+        profile["memory_summary"] = memory_summary
+        keyword_effects: Dict[str, Dict[str, float]] = getattr(config, "DECISION_MEMORY_KEYWORD_EFFECTS", {})
+        for keyword, count in memory_summary.get("keyword_hits", {}).items():
+            effects = keyword_effects.get(keyword)
+            if not effects:
+                continue
+            for effect_key, modifier in effects.items():
+                if effect_key == "rest_threshold_adjustment":
+                    profile[effect_key] = profile.get(effect_key, 0.0) + (modifier * count)
+                else:
+                    profile[effect_key] = profile.get(effect_key, 1.0 if effect_key != "rest_threshold_adjustment" else 0.0) + (modifier * count)
+
+        personality_biases: Dict[str, Dict[str, float]] = getattr(config, "DECISION_PERSONALITY_BIASES", {})
+        for key, value in personality_biases.get(self.personality, {}).items():
+            profile[key] = profile.get(key, 0.0 if key == "rest_threshold_adjustment" else 1.0) + value
+
+        trait_biases: Dict[str, Dict[str, float]] = getattr(config, "DECISION_TRAIT_BIASES", {})
+        for trait in self.traits:
+            for key, value in trait_biases.get(trait, {}).items():
+                profile[key] = profile.get(key, 0.0 if key == "rest_threshold_adjustment" else 1.0) + value
+
+        if self.job:
+            job_biases: Dict[str, Dict[str, float]] = getattr(config, "DECISION_JOB_FOCUS", {})
+            for key, value in job_biases.get(self.job, {}).items():
+                profile[key] = profile.get(key, 0.0 if key == "rest_threshold_adjustment" else 1.0) + value
+
+        positive_threshold = getattr(config, "DECISION_RELATIONSHIP_POSITIVE_THRESHOLD", 60)
+        negative_threshold = getattr(config, "DECISION_RELATIONSHIP_NEGATIVE_THRESHOLD", -25)
+        positive_count = 0
+        negative_count = 0
+        for relation_score in self.relationships.values():
+            if relation_score >= positive_threshold:
+                positive_count += 1
+            elif relation_score <= negative_threshold:
+                negative_count += 1
+        profile["relationship_summary"] = {
+            "positive": positive_count,
+            "negative": negative_count,
+        }
+        profile["social_focus"] = profile.get("social_focus", 1.0) + (
+            positive_count * getattr(config, "DECISION_RELATIONSHIP_POSITIVE_BONUS", 0.0)
+        )
+        profile["social_focus"] = profile.get("social_focus", 1.0) + (
+            negative_count * getattr(config, "DECISION_RELATIONSHIP_NEGATIVE_PENALTY", 0.0)
+        )
+        profile["rest_threshold_adjustment"] = profile.get("rest_threshold_adjustment", 0.0) + (
+            negative_count * getattr(config, "DECISION_RELATIONSHIP_STRESS_REST", 0.0)
+        )
+
+        satisfaction_baseline = getattr(config, "CAREER_SATISFACTION_BASELINE", 0.6)
+        satisfaction_offset = self.job_satisfaction - satisfaction_baseline
+        profile["work_focus"] = profile.get("work_focus", 1.0) + (
+            satisfaction_offset * getattr(config, "DECISION_JOB_SATISFACTION_WEIGHT", 0.0)
+        )
+        if satisfaction_offset < -0.25:
+            profile["rest_threshold_adjustment"] = profile.get("rest_threshold_adjustment", 0.0) + getattr(
+                config,
+                "DECISION_BURNOUT_REST_BONUS",
+                0.0,
+            )
+
+        profile["work_focus"] = max(0.35, min(1.85, profile.get("work_focus", 1.0)))
+        profile["social_focus"] = max(0.2, min(2.0, profile.get("social_focus", 1.0)))
+        profile["ask_for_help_multiplier"] = max(0.2, min(2.5, profile.get("ask_for_help_multiplier", 1.0)))
+        profile["risk_modifier"] = max(0.3, min(1.8, profile.get("risk_modifier", 1.0)))
+        profile["rest_threshold_adjustment"] = max(
+            -10.0,
+            min(15.0, profile.get("rest_threshold_adjustment", 0.0)),
+        )
+
+        if world.game_time:
+            profile["evaluated_day"] = world.game_time.current_day
+            self._decision_profile_day = world.game_time.current_day
+
+        return profile
 
     def record_life_event(
         self,
@@ -4920,6 +5042,8 @@ class Character:
         phase_info = world.get_current_phase() if hasattr(world, "get_current_phase") else world.game_time.get_phase()
         self._apply_phase_behavior(world, phase_info)
         active_weather_event = world.get_active_weather_event() if hasattr(world, "get_active_weather_event") else None
+        decision_profile = self._build_decision_profile(world)
+        self._decision_profile = decision_profile
         if active_weather_event and self._should_seek_weather_shelter(active_weather_event):
             self._seek_weather_shelter(world, active_weather_event)
 
@@ -4947,6 +5071,8 @@ class Character:
 
         energy_level = self.needs.get("Energy", 100)
         rest_threshold = getattr(config, "ENERGY_THRESHOLD_REST", 40) + getattr(self, "_phase_rest_threshold_bonus", 0)
+        rest_threshold += int(round(decision_profile.get("rest_threshold_adjustment", 0.0)))
+        rest_threshold = max(0, min(config.NEED_SCORE_MAX, rest_threshold))
         if energy_level < rest_threshold and self.current_goal.type not in [GoalType.REST_AT_HOME, GoalType.FIND_SHELTER, GoalType.SEEK_MEDICAL_ATTENTION]:
             home_building = self._ensure_home_assignment(world)
             if home_building:
@@ -5009,7 +5135,11 @@ class Character:
         if self.needs.get('Safety', config.NEED_SAFETY_DEFAULT) < config.NEED_SAFETY_CRITICAL_THRESHOLD and \
            self.current_goal.type not in [GoalType.SEEK_MEDICAL_ATTENTION, GoalType.ASK_FOR_HELP, GoalType.WANDER]: # Avoid overriding if already wandering for mood
             # If safety is critical, character might prioritize less risky actions or seek "safer" spots (proxied by Wander)
-            if random.random() < 0.3: # 30% chance to override current non-critical goal to Wander for safety
+            wander_base = getattr(config, "SAFETY_CRITICAL_WANDER_BASE_CHANCE", 0.3)
+            risk_modifier = max(0.35, decision_profile.get("risk_modifier", 1.0))
+            wander_chance = wander_base / risk_modifier
+            wander_chance = max(0.05, min(0.9, wander_chance))
+            if random.random() < wander_chance:
                 self.add_memory(f"Feeling very unsafe (Safety: {self.needs['Safety']:.0f}). Decided to wander to find a safer spot.")
                 self.current_goal = Goal(GoalType.WANDER, assignee_id=self.name, originator_id=self.name, parameters={"reason": "critical_safety"})
                 # No return here, let the main dispatcher pick up the Wander goal later in the tick if nothing else overrides.
@@ -5031,7 +5161,10 @@ class Character:
         if self.current_goal.type not in critical_goal_types_for_ask_check:
             # Example: Ask for food if critically hungry and has no food
             if self.needs.get("Hunger", 100) < config.CRITICAL_NEED_THRESHOLD_FOR_HELP and self.inventory.get("Food", 0) == 0: # Assuming "Food" is an item type
-                if random.random() < config.ASK_FOR_HELP_CHANCE:
+                ask_multiplier = max(0.2, decision_profile.get("ask_for_help_multiplier", 1.0))
+                ask_chance = config.ASK_FOR_HELP_CHANCE * ask_multiplier
+                ask_chance = max(0.01, min(0.95, ask_chance))
+                if random.random() < ask_chance:
                     potential_helpers: List[Character] = []
                     for other_char in world.characters:
                         if other_char.name == self.name or other_char.name not in self.known_characters:
@@ -5208,6 +5341,14 @@ class Character:
             current_social_interaction_chance += getattr(self, "_phase_social_bias", 0.0)
             if active_weather_event and active_weather_event.get("requires_shelter"):
                 current_social_interaction_chance -= 0.15
+            current_social_interaction_chance *= decision_profile.get("social_focus", 1.0)
+            work_focus = decision_profile.get("work_focus", 1.0)
+            if work_focus > 1.0:
+                social_drain = (work_focus - 1.0) * getattr(config, "DECISION_SOCIAL_FROM_WORK_DRAIN", 0.0)
+                current_social_interaction_chance *= max(0.1, 1.0 - social_drain)
+            elif work_focus < 1.0:
+                social_boost = min(0.4, (1.0 - work_focus) * getattr(config, "DECISION_SOCIAL_FROM_WORK_DRAIN", 0.0))
+                current_social_interaction_chance *= 1.0 + social_boost
             current_social_interaction_chance = max(0.0, min(1.0, current_social_interaction_chance))
             current_social_interaction_chance = max(0.01, min(0.95, current_social_interaction_chance)) # Clamp
 
@@ -5264,6 +5405,14 @@ class Character:
                                         weight *= 1.5 # Further boost interaction with positive connections
                                     elif relationship_score < -10: # Disliked, rivals
                                         weight *= 0.5 # Further penalize interaction with negative connections
+
+                                positive_threshold = getattr(config, "DECISION_RELATIONSHIP_POSITIVE_THRESHOLD", 60)
+                                negative_threshold = getattr(config, "DECISION_RELATIONSHIP_NEGATIVE_THRESHOLD", -25)
+                                social_focus = decision_profile.get("social_focus", 1.0)
+                                if relationship_score >= positive_threshold:
+                                    weight *= max(0.2, 1.0 + (social_focus - 1.0) * getattr(config, "DECISION_SOCIAL_POSITIVE_WEIGHT", 0.6))
+                                elif relationship_score <= negative_threshold:
+                                    weight *= max(0.05, 1.0 - (social_focus - 1.0) * getattr(config, "DECISION_SOCIAL_NEGATIVE_WEIGHT", 0.6))
 
                                 target_weights[other_char.name] = max(0.01, weight) # Ensure a minimal chance
 
