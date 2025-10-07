@@ -7,8 +7,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const mapGridDiv = document.getElementById('game-map');
     const mapCharactersLayer = document.getElementById('map-characters');
     const eventLogDiv = document.getElementById('event-log');
-    const pauseButton = document.getElementById('pause-button');
-    const speedButtons = document.querySelectorAll('.speed-button');
+    const playbackButton = document.getElementById('playback-button');
+    const playbackIcon = document.getElementById('playback-icon');
+    const playbackStateLabel = document.getElementById('playback-state-label');
+    const playbackSpeedLabel = document.getElementById('playback-speed-label');
     const overlayButtons = document.querySelectorAll('.overlay-toggle');
     const overlayPanels = document.querySelectorAll('.overlay-panel');
     const panelCloseButtons = document.querySelectorAll('.panel-close');
@@ -87,6 +89,18 @@ document.addEventListener('DOMContentLoaded', () => {
     let autoFollowCamera = true;
     let worldBadgeBase = 0;
     let worldBadgeSupplement = 0;
+    const SPEED_PRESETS = [0.5, 1, 2, 5];
+    const SPEED_KEY_LOOKUP = {
+        Digit1: 0,
+        Digit2: 1,
+        Digit3: 2,
+        Digit4: 3,
+        Numpad1: 0,
+        Numpad2: 1,
+        Numpad3: 2,
+        Numpad4: 3,
+    };
+    let playbackSpeedIndex = SPEED_PRESETS.indexOf(1);
 
     const characterMarkers = new Map();
     let mapDimensions = { rows: 0, cols: 0 };
@@ -113,6 +127,12 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Utility Helpers ---
     const getTileSize = () => parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--tile-size')) || 48;
 
+    function isTypingContext(element) {
+        if (!element) return false;
+        const tagName = element.tagName;
+        return tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT' || element.isContentEditable;
+    }
+
     function formatCoins(value) {
         if (typeof value !== 'number' || Number.isNaN(value)) return null;
         return `${Math.round(value).toLocaleString()}c`;
@@ -122,6 +142,12 @@ document.addEventListener('DOMContentLoaded', () => {
         if (typeof value !== 'number' || Number.isNaN(value)) return '—';
         const percent = Math.max(0, Math.min(100, Math.round(value * 100)));
         return `${percent}%`;
+    }
+
+    function formatSpeedMultiplier(value) {
+        if (!Number.isFinite(value)) return '—';
+        const rounded = Number.isInteger(value) ? value : Number(value.toFixed(1));
+        return `${rounded}×`;
     }
 
     function updateResourceChip(element, value) {
@@ -2582,18 +2608,45 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    function updatePlaybackControls(gameState) {
+        if (!playbackButton || !gameState) return;
+        const paused = Boolean(gameState.is_paused);
+        const speed = Number(gameState.current_speed_multiplier);
+        if (Number.isFinite(speed) && SPEED_PRESETS.includes(speed)) {
+            playbackSpeedIndex = SPEED_PRESETS.indexOf(speed);
+        }
+
+        if (playbackIcon) {
+            playbackIcon.textContent = paused ? '▶' : '⏸';
+        }
+
+        if (playbackStateLabel) {
+            playbackStateLabel.textContent = paused ? 'Paused' : 'Playing';
+        }
+
+        if (playbackSpeedLabel) {
+            playbackSpeedLabel.textContent = formatSpeedMultiplier(speed);
+        }
+
+        playbackButton.dataset.paused = paused ? 'true' : 'false';
+        playbackButton.setAttribute('aria-pressed', paused ? 'true' : 'false');
+        playbackButton.setAttribute('aria-label', paused ? 'Resume simulation' : 'Pause simulation');
+        playbackButton.title = paused
+            ? 'Click to resume. Shift+Click, scroll, or press 1-4 to change speed.'
+            : 'Click to pause. Shift+Click, scroll, or press 1-4 to change speed.';
+    }
+
     function updateGameInfo(gameState) {
         if (!gameStatusHeader || !gameState) return;
         const statusClass = gameState.is_paused ? 'status-pill muted' : 'status-pill';
+        const formattedSpeed = formatSpeedMultiplier(Number(gameState.current_speed_multiplier));
         gameStatusHeader.innerHTML = `
             <span class="status-pill">Day ${gameState.day}</span>
             <span class="status-pill">Tick ${gameState.tick}/${gameState.ticks_per_day}</span>
-            <span class="status-pill">Speed ${gameState.current_speed_multiplier}x</span>
+            <span class="status-pill">Speed ${formattedSpeed}</span>
             <span class="${statusClass}">${gameState.is_paused ? 'Paused' : 'Running'}</span>
         `;
-        if (pauseButton) {
-            pauseButton.textContent = gameState.is_paused ? 'Resume' : 'Pause';
-        }
+        updatePlaybackControls(gameState);
     }
 
     function updateEventLog(log) {
@@ -2729,6 +2782,26 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    function togglePlayback() {
+        performControlAction(`${API_BASE_URL}/toggle_pause`);
+    }
+
+    function setPlaybackSpeed(multiplier) {
+        if (!Number.isFinite(multiplier)) return;
+        if (SPEED_PRESETS.includes(multiplier)) {
+            playbackSpeedIndex = SPEED_PRESETS.indexOf(multiplier);
+        }
+        performControlAction(`${API_BASE_URL}/set_speed?multiplier=${multiplier}`);
+    }
+
+    function cyclePlaybackSpeed(direction = 1) {
+        if (!SPEED_PRESETS.length) return;
+        const currentIndex = playbackSpeedIndex >= 0 ? playbackSpeedIndex : 0;
+        const normalized = ((currentIndex + direction) % SPEED_PRESETS.length + SPEED_PRESETS.length) % SPEED_PRESETS.length;
+        const nextSpeed = SPEED_PRESETS[normalized];
+        setPlaybackSpeed(nextSpeed);
+    }
+
     async function updateUI() {
         const gameState = await fetchGameState();
         if (gameState) {
@@ -2825,14 +2898,43 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    if (pauseButton) {
-        pauseButton.addEventListener('click', () => performControlAction(`${API_BASE_URL}/toggle_pause`));
+    if (playbackButton) {
+        playbackButton.addEventListener('click', event => {
+            if (event.shiftKey || event.altKey) {
+                event.preventDefault();
+                const direction = event.altKey ? -1 : 1;
+                cyclePlaybackSpeed(direction);
+                return;
+            }
+            togglePlayback();
+        });
+
+        playbackButton.addEventListener('contextmenu', event => {
+            event.preventDefault();
+            cyclePlaybackSpeed(1);
+        });
+
+        playbackButton.addEventListener('wheel', event => {
+            event.preventDefault();
+            const direction = event.deltaY > 0 ? -1 : 1;
+            cyclePlaybackSpeed(direction);
+        }, { passive: false });
     }
 
-    speedButtons.forEach(button => {
-        button.addEventListener('click', () => {
-            performControlAction(`${API_BASE_URL}/set_speed?multiplier=${button.dataset.speed}`);
-        });
+    window.addEventListener('keydown', event => {
+        if (isTypingContext(event.target)) return;
+        if (event.key === ' ' || event.code === 'Space') {
+            event.preventDefault();
+            togglePlayback();
+            return;
+        }
+        const keyIndex = SPEED_KEY_LOOKUP[event.code];
+        const fallbackIndex = ['1', '2', '3', '4'].includes(event.key) ? Number(event.key) - 1 : undefined;
+        const targetIndex = Number.isInteger(keyIndex) ? keyIndex : fallbackIndex;
+        if (targetIndex !== undefined && SPEED_PRESETS[targetIndex] !== undefined) {
+            event.preventDefault();
+            setPlaybackSpeed(SPEED_PRESETS[targetIndex]);
+        }
     });
 
     const dragSurface = mapCanvas || mapStage;

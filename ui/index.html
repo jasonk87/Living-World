@@ -84,15 +84,16 @@
                 </div>
                 <div class="hud-controls">
                     <div class="command-controls" role="toolbar" aria-label="Simulation controls">
-                        <button id="pause-button" class="command-button" type="button" aria-label="Pause or resume simulation">
-                            <span class="hud-icon-glyph" aria-hidden="true">⏯</span>
+                        <button id="playback-button" class="command-button playback-button" type="button"
+                                aria-label="Resume simulation" aria-pressed="false"
+                                title="Click to play/pause. Shift+Click, scroll, or press 1-4 to change speed.">
+                            <span id="playback-icon" class="hud-icon-glyph" aria-hidden="true">▶</span>
+                            <span class="playback-button-text" aria-hidden="true">
+                                <span id="playback-state-label" class="playback-state-label">Play</span>
+                                <span id="playback-speed-label" class="playback-speed-label">1×</span>
+                            </span>
+                            <span class="visually-hidden">Toggle playback</span>
                         </button>
-                        <div class="speed-dial" role="group" aria-label="Simulation speed">
-                            <button class="speed-button" data-speed="0.5" type="button" aria-label="Set speed to 0.5×">0.5×</button>
-                            <button class="speed-button" data-speed="1" type="button" aria-label="Set speed to 1×">1×</button>
-                            <button class="speed-button" data-speed="2" type="button" aria-label="Set speed to 2×">2×</button>
-                            <button class="speed-button" data-speed="5" type="button" aria-label="Set speed to 5×">5×</button>
-                        </div>
                     </div>
                     <div class="hud-icon-group" role="toolbar" aria-label="Intel drawers">
                         <button class="hud-icon-button" type="button" data-popover-target="hud-popover-world" aria-expanded="false" aria-controls="hud-popover-world" aria-label="Toggle world events intel">
