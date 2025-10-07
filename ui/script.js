@@ -99,6 +99,12 @@ document.addEventListener('DOMContentLoaded', () => {
         return `${Math.round(value).toLocaleString()}c`;
     }
 
+    function formatSatisfaction(value) {
+        if (typeof value !== 'number' || Number.isNaN(value)) return '—';
+        const percent = Math.max(0, Math.min(100, Math.round(value * 100)));
+        return `${percent}%`;
+    }
+
     function openPanel(panelId) {
         const panel = document.getElementById(panelId);
         if (!panel) return;
@@ -1036,6 +1042,11 @@ document.addEventListener('DOMContentLoaded', () => {
             ? `${netWorthValue}${character.wealth_status ? ` (${character.wealth_status})` : ''}`
             : 'Unknown';
         const purseText = formatCoins(character.money) || '—';
+        const careerStage = character.career_stage || 'Apprentice';
+        const tenureValue = typeof character.profession_tenure === 'number' ? character.profession_tenure : null;
+        const tenureText = tenureValue !== null ? `${tenureValue} day${tenureValue === 1 ? '' : 's'}` : '—';
+        const satisfactionText = formatSatisfaction(character.job_satisfaction);
+        const focusSuffix = character.profession_focus ? ` • Focus ${character.profession_focus}` : '';
 
         const ownedVentures = Array.isArray(character.businesses_owned) ? character.businesses_owned : [];
         const businessRoles = Object.entries(character.business_roles || {});
@@ -1074,6 +1085,7 @@ document.addEventListener('DOMContentLoaded', () => {
         followOverlayBody.innerHTML = `
             <p><strong>${character.name}</strong>${rankTitle ? ` • ${rankTitle}` : ''}</p>
             <p>${character.job || 'Unassigned'} • Goal: ${goalSummary}</p>
+            <p>Stage: ${careerStage} • Tenure ${tenureText} • Satisfaction ${satisfactionText}${focusSuffix}</p>
             <p>Coords: (${character.x}, ${character.y}) • Age ${ageText} • ${originText} • ${citizenshipText}</p>
             <p>Health: ${sicknessText}, ${injuryText}</p>
             <p>Needs: Energy ${energyText} • Thirst ${thirstText}</p>
@@ -1376,6 +1388,44 @@ document.addEventListener('DOMContentLoaded', () => {
             <p><strong>Wealth:</strong> ${netWorthLabel ? netWorthLabel : 'Unknown'}${character.wealth_status ? ` (${character.wealth_status})` : ''} • <strong>Purse:</strong> ${purseLabel || '—'}</p>
         `;
 
+        const careerSection = document.createElement('section');
+        careerSection.innerHTML = '<h4>Career</h4>';
+        const stageLabel = character.career_stage || 'Apprentice';
+        const tenureDisplay = typeof character.profession_tenure === 'number'
+            ? `${character.profession_tenure} day${character.profession_tenure === 1 ? '' : 's'}`
+            : '—';
+        const satisfactionDisplay = formatSatisfaction(character.job_satisfaction);
+        const focusDisplay = character.profession_focus || 'Generalist';
+        careerSection.innerHTML += `
+            <p><strong>Stage:</strong> ${stageLabel} • <strong>Tenure:</strong> ${tenureDisplay}</p>
+            <p><strong>Satisfaction:</strong> ${satisfactionDisplay} • <strong>Focus:</strong> ${focusDisplay}</p>
+        `;
+        const careerHistory = Array.isArray(character.profession_history) ? character.profession_history : [];
+        if (careerHistory.length) {
+            const list = document.createElement('ul');
+            list.classList.add('mini-list', 'compact', 'subtle');
+            careerHistory.slice(-5).reverse().forEach(entry => {
+                const li = document.createElement('li');
+                const jobLabel = entry.job || 'Unassigned';
+                const stage = entry.stage || '—';
+                const tenure = typeof entry.tenure === 'number' ? `${entry.tenure}d` : '—';
+                const startDay = typeof entry.start_day === 'number' ? `Day ${entry.start_day}` : null;
+                const endDay = typeof entry.end_day === 'number' ? `Day ${entry.end_day}` : null;
+                const period = entry.status === 'current'
+                    ? (startDay ? `${startDay} → present` : 'current post')
+                    : (startDay && endDay ? `${startDay} → ${endDay}` : endDay ? `ended ${endDay}` : 'concluded');
+                const statusTag = entry.status === 'current' ? ' • current' : '';
+                li.innerHTML = `<strong>${jobLabel}</strong> • ${stage} • ${tenure}${period ? ` • ${period}` : ''}${statusTag}`;
+                list.appendChild(li);
+            });
+            careerSection.appendChild(list);
+        } else {
+            const empty = document.createElement('p');
+            empty.classList.add('muted');
+            empty.textContent = 'No recorded career history yet.';
+            careerSection.appendChild(empty);
+        }
+
         const needsSection = document.createElement('section');
         needsSection.innerHTML = '<h4>Needs</h4>';
         needsSection.appendChild(formatKeyValueList(character.needs));
@@ -1448,7 +1498,7 @@ document.addEventListener('DOMContentLoaded', () => {
             wealthHistorySection.appendChild(empty);
         }
 
-        wrapper.append(profileSection, needsSection, housingSection, skillsSection, inventorySection, venturesSection, wealthHistorySection);
+        wrapper.append(profileSection, careerSection, needsSection, housingSection, skillsSection, inventorySection, venturesSection, wealthHistorySection);
         return wrapper;
     }
 
@@ -1576,9 +1626,12 @@ document.addEventListener('DOMContentLoaded', () => {
         wrapper.classList.add('detail-tabs');
 
         const header = document.createElement('header');
+        const stageLabel = character.career_stage ? ` • ${character.career_stage}` : '';
+        const satisfactionLabel = formatSatisfaction(character.job_satisfaction);
+        const reputationLabel = character.reputation ?? '—';
         header.innerHTML = `
             <h3>${character.name}</h3>
-            <p>${character.job || 'Unassigned'} • Reputation ${character.reputation ?? '—'}</p>
+            <p>${character.job || 'Unassigned'}${stageLabel} • Reputation ${reputationLabel} • Satisfaction ${satisfactionLabel}</p>
         `;
 
         const followButton = document.createElement('button');

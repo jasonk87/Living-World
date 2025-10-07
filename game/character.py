@@ -135,6 +135,19 @@ class Character:
         self._life_event_flags: Set[str] = set()
         self.known_events: List[str] = []
 
+        self.profession_history: List[Dict[str, Any]] = []
+        self.career_stage: str = getattr(config, "CAREER_DEFAULT_STAGE", "Apprentice")
+        self.job_satisfaction: float = getattr(config, "CAREER_SATISFACTION_BASELINE", 0.6)
+        self.professional_focus: Optional[str] = None
+        self.current_profession_tenure: int = 0
+        self._current_profession_start_day: Optional[int] = None
+        self._last_profession_review_day: Optional[int] = None
+        self._last_career_stage_day: Optional[int] = None
+        self._last_career_high_day: Optional[int] = None
+        self._last_burnout_alert_day: Optional[int] = None
+        self._last_recorded_job: Optional[str] = self.job
+        self._triggered_tenure_milestones: Set[int] = set()
+
         self.age_years: int = age if age is not None else random.randint(18, 45)
         self.age_in_days: int = 0
         self.origin: str = origin or "Local"
@@ -663,6 +676,11 @@ class Character:
             "rank": self.rank,
             "liege": self.liege,
             "vassals": self.vassals,
+            "career_stage": self.career_stage,
+            "job_satisfaction": self.job_satisfaction,
+            "profession_focus": self.professional_focus,
+            "profession_tenure": self.current_profession_tenure,
+            "profession_history": self.export_profession_history(limit=8),
             "is_sick": self.is_sick,
             "sickness_severity": self.sickness_severity,
             "is_injured": self.is_injured,
@@ -862,6 +880,25 @@ class Character:
             events = self.life_history[-limit:]
         return [deepcopy(evt) for evt in events]
 
+    def export_profession_history(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        history: List[Dict[str, Any]] = [deepcopy(entry) for entry in self.profession_history]
+        current_entry: Dict[str, Any] = {
+            "job": self.job or "Unassigned",
+            "stage": self.career_stage,
+            "tenure": self.current_profession_tenure,
+            "status": "current",
+        }
+        if self._current_profession_start_day is not None:
+            current_entry["start_day"] = self._current_profession_start_day
+        if self.job_satisfaction is not None:
+            current_entry["satisfaction"] = round(self.job_satisfaction, 3)
+        if self.professional_focus:
+            current_entry["focus"] = self.professional_focus
+        history.append(current_entry)
+        if limit is not None and limit > 0:
+            history = history[-limit:]
+        return history
+
     def receive_cultural_event_boost(self, event_data: Dict[str, Any], world: 'World') -> None:
         """Apply morale and need adjustments when the settlement hosts a cultural event."""
         event_name = event_data.get("name", "community gathering")
@@ -960,6 +997,98 @@ class Character:
         personalities = set(getattr(config, "ENTREPRENEURIAL_PERSONALITIES", []))
         traits = set(getattr(config, "ENTREPRENEURIAL_TRAITS", []))
         return (self.personality in personalities) or bool(traits.intersection(self.traits))
+
+    def _get_profession_track(self) -> Dict[str, Any]:
+        tracks = getattr(config, "PROFESSION_TRACK_DEFINITIONS", {})
+        if not isinstance(tracks, dict):
+            return {}
+        job_name = self.job or "Unassigned"
+        track: Optional[Dict[str, Any]] = tracks.get(job_name)
+        if track is None:
+            lowered = job_name.lower()
+            for key, candidate in tracks.items():
+                if isinstance(candidate, dict) and key.lower() == lowered:
+                    track = candidate
+                    break
+        if track is None:
+            track = tracks.get("default", {})
+        return deepcopy(track) if isinstance(track, dict) else {}
+
+    def _reset_profession_for_new_job(
+        self,
+        world: Optional['World'],
+        today: int,
+    ) -> Optional[Dict[str, Any]]:
+        previous_job = self._last_recorded_job
+        tenure_before_reset = self.current_profession_tenure
+        updates: Dict[str, Any] = {}
+
+        if previous_job and previous_job not in {"Unemployed", "Retiree"} and tenure_before_reset > 0:
+            history_entry: Dict[str, Any] = {
+                "job": previous_job,
+                "stage": self.career_stage,
+                "tenure": tenure_before_reset,
+                "end_day": today,
+                "status": "archived",
+            }
+            if self._current_profession_start_day is not None:
+                history_entry["start_day"] = self._current_profession_start_day
+            self.profession_history.append(history_entry)
+            max_history = getattr(config, "CAREER_MAX_HISTORY", 16)
+            if len(self.profession_history) > max_history:
+                self.profession_history = self.profession_history[-max_history:]
+            summary = (
+                f"Departed role as {previous_job} after {tenure_before_reset} "
+                f"day{'s' if tenure_before_reset != 1 else ''}."
+            )
+            self.add_memory(summary)
+            self.record_life_event(
+                world,
+                "career_transition",
+                summary,
+                tags=["career"],
+                significance=2,
+                details={"job": previous_job, "tenure": tenure_before_reset},
+            )
+            updates["job_change"] = {
+                "from": previous_job,
+                "to": self.job or "Unassigned",
+                "tenure": tenure_before_reset,
+            }
+
+        new_job = self.job or "Unassigned"
+        if new_job and new_job not in {"Unassigned", "Unemployed", "Retiree"}:
+            join_summary = f"Began work as a {new_job}."
+            self.add_memory(join_summary)
+            self.record_life_event(
+                world,
+                "career_assignment",
+                join_summary,
+                tags=["career"],
+                significance=2,
+                details={"job": new_job},
+            )
+            if "job_change" not in updates:
+                updates["job_change"] = {
+                    "from": previous_job or "Unassigned",
+                    "to": new_job,
+                    "tenure": tenure_before_reset,
+                }
+
+        self.current_profession_tenure = 0
+        self._current_profession_start_day = today
+        self._last_recorded_job = self.job
+        self._last_career_stage_day = today
+        baseline = getattr(config, "CAREER_SATISFACTION_BASELINE", 0.6)
+        personality_mods = getattr(config, "CAREER_PERSONALITY_MODIFIERS", {}).get(self.personality, {})
+        trait_mods = getattr(config, "CAREER_TRAIT_MODIFIERS", {})
+        stability_bonus = personality_mods.get("stability_bonus", 0.0) + personality_mods.get(
+            "satisfaction_bonus", 0.0
+        )
+        trait_bonus = sum(trait_mods.get(trait, {}).get("satisfaction_bonus", 0.0) for trait in self.traits)
+        self.job_satisfaction = max(0.0, min(1.0, baseline + stability_bonus + trait_bonus))
+        self._triggered_tenure_milestones.clear()
+        return updates or None
 
     def calculate_net_worth(self, world: Optional['World'] = None) -> int:
         """Estimate the character's total wealth, including business equity."""
@@ -1095,6 +1224,222 @@ class Character:
 
         updates["net_worth"] = net
         updates["previous_net_worth"] = previous_net
+        return updates
+
+    def evaluate_profession_daily(self, world: 'World') -> Dict[str, Any]:
+        if not world or not world.game_time:
+            return {}
+
+        today = world.game_time.current_day
+        if self._last_profession_review_day == today:
+            return {}
+        self._last_profession_review_day = today
+
+        updates: Dict[str, Any] = {}
+        job_name = self.job or "Unassigned"
+
+        track = self._get_profession_track()
+        if self._last_recorded_job != self.job:
+            reset_updates = self._reset_profession_for_new_job(world, today)
+            if reset_updates and "job_change" in reset_updates:
+                updates["job_change"] = reset_updates["job_change"]
+
+        if self._current_profession_start_day is None:
+            self._current_profession_start_day = today - self.current_profession_tenure
+
+        if job_name == "Retiree":
+            self.professional_focus = None
+            rest_gain = getattr(config, "CAREER_SATISFACTION_GAIN", 0.08) * 0.5
+            self.job_satisfaction = max(0.0, min(1.0, self.job_satisfaction + rest_gain))
+            return updates
+
+        if job_name in {"Unassigned", "Unemployed"}:
+            self.professional_focus = None
+            idle_decay = getattr(config, "CAREER_IDLE_DECAY", 0.04)
+            if idle_decay:
+                self.job_satisfaction = max(0.0, self.job_satisfaction - idle_decay)
+            if (
+                self.job_satisfaction <= getattr(config, "CAREER_BURNOUT_THRESHOLD", 0.35)
+                and self._last_burnout_alert_day != today
+            ):
+                self._last_burnout_alert_day = today
+                self.update_mood_score(
+                    getattr(config, "CAREER_SATISFACTION_MOOD_PENALTY", -8),
+                    "Unsettled without a calling",
+                )
+                updates["burnout"] = {"satisfaction": round(self.job_satisfaction, 3), "reason": "unassigned"}
+            return updates
+
+        self.current_profession_tenure += 1
+
+        primary_skill = track.get("skill") if isinstance(track, dict) else None
+        self.professional_focus = primary_skill
+        base_xp = float(track.get("daily_xp", 1.0)) if isinstance(track, dict) else 1.0
+
+        personality_mods = getattr(config, "CAREER_PERSONALITY_MODIFIERS", {}).get(self.personality, {})
+        trait_mods = getattr(config, "CAREER_TRAIT_MODIFIERS", {})
+        xp_multiplier = 1.0 + personality_mods.get("learning_bonus", 0.0)
+        for trait in self.traits:
+            xp_multiplier += trait_mods.get(trait, {}).get("xp_bonus", 0.0)
+        xp_total = max(0.0, base_xp * xp_multiplier)
+
+        if xp_total and primary_skill:
+            before_level = self.skills.get(primary_skill, {}).get("level", 0)
+            self._grant_skill_experience(primary_skill, xp_total, world)
+            after_level = self.skills.get(primary_skill, {}).get("level", before_level)
+            if after_level > before_level:
+                updates.setdefault("level_ups", []).append(
+                    {"skill": primary_skill, "level": after_level}
+                )
+
+        decay = getattr(config, "CAREER_SATISFACTION_DECAY", 0.05)
+        gain = getattr(config, "CAREER_SATISFACTION_GAIN", 0.08)
+        satisfaction = self.job_satisfaction
+        if decay:
+            satisfaction -= decay
+        satisfaction += gain * max(0.5, xp_multiplier)
+
+        wealth_expectation = track.get("wealth_expectation") if isinstance(track, dict) else None
+        thresholds = getattr(config, "WEALTH_STATUS_THRESHOLDS", {})
+        if wealth_expectation and isinstance(thresholds, dict):
+            expected_threshold = thresholds.get(wealth_expectation)
+            if expected_threshold is not None:
+                if getattr(self, "net_worth", self.money) >= expected_threshold:
+                    satisfaction += getattr(config, "CAREER_WEALTH_SATISFACTION_BONUS", 0.08)
+                    if personality_mods.get("wealth_bonus"):
+                        satisfaction += personality_mods["wealth_bonus"]
+                else:
+                    satisfaction -= getattr(config, "CAREER_WEALTH_SATISFACTION_PENALTY", 0.1)
+
+        focus = track.get("focus") if isinstance(track, dict) else None
+        for trait in self.traits:
+            trait_mod = trait_mods.get(trait, {})
+            if focus == "service" and trait_mod.get("service_bonus"):
+                satisfaction += trait_mod["service_bonus"]
+
+        satisfaction_floors = [
+            trait_mods.get(trait, {}).get("satisfaction_floor")
+            for trait in self.traits
+            if trait_mods.get(trait, {}).get("satisfaction_floor") is not None
+        ]
+        progress_pressure = personality_mods.get("promotion_pressure", 0.0)
+        for trait in self.traits:
+            progress_pressure += trait_mods.get(trait, {}).get("promotion_pressure", 0.0)
+
+        patience = getattr(config, "CAREER_PROGRESS_PATIENCE_DAYS", 10)
+        last_progress = self._last_career_stage_day or self._current_profession_start_day or today
+        days_since_progress = max(0, today - last_progress)
+        if progress_pressure > 0 and days_since_progress > patience:
+            burnout_resistance = sum(
+                trait_mods.get(trait, {}).get("burnout_resistance", 0.0) for trait in self.traits
+            )
+            penalty = progress_pressure * ((days_since_progress - patience + 1) / max(1, patience)) * 0.1
+            penalty *= max(0.0, 1.0 - burnout_resistance)
+            satisfaction -= penalty
+
+        if satisfaction_floors:
+            satisfaction = max(satisfaction, max(satisfaction_floors))
+
+        satisfaction = max(0.0, min(1.0, satisfaction))
+        previous_satisfaction = self.job_satisfaction
+        self.job_satisfaction = satisfaction
+
+        burnout_threshold = getattr(config, "CAREER_BURNOUT_THRESHOLD", 0.35)
+        ambition_threshold = getattr(config, "CAREER_AMBITION_THRESHOLD", 0.85)
+
+        if satisfaction <= burnout_threshold:
+            if self._last_burnout_alert_day != today:
+                self._last_burnout_alert_day = today
+                self.update_mood_score(
+                    getattr(config, "CAREER_SATISFACTION_MOOD_PENALTY", -8),
+                    f"Dissatisfied with {job_name} duties",
+                )
+                updates["burnout"] = {"satisfaction": round(satisfaction, 3)}
+        else:
+            self._last_burnout_alert_day = None
+
+        if satisfaction >= ambition_threshold:
+            if self._last_career_high_day != today:
+                self._last_career_high_day = today
+                self.update_mood_score(
+                    getattr(config, "CAREER_SATISFACTION_MOOD_BONUS", 6),
+                    f"Thriving as a {job_name}",
+                )
+                focus_bonus = getattr(config, "CAREER_FOCUS_MOOD_BONUS", {}).get(focus)
+                if focus_bonus:
+                    self.update_mood_score(focus_bonus, f"Proud of {job_name} focus")
+                updates["thriving"] = {"satisfaction": round(satisfaction, 3)}
+        else:
+            self._last_career_high_day = None
+
+        stage_before = self.career_stage
+        stage_after = stage_before
+        stage_thresholds = getattr(config, "CAREER_STAGE_THRESHOLDS", {})
+        if isinstance(stage_thresholds, dict) and primary_skill:
+            skill_level = self.skills.get(primary_skill, {}).get("level", 0)
+            ordered = sorted(stage_thresholds.items(), key=lambda item: item[1])
+            for stage_name, threshold in ordered:
+                if skill_level >= threshold:
+                    stage_after = stage_name
+        if stage_after != stage_before:
+            self.career_stage = stage_after
+            self._last_career_stage_day = today
+            summary = f"Recognized as a {stage_after} {job_name}."
+            self.add_memory(summary)
+            self.record_life_event(
+                world,
+                "career_stage_change",
+                summary,
+                tags=["career", stage_after.lower()],
+                significance=3,
+                details={
+                    "job": job_name,
+                    "stage": stage_after,
+                    "previous_stage": stage_before,
+                    "skill": primary_skill,
+                    "level": self.skills.get(primary_skill, {}).get("level", 0),
+                },
+            )
+            rep_bonus = getattr(config, "CAREER_STAGE_REPUTATION_BONUS", {}).get(stage_after)
+            if rep_bonus:
+                self.update_reputation(rep_bonus, f"Advanced to {stage_after} {job_name}", world)
+            updates["stage_change"] = {
+                "from": stage_before,
+                "to": stage_after,
+                "skill": primary_skill,
+                "level": self.skills.get(primary_skill, {}).get("level", 0),
+            }
+
+        milestones = getattr(config, "CAREER_TENURE_MILESTONES", [])
+        reached: List[int] = []
+        for milestone in milestones:
+            if (
+                isinstance(milestone, int)
+                and milestone > 0
+                and self.current_profession_tenure >= milestone
+                and milestone not in self._triggered_tenure_milestones
+            ):
+                self._triggered_tenure_milestones.add(milestone)
+                reached.append(milestone)
+                note = f"Marked {milestone} days as a {job_name}."
+                self.add_memory(note)
+                self.record_life_event(
+                    world,
+                    "career_tenure",
+                    note,
+                    tags=["career"],
+                    significance=2,
+                    details={"job": job_name, "milestone": milestone},
+                )
+        if reached:
+            updates["tenure_milestones"] = reached
+
+        if updates and "satisfaction" not in updates:
+            updates["satisfaction"] = {
+                "previous": round(previous_satisfaction, 3),
+                "current": round(self.job_satisfaction, 3),
+            }
+
         return updates
 
     def handle_business_closure(self, business_id: str, world: Optional['World'], reason: str) -> None:

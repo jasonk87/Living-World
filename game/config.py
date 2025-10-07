@@ -162,6 +162,75 @@ BUSINESS_TEMPLATES = [
 ]
 JEALOUSY_THEFT_PRESSURE = 0.25
 
+# Career & Profession Simulation
+CAREER_DEFAULT_STAGE = "Apprentice"
+CAREER_STAGE_THRESHOLDS = {
+    "Apprentice": 0,
+    "Journeyman": 3,
+    "Master": 6,
+    "Luminary": 9,
+}
+CAREER_STAGE_REPUTATION_BONUS = {
+    "Journeyman": 1,
+    "Master": 2,
+    "Luminary": 3,
+}
+CAREER_SATISFACTION_BASELINE = 0.62
+CAREER_SATISFACTION_DECAY = 0.05
+CAREER_SATISFACTION_GAIN = 0.08
+CAREER_IDLE_DECAY = 0.04
+CAREER_WEALTH_SATISFACTION_BONUS = 0.08
+CAREER_WEALTH_SATISFACTION_PENALTY = 0.1
+CAREER_SATISFACTION_MOOD_BONUS = 6
+CAREER_SATISFACTION_MOOD_PENALTY = -8
+CAREER_BURNOUT_THRESHOLD = 0.35
+CAREER_AMBITION_THRESHOLD = 0.85
+CAREER_PROGRESS_PATIENCE_DAYS = 10
+CAREER_MAX_HISTORY = 16
+CAREER_TENURE_MILESTONES = [10, 30, 90]
+CAREER_PERSONALITY_MODIFIERS = {
+    "Ambitious": {"promotion_pressure": 0.18, "satisfaction_bonus": 0.02},
+    "Stoic": {"stability_bonus": 0.05},
+    "Pragmatic": {"wealth_bonus": 0.04},
+    "Cheerful": {"satisfaction_bonus": 0.04},
+    "Introspective": {"learning_bonus": 0.1},
+}
+CAREER_TRAIT_MODIFIERS = {
+    "Diligent": {"xp_bonus": 0.25, "satisfaction_floor": 0.2},
+    "Resourceful": {"xp_bonus": 0.15},
+    "Organized": {"promotion_pressure": -0.05, "satisfaction_bonus": 0.03},
+    "Compassionate": {"service_bonus": 0.05},
+    "Curious": {"learning_bonus": 0.08},
+    "Patient": {"burnout_resistance": 0.1},
+}
+CAREER_FOCUS_MOOD_BONUS = {
+    "service": 2,
+    "leadership": 3,
+    "craft": 2,
+}
+PROFESSION_TRACK_DEFINITIONS = {
+    "Farmer": {"skill": "Farming", "daily_xp": 1.4, "wealth_expectation": "modest", "focus": "agrarian"},
+    "Woodcutter": {"skill": "Woodcutting", "daily_xp": 1.5, "wealth_expectation": "modest", "focus": "lumber"},
+    "Stonemason": {"skill": "Stonemasonry", "daily_xp": 1.5, "wealth_expectation": "comfortable", "focus": "stone"},
+    "Hunter": {"skill": "Hunting", "daily_xp": 1.45, "wealth_expectation": "comfortable", "focus": "agrarian"},
+    "Herbalist": {"skill": "Herbalism", "daily_xp": 1.35, "wealth_expectation": "comfortable", "focus": "service"},
+    "Builder": {"skill": "Construction", "daily_xp": 1.3, "wealth_expectation": "comfortable", "focus": "craft"},
+    "Fletcher": {"skill": "Fletching", "daily_xp": 1.4, "wealth_expectation": "comfortable", "focus": "craft"},
+    "Blacksmith": {"skill": "Blacksmithing", "daily_xp": 1.5, "wealth_expectation": "prosperous", "focus": "craft"},
+    "Bookkeeper": {"skill": "Administration", "daily_xp": 1.2, "wealth_expectation": "comfortable", "focus": "service"},
+    "Manager": {"skill": "Leadership", "daily_xp": 1.25, "wealth_expectation": "prosperous", "focus": "leadership"},
+    "Mayor": {"skill": "Leadership", "daily_xp": 1.35, "wealth_expectation": "prosperous", "focus": "leadership"},
+    "Reeve": {"skill": "Leadership", "daily_xp": 1.3, "wealth_expectation": "prosperous", "focus": "leadership"},
+    "Bailiff": {"skill": "Security", "daily_xp": 1.2, "wealth_expectation": "comfortable", "focus": "security"},
+    "Sheriff": {"skill": "Security", "daily_xp": 1.4, "wealth_expectation": "prosperous", "focus": "security"},
+    "Deputy": {"skill": "Security", "daily_xp": 1.25, "wealth_expectation": "comfortable", "focus": "security"},
+    "Scout": {"skill": "Scouting", "daily_xp": 1.3, "wealth_expectation": "modest", "focus": "agrarian"},
+    "Militia Soldier": {"skill": "Security", "daily_xp": 1.2, "wealth_expectation": "modest", "focus": "security"},
+    "Medic": {"skill": "Medicine", "daily_xp": 1.35, "wealth_expectation": "comfortable", "focus": "service"},
+    "Chief Medical Officer": {"skill": "Medicine", "daily_xp": 1.4, "wealth_expectation": "prosperous", "focus": "service"},
+    "default": {"skill": None, "daily_xp": 1.0, "wealth_expectation": "modest", "focus": "general"},
+}
+
 # Workforce & Logistics
 DEFAULT_WORK_SHIFT_TICKS = 6
 WORK_SHIFT_DEFINITIONS = {

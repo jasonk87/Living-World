@@ -408,6 +408,10 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                             "citizenship": getattr(char, 'citizenship_status', 'Resident'),
                             "family_members": list(getattr(char, 'family_members', [])),
                             "life_highlights": char.get_life_highlights(limit=3) if hasattr(char, 'get_life_highlights') else [],
+                            "career_stage": getattr(char, 'career_stage', None),
+                            "job_satisfaction": getattr(char, 'job_satisfaction', None),
+                            "profession_focus": getattr(char, 'professional_focus', None),
+                            "profession_tenure": getattr(char, 'current_profession_tenure', None),
                         })
 
                 event_log_repr = game_world.event_log[-20:] if game_world else []
@@ -591,6 +595,11 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                         {"day": entry[0], "net_worth": entry[1]}
                         for entry in getattr(character, 'wealth_history', [])
                     ],
+                    "career_stage": getattr(character, 'career_stage', None),
+                    "job_satisfaction": getattr(character, 'job_satisfaction', None),
+                    "profession_focus": getattr(character, 'professional_focus', None),
+                    "profession_tenure": getattr(character, 'current_profession_tenure', None),
+                    "profession_history": character.export_profession_history(limit=10),
                     "performance_rating": getattr(character, 'performance_rating', "N/A"),
                     "warning_count": getattr(character, 'warning_count', 0),
                     "known_characters": getattr(character, 'known_characters', []),
@@ -604,6 +613,7 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "age": getattr(character, 'age_years', None),
                     "origin": getattr(character, 'origin', None),
                     "citizenship": getattr(character, 'citizenship_status', 'Resident'),
+                    "reputation": getattr(character, 'reputation_score', None),
                 }
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')

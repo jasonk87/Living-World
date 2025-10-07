@@ -4356,6 +4356,19 @@ class World:
             report["wealth_events"] = wealth_events
         return snapshot
 
+    def _update_professions(self, report: Dict[str, Any]) -> List[Dict[str, Any]]:
+        profession_events: List[Dict[str, Any]] = []
+        for character in self.characters:
+            if not hasattr(character, "evaluate_profession_daily"):
+                continue
+            updates = character.evaluate_profession_daily(self)
+            if updates:
+                profession_events.append({"character": character.name, **updates})
+
+        if profession_events:
+            report["profession_events"] = profession_events
+        return profession_events
+
     def _evaluate_wealth_tensions(
         self,
         report: Dict[str, Any],
@@ -5544,6 +5557,7 @@ class World:
         housing_snapshot = self._evaluate_housing_daily(report)
         business_events = self._update_businesses(report)
         wealth_snapshot = self._update_character_wealth(report)
+        profession_events = self._update_professions(report)
         self._resolve_theft_attempts(report)
         self._evaluate_wealth_tensions(report, wealth_snapshot)
         self.process_workforce_daily(report)
@@ -5616,6 +5630,42 @@ class World:
                 nobility = wealth_event["nobility"]
                 self.add_event_log_message(
                     f"{wealth_event['character']} earns the title {nobility.get('title')} through amassed wealth."
+                )
+        for profession_event in profession_events:
+            name = profession_event.get("character")
+            if not name:
+                continue
+            current_char = self.get_character_by_name(name)
+            if "job_change" in profession_event:
+                change = profession_event["job_change"]
+                from_job = change.get("from", "Unassigned")
+                to_job = change.get("to", "Unassigned")
+                tenure = change.get("tenure")
+                if isinstance(tenure, (int, float)):
+                    self.add_event_log_message(
+                        f"{name} transitioned from {from_job} to {to_job} after {int(tenure)} day{'s' if tenure != 1 else ''}."
+                    )
+                else:
+                    self.add_event_log_message(f"{name} assumed the role of {to_job}.")
+            if "stage_change" in profession_event:
+                stage_data = profession_event["stage_change"]
+                new_stage = stage_data.get("to") or "Skilled"
+                job_label = current_char.job if current_char else "their craft"
+                self.add_event_log_message(f"{name} is now a {new_stage} {job_label}.")
+            if "tenure_milestones" in profession_event:
+                for milestone in profession_event["tenure_milestones"]:
+                    self.add_event_log_message(
+                        f"{name} has served {milestone} day{'s' if milestone != 1 else ''} as {current_char.job if current_char else 'their role'}."
+                    )
+            if "burnout" in profession_event:
+                burn = profession_event["burnout"]
+                self.add_event_log_message(
+                    f"{name} struggles with their duties (satisfaction {burn.get('satisfaction', 0):.2f})."
+                )
+            if "thriving" in profession_event:
+                high = profession_event["thriving"]
+                self.add_event_log_message(
+                    f"{name} thrives in their work (satisfaction {high.get('satisfaction', 0):.2f})."
                 )
         if report.get("wealth_tensions"):
             for tension in report["wealth_tensions"]:
