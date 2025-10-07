@@ -1293,3 +1293,30 @@ def test_process_family_dynamics_starts_romance():
     assert any(event.get("type") == "romance_started" for event in family_events)
     assert borin.name in aisling.active_romances
     assert aisling.name in borin.active_romances
+
+
+def test_world_daily_report_includes_personal_pursuits():
+    world, _ = _make_world()
+    resident = Character(
+        name="Caro",
+        personality="Curious",
+        traits=["Resourceful"],
+        skills={},
+        needs=_standard_needs(),
+    )
+    world.add_character(resident)
+
+    assert resident.personal_pursuits
+
+    pursuit = resident.personal_pursuits[0]
+    threshold = getattr(config, "PERSONAL_PURSUIT_LIFE_EVENT_PROGRESS", 1.0)
+    pursuit["progress"] = threshold - 0.05
+    pursuit["progress_per_day"] = threshold
+    pursuit["affinity"] = 2.0
+
+    world.process_daily_economy()
+
+    report = world.last_daily_economic_report
+    assert "personal_pursuits" in report
+    assert world.latest_personal_pursuit_events
+    assert any(event.get("type") == "pursuit_engaged" for event in report["personal_pursuits"])

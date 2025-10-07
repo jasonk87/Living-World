@@ -1208,6 +1208,119 @@ DECISION_BURNOUT_REST_BONUS = 3.5
 DECISION_SOCIAL_FROM_WORK_DRAIN = 0.45
 SAFETY_CRITICAL_WANDER_BASE_CHANCE = 0.3
 
+# Personal Pursuits & Passions
+PERSONAL_PURSUIT_SLOTS = 3
+PERSONAL_PURSUIT_PROGRESS_PER_DAY = 0.22
+PERSONAL_PURSUIT_NEED_GAIN_DEFAULT = 5
+PERSONAL_PURSUIT_MOOD_BONUS_DEFAULT = 3
+PERSONAL_PURSUIT_LOG_MAX = 18
+PERSONAL_PURSUIT_ENGAGE_THRESHOLD = 0.65
+PERSONAL_PURSUIT_LOW_ENERGY_THRESHOLD = 45
+PERSONAL_PURSUIT_LOW_ENERGY_PENALTY = 0.45
+PERSONAL_PURSUIT_NEED_DRIVE_THRESHOLD = 55
+PERSONAL_PURSUIT_NEED_WEIGHT = 0.018
+PERSONAL_PURSUIT_LOW_MOOD_THRESHOLD = -20
+PERSONAL_PURSUIT_LOW_MOOD_BONUS = 0.3
+PERSONAL_PURSUIT_STREAK_BONUS = 0.1
+PERSONAL_PURSUIT_STREAK_PROGRESS_BONUS = 0.16
+PERSONAL_PURSUIT_STREAK_FORGET_DAYS = 3
+PERSONAL_PURSUIT_SCORE_PROGRESS_SCALE = 0.12
+PERSONAL_PURSUIT_LIFE_EVENT_PROGRESS = 1.0
+
+PERSONAL_PURSUITS_LIBRARY = {
+    "storykeeping": {
+        "name": "Storykeeping",
+        "category": "Culture",
+        "base_weight": 1.05,
+        "need_focus": "Belonging",
+        "need_gain": 7,
+        "mood_bonus": 5,
+        "progress_per_day": 0.24,
+        "skill_gain": {"Oratory": 0.6},
+        "memory_template": "Shared stories with neighbours, tending our oral history.",
+        "milestone_summary": "Completed a new tale cycle to share with the settlement.",
+        "tags": ["community", "art"],
+    },
+    "craft_mastery": {
+        "name": "Craft Mastery",
+        "category": "Artisan",
+        "base_weight": 1.1,
+        "need_focus": "Esteem",
+        "need_gain": 6,
+        "mood_bonus": 4,
+        "progress_per_day": 0.28,
+        "skill_gain": {"Crafting": 0.7},
+        "memory_template": "Worked on a personal craft project to hone my skills.",
+        "milestone_summary": "Completed a signature piece that showcases growing mastery.",
+        "tags": ["craft", "focus"],
+    },
+    "herbalism_study": {
+        "name": "Herbalism Study",
+        "category": "Nature",
+        "base_weight": 0.95,
+        "need_focus": "Safety",
+        "need_gain": 5,
+        "mood_bonus": 3,
+        "progress_per_day": 0.23,
+        "skill_gain": {"Herbalism": 0.65},
+        "memory_template": "Catalogued herbs and remedies gathered from the wilds.",
+        "milestone_summary": "Documented a new remedy to help keep neighbours healthy.",
+        "tags": ["healing", "study"],
+    },
+    "community_bonding": {
+        "name": "Community Bonding",
+        "category": "Service",
+        "base_weight": 1.0,
+        "need_focus": "Belonging",
+        "need_gain": 8,
+        "mood_bonus": 5,
+        "progress_per_day": 0.2,
+        "skill_gain": {"Diplomacy": 0.5},
+        "memory_template": "Organised time with neighbours to strengthen our bonds.",
+        "milestone_summary": "Coordinated a community effort that brought settlers closer together.",
+        "tags": ["community", "service"],
+    },
+    "venture_planning": {
+        "name": "Venture Planning",
+        "category": "Enterprise",
+        "base_weight": 0.9,
+        "need_focus": "Esteem",
+        "need_gain": 6,
+        "mood_bonus": 3,
+        "progress_per_day": 0.21,
+        "skill_gain": {"Commerce": 0.6},
+        "memory_template": "Sketched out ideas to grow a personal venture.",
+        "milestone_summary": "Drafted a concrete plan that could launch a new enterprise.",
+        "tags": ["wealth", "planning"],
+    },
+}
+
+PERSONAL_PURSUIT_PERSONALITY_WEIGHTS = {
+    "Gregarious": {"community_bonding": 0.4, "storykeeping": 0.25},
+    "Ambitious": {"venture_planning": 0.45, "craft_mastery": 0.3},
+    "Curious": {"storykeeping": 0.3, "herbalism_study": 0.25},
+    "Stoic": {"craft_mastery": 0.25},
+    "Nurturing": {"community_bonding": 0.35, "herbalism_study": 0.2},
+}
+
+PERSONAL_PURSUIT_TRAIT_WEIGHTS = {
+    "Organized": {"craft_mastery": 0.35, "venture_planning": 0.2},
+    "Resourceful": {"herbalism_study": 0.3, "venture_planning": 0.25},
+    "Generous": {"community_bonding": 0.45},
+    "Diligent": {"craft_mastery": 0.25},
+    "Patient": {"herbalism_study": 0.25},
+    "Curious": {"storykeeping": 0.25, "herbalism_study": 0.2},
+    "Compassionate": {"community_bonding": 0.3},
+}
+
+PERSONAL_PURSUIT_JOB_WEIGHTS = {
+    "Innkeeper": {"community_bonding": 0.4, "storykeeping": 0.2},
+    "Herbalist": {"herbalism_study": 0.5},
+    "Merchant": {"venture_planning": 0.45},
+    "Builder": {"craft_mastery": 0.3},
+    "Scribe": {"storykeeping": 0.5},
+}
+
 # Mood System Configs
 MOOD_SCORE_MIN = -100
 MOOD_SCORE_MAX = 100

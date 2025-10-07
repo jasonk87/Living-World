@@ -171,3 +171,55 @@ def test_decision_profile_adjusts_rest_threshold(mock_random):  # noqa: ARG001
 
     assert reflective.current_goal.type == GoalType.REST_AT_HOME
     assert reflective.current_goal.parameters.get("building_location") == cottage.location
+
+
+def test_character_initializes_personal_pursuits():
+    character = Character(
+        name="Iris",
+        personality="Gregarious",
+        traits=["Generous"],
+        skills={},
+        needs=_basic_needs(),
+    )
+
+    assert character.personal_pursuits
+    assert 0 < len(character.personal_pursuits) <= config.PERSONAL_PURSUIT_SLOTS
+    for pursuit in character.personal_pursuits:
+        assert "key" in pursuit
+        assert "progress" in pursuit
+        assert pursuit.get("level", 0) == 0
+
+
+def test_personal_pursuits_progress_and_log_entries():
+    world, game_time = _make_world_with_time()
+    citizen = Character(
+        name="Elio",
+        personality="Ambitious",
+        traits=["Organized"],
+        skills={},
+        needs=_basic_needs(),
+    )
+    world.add_character(citizen)
+    assert citizen.personal_pursuits
+
+    pursuit = citizen.personal_pursuits[0]
+    progress_threshold = getattr(config, "PERSONAL_PURSUIT_LIFE_EVENT_PROGRESS", 1.0)
+    pursuit["progress"] = progress_threshold - 0.1
+    pursuit["progress_per_day"] = progress_threshold
+    pursuit["affinity"] = 2.0
+    pursuit["need_focus"] = "Esteem"
+    citizen.needs["Esteem"] = max(config.NEED_SCORE_MIN, config.NEED_ESTEEM_DEFAULT - 20)
+
+    events = citizen.evaluate_personal_pursuits_daily(world)
+
+    assert events
+    assert any(event.get("type") == "pursuit_engaged" for event in events)
+    assert citizen.personal_pursuit_log
+    assert pursuit.get("last_day") == game_time.current_day
+    assert citizen.needs["Esteem"] >= config.NEED_ESTEEM_DEFAULT - 20
+    assert citizen.active_personal_project == pursuit["key"]
+
+    milestone_events = [event for event in events if event.get("type") == "pursuit_milestone"]
+    assert milestone_events
+    assert pursuit.get("level", 0) >= 1
+    assert any(evt.get("type") == "pursuit_milestone" for evt in citizen.life_history)

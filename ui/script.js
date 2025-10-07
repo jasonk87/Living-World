@@ -1504,6 +1504,16 @@ document.addEventListener('DOMContentLoaded', () => {
             }).join('')}</ul>`
             : '<p class="muted">No highlights logged.</p>';
 
+        const pursuits = Array.isArray(character.personal_pursuits) ? character.personal_pursuits : [];
+        const pursuitPreview = pursuits.slice(0, 3).map(entry => {
+            const stage = typeof entry.level === 'number' ? entry.level : 0;
+            const label = entry.name || entry.key || 'Pursuit';
+            return `${label} (S${stage})`;
+        });
+        const pursuitsSummary = pursuitPreview.length ? pursuitPreview.join(', ') : 'None registered';
+        const activePursuit = pursuits.find(entry => entry.key === character.active_personal_project);
+        const activeLabel = activePursuit ? ` • Active: ${activePursuit.name}` : '';
+
         followOverlayBody.innerHTML = `
             <p><strong>${character.name}</strong>${rankTitle ? ` • ${rankTitle}` : ''}</p>
             <p>${character.job || 'Unassigned'} • Goal: ${goalSummary}</p>
@@ -1516,6 +1526,8 @@ document.addEventListener('DOMContentLoaded', () => {
             <p><strong>Wealth</strong></p>
             <p>Net Worth ${netWorthText} • Purse ${purseText}</p>
             ${businessSummary}
+            <p><strong>Pursuits</strong></p>
+            <p>${pursuitsSummary}${activeLabel}</p>
             <hr>
             <p><strong>Family</strong></p>
             ${familySummary}
@@ -2125,6 +2137,100 @@ document.addEventListener('DOMContentLoaded', () => {
         return wrapper;
     }
 
+    function buildPursuitsContent(character) {
+        const wrapper = document.createElement('div');
+
+        const pursuits = Array.isArray(character.personal_pursuits) ? character.personal_pursuits : [];
+        const logEntries = Array.isArray(character.personal_pursuit_log) ? character.personal_pursuit_log : [];
+        const activeKey = character.active_personal_project;
+
+        const summarySection = document.createElement('section');
+        summarySection.innerHTML = '<h4>Focus</h4>';
+        if (pursuits.length) {
+            const active = pursuits.find(entry => entry.key === activeKey);
+            const leading = [...pursuits].sort((a, b) => (b.level || 0) - (a.level || 0))[0];
+            const activeText = active ? `${active.name} (Stage ${active.level || 0})` : 'None set';
+            const accomplished = leading ? `${leading.name} (Stage ${leading.level || 0})` : '—';
+            summarySection.innerHTML += `
+                <p><strong>Active:</strong> ${activeText}</p>
+                <p><strong>Most seasoned:</strong> ${accomplished}</p>
+                <p><strong>Total pursuits:</strong> ${pursuits.length}</p>
+            `;
+        } else {
+            summarySection.innerHTML += '<p class="muted">No personal pursuits charted yet.</p>';
+        }
+
+        const pursuitSection = document.createElement('section');
+        pursuitSection.innerHTML = '<h4>Pursuits</h4>';
+        if (pursuits.length) {
+            const cards = document.createElement('div');
+            cards.classList.add('pursuit-grid');
+            pursuits.forEach(entry => {
+                const card = document.createElement('article');
+                card.classList.add('pursuit-card');
+                if (entry.key === activeKey) {
+                    card.classList.add('active');
+                }
+                const stage = typeof entry.level === 'number' ? entry.level : 0;
+                const streak = typeof entry.streak === 'number' ? entry.streak : 0;
+                const progress = typeof entry.progress === 'number' ? Math.max(0, Math.min(100, Math.round(entry.progress * 100))) : 0;
+                const affinity = typeof entry.affinity === 'number' ? entry.affinity.toFixed(2) : '—';
+                const focusLabel = entry.need_focus ? `Focuses ${entry.need_focus}` : 'Focus unknown';
+                const tags = Array.isArray(entry.tags) && entry.tags.length ? entry.tags.join(', ') : null;
+
+                card.innerHTML = `
+                    <header>
+                        <h5>${entry.name || entry.key || 'Personal pursuit'}</h5>
+                        <span class="tag">${entry.category || 'Personal'}</span>
+                    </header>
+                    <p class="pursuit-meta">Stage ${stage} • Streak ${streak}</p>
+                    <div class="progress-bar">
+                        <div class="fill" style="width: ${progress}%;"></div>
+                    </div>
+                    <p class="pursuit-footnote">${focusLabel} • Affinity ${affinity}</p>
+                    ${tags ? `<p class="mini-note">${tags}</p>` : ''}
+                `;
+
+                cards.appendChild(card);
+            });
+            pursuitSection.appendChild(cards);
+        } else {
+            pursuitSection.innerHTML += '<p class="muted">No passions discovered yet.</p>';
+        }
+
+        const logSection = document.createElement('section');
+        logSection.innerHTML = '<h4>Recent Notes</h4>';
+        if (logEntries.length) {
+            const list = document.createElement('ul');
+            list.classList.add('mini-list', 'compact');
+            logEntries.slice(-10).reverse().forEach(entry => {
+                const li = document.createElement('li');
+                const dayText = typeof entry.day === 'number' ? `Day ${entry.day}` : 'Day —';
+                if (entry.type === 'pursuit') {
+                    const stage = typeof entry.stage === 'number' ? entry.stage : '—';
+                    const progress = typeof entry.progress === 'number' ? Math.round(entry.progress * 100) : null;
+                    const progressText = progress !== null ? ` • ${progress}% toward next milestone` : '';
+                    li.innerHTML = `<strong>${dayText}</strong>: Practiced ${entry.pursuit}${progressText} (Stage ${stage}).`;
+                } else if (entry.type === 'milestone') {
+                    const stage = typeof entry.stage === 'number' ? entry.stage : '—';
+                    li.innerHTML = `<strong>${dayText}</strong>: Reached stage ${stage} in ${entry.pursuit}.`;
+                } else if (entry.type === 'skip') {
+                    const reason = entry.reason || 'took a rest';
+                    li.innerHTML = `<strong>${dayText}</strong>: Deferred ${entry.pursuit} (${reason}).`;
+                } else {
+                    li.innerHTML = `<strong>${dayText}</strong>: ${entry.pursuit || 'Pursuit'} noted.`;
+                }
+                list.appendChild(li);
+            });
+            logSection.appendChild(list);
+        } else {
+            logSection.innerHTML += '<p class="muted">No journal entries yet.</p>';
+        }
+
+        wrapper.append(summarySection, pursuitSection, logSection);
+        return wrapper;
+    }
+
     function buildCharacterDetails(character) {
         const wrapper = document.createElement('section');
         wrapper.classList.add('detail-tabs');
@@ -2171,6 +2277,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const tabs = [
             { label: 'Overview', builder: buildOverviewContent },
             { label: 'Social', builder: buildSocialContent },
+            { label: 'Pursuits', builder: buildPursuitsContent },
             { label: 'Activity', builder: buildActivityContent },
         ];
 

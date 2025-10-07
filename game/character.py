@@ -153,6 +153,13 @@ class Character:
         self._life_event_flags: Set[str] = set()
         self.known_events: List[str] = []
 
+        self.personal_pursuits: List[Dict[str, Any]] = []
+        self.personal_pursuit_log: Deque[Dict[str, Any]] = deque(
+            maxlen=getattr(config, "PERSONAL_PURSUIT_LOG_MAX", 12)
+        )
+        self.active_personal_project: Optional[str] = None
+        self._last_personal_pursuit_day: Optional[int] = None
+
         self.profession_history: List[Dict[str, Any]] = []
         self.career_stage: str = getattr(config, "CAREER_DEFAULT_STAGE", "Apprentice")
         self.job_satisfaction: float = getattr(config, "CAREER_SATISFACTION_BASELINE", 0.6)
@@ -196,6 +203,8 @@ class Character:
         self.mood: str = "Neutral" # Initial descriptive mood, will be updated by _determine_mood_level
         # self.mood_tendency: Optional[str] = None # Example: "Optimistic", "Pessimistic" - for future enhancement
         self._determine_mood_level() # Set initial mood string based on score
+
+        self._initialize_personal_pursuits()
 
         base_decision_weights = getattr(config, "DECISION_BASE_WEIGHTS", None)
         if base_decision_weights:
@@ -725,6 +734,9 @@ class Character:
             "opinions": self.opinions,
             "dialogue_history": self.dialogue_history[-10:], # Return last 10 for brevity
             "decision_profile": deepcopy(self._decision_profile) if self._decision_profile else None,
+            "personal_pursuits": self.export_personal_pursuits(),
+            "personal_pursuit_log": self.export_personal_pursuit_log(limit=8),
+            "active_personal_project": self.active_personal_project,
         }
 
     def __str__(self):
@@ -1070,6 +1082,325 @@ class Character:
         if limit is not None and limit > 0:
             history = history[-limit:]
         return history
+
+    def _initialize_personal_pursuits(self) -> None:
+        library: Dict[str, Dict[str, Any]] = getattr(config, "PERSONAL_PURSUITS_LIBRARY", {})
+        if not library:
+            self.personal_pursuits = []
+            self.personal_pursuit_log.clear()
+            self.active_personal_project = None
+            return
+
+        weighted: List[Tuple[str, float]] = []
+        personality_weights: Dict[str, Dict[str, float]] = getattr(
+            config, "PERSONAL_PURSUIT_PERSONALITY_WEIGHTS", {}
+        )
+        trait_weights: Dict[str, Dict[str, float]] = getattr(
+            config, "PERSONAL_PURSUIT_TRAIT_WEIGHTS", {}
+        )
+        job_weights: Dict[str, Dict[str, float]] = getattr(
+            config, "PERSONAL_PURSUIT_JOB_WEIGHTS", {}
+        )
+
+        for key, definition in library.items():
+            base_weight = float(definition.get("base_weight", 1.0))
+            if base_weight <= 0:
+                continue
+            weight = base_weight
+            weight += personality_weights.get(self.personality, {}).get(key, 0.0)
+            for trait in self.traits:
+                weight += trait_weights.get(trait, {}).get(key, 0.0)
+            if self.job:
+                weight += job_weights.get(self.job, {}).get(key, 0.0)
+            weight = max(0.0, weight)
+            if weight > 0:
+                weighted.append((key, weight))
+
+        if not weighted:
+            weighted = [
+                (key, max(0.1, float(definition.get("base_weight", 1.0))))
+                for key, definition in library.items()
+            ]
+
+        weighted.sort(key=lambda item: item[1], reverse=True)
+        slots = max(1, int(getattr(config, "PERSONAL_PURSUIT_SLOTS", 2)))
+        selected = weighted[:slots]
+
+        pursuits: List[Dict[str, Any]] = []
+        for key, weight in selected:
+            definition = deepcopy(library.get(key, {}))
+            entry: Dict[str, Any] = {
+                "key": key,
+                "name": definition.get("name", key.replace("_", " ").title()),
+                "category": definition.get("category", "Personal"),
+                "progress": 0.0,
+                "level": 0,
+                "streak": 0,
+                "affinity": max(0.1, float(weight)),
+                "need_focus": definition.get("need_focus"),
+                "need_gain": int(
+                    definition.get(
+                        "need_gain",
+                        getattr(config, "PERSONAL_PURSUIT_NEED_GAIN_DEFAULT", 5),
+                    )
+                ),
+                "mood_bonus": int(
+                    definition.get(
+                        "mood_bonus",
+                        getattr(config, "PERSONAL_PURSUIT_MOOD_BONUS_DEFAULT", 3),
+                    )
+                ),
+                "progress_per_day": float(
+                    definition.get(
+                        "progress_per_day",
+                        getattr(config, "PERSONAL_PURSUIT_PROGRESS_PER_DAY", 0.2),
+                    )
+                ),
+                "skill_gain": dict(definition.get("skill_gain", {})),
+                "memory_template": definition.get("memory_template"),
+                "milestone_summary": definition.get("milestone_summary"),
+                "tags": list(definition.get("tags", [])),
+                "last_day": None,
+            }
+            pursuits.append(entry)
+
+        self.personal_pursuits = pursuits
+        self.personal_pursuit_log.clear()
+        self.active_personal_project = None
+
+    def _score_personal_pursuit(self, pursuit: Dict[str, Any]) -> float:
+        score = float(pursuit.get("affinity", 1.0))
+        energy = self.needs.get("Energy", 60)
+        low_energy_threshold = getattr(config, "PERSONAL_PURSUIT_LOW_ENERGY_THRESHOLD", 40)
+        if energy < low_energy_threshold:
+            score -= getattr(config, "PERSONAL_PURSUIT_LOW_ENERGY_PENALTY", 0.4)
+
+        need_focus = pursuit.get("need_focus")
+        if need_focus:
+            threshold = getattr(config, "PERSONAL_PURSUIT_NEED_DRIVE_THRESHOLD", 55)
+            need_value = self.needs.get(need_focus, threshold)
+            if need_value < threshold:
+                deficit = threshold - need_value
+                score += deficit * getattr(config, "PERSONAL_PURSUIT_NEED_WEIGHT", 0.01)
+
+        if self.mood_score <= getattr(config, "PERSONAL_PURSUIT_LOW_MOOD_THRESHOLD", -20):
+            score += getattr(config, "PERSONAL_PURSUIT_LOW_MOOD_BONUS", 0.3)
+
+        streak = max(0, int(pursuit.get("streak", 0)))
+        score += streak * getattr(config, "PERSONAL_PURSUIT_STREAK_BONUS", 0.1)
+        return max(0.0, score)
+
+    def evaluate_personal_pursuits_daily(self, world: 'World') -> List[Dict[str, Any]]:
+        if not world or not world.game_time or not self.personal_pursuits:
+            return []
+
+        day = world.game_time.current_day
+        if self._last_personal_pursuit_day == day:
+            return []
+        self._last_personal_pursuit_day = day
+
+        forget_window = max(1, int(getattr(config, "PERSONAL_PURSUIT_STREAK_FORGET_DAYS", 3)))
+        for pursuit in self.personal_pursuits:
+            last_day = pursuit.get("last_day")
+            if last_day is None:
+                continue
+            if day - int(last_day) > forget_window and pursuit.get("streak", 0) > 0:
+                pursuit["streak"] = max(0, int(pursuit.get("streak", 0)) - 1)
+
+        ranked = sorted(
+            self.personal_pursuits,
+            key=lambda entry: self._score_personal_pursuit(entry),
+            reverse=True,
+        )
+        if not ranked:
+            return []
+
+        chosen = ranked[0]
+        score = self._score_personal_pursuit(chosen)
+        threshold = getattr(config, "PERSONAL_PURSUIT_ENGAGE_THRESHOLD", 0.6)
+        events: List[Dict[str, Any]] = []
+
+        if score < threshold:
+            if chosen.get("streak", 0) > 0:
+                chosen["streak"] = max(0, int(chosen.get("streak", 0)) - 1)
+            self.active_personal_project = None
+            log_entry = {
+                "day": day,
+                "type": "skip",
+                "pursuit": chosen.get("name", chosen.get("key")),
+                "score": round(score, 3),
+                "reason": "low_energy"
+                if self.needs.get("Energy", 0) < getattr(config, "PERSONAL_PURSUIT_LOW_ENERGY_THRESHOLD", 40)
+                else "low_drive",
+            }
+            self.personal_pursuit_log.append(log_entry)
+            events.append(
+                {
+                    "type": "pursuit_skipped",
+                    "pursuit": chosen.get("key"),
+                    "name": chosen.get("name"),
+                    "score": round(score, 3),
+                    "reason": log_entry["reason"],
+                }
+            )
+            return events
+
+        chosen.setdefault("level", 0)
+        chosen.setdefault("progress", 0.0)
+        chosen.setdefault("streak", 0)
+
+        chosen["last_day"] = day
+        chosen["streak"] = int(chosen.get("streak", 0)) + 1
+        self.active_personal_project = chosen.get("key")
+
+        base_progress = float(chosen.get("progress_per_day", 0.2))
+        progress_gain = base_progress
+        progress_gain += max(0.0, score - threshold) * getattr(
+            config, "PERSONAL_PURSUIT_SCORE_PROGRESS_SCALE", 0.1
+        )
+        progress_gain *= 1 + (chosen["streak"] - 1) * getattr(
+            config, "PERSONAL_PURSUIT_STREAK_PROGRESS_BONUS", 0.1
+        )
+
+        chosen["progress"] = float(chosen.get("progress", 0.0)) + max(0.0, progress_gain)
+
+        mood_delta = int(chosen.get("mood_bonus", getattr(config, "PERSONAL_PURSUIT_MOOD_BONUS_DEFAULT", 3)))
+        if mood_delta:
+            self.update_mood_score(
+                mood_delta,
+                reason=f"Invested time in {chosen.get('name', 'a personal pursuit')}",
+            )
+
+        need_focus = chosen.get("need_focus")
+        need_delta = 0
+        if need_focus:
+            gain_amount = int(
+                chosen.get(
+                    "need_gain",
+                    getattr(config, "PERSONAL_PURSUIT_NEED_GAIN_DEFAULT", 5),
+                )
+            )
+            if gain_amount:
+                current_value = self.needs.get(need_focus, getattr(config, f"NEED_{need_focus.upper()}_DEFAULT", 50))
+                self.needs[need_focus] = min(config.NEED_SCORE_MAX, current_value + gain_amount)
+                need_delta = gain_amount
+
+        skill_gain: Dict[str, Any] = chosen.get("skill_gain", {})
+        for skill_name, experience in skill_gain.items():
+            try:
+                self._grant_skill_experience(skill_name, float(experience), world)
+            except Exception:
+                continue
+
+        memory_note = chosen.get("memory_template")
+        if memory_note:
+            self.add_memory(memory_note)
+        else:
+            self.add_memory(f"Spent time pursuing {chosen.get('name', 'a passion')}.")
+
+        progress_threshold = max(0.5, float(getattr(config, "PERSONAL_PURSUIT_LIFE_EVENT_PROGRESS", 1.0)))
+        levels_gained = 0
+        while chosen["progress"] >= progress_threshold:
+            chosen["progress"] -= progress_threshold
+            chosen["level"] = int(chosen.get("level", 0)) + 1
+            levels_gained += 1
+
+        log_entry = {
+            "day": day,
+            "type": "pursuit",
+            "pursuit": chosen.get("name", chosen.get("key")),
+            "stage": int(chosen.get("level", 0)),
+            "progress": round(chosen.get("progress", 0.0), 3),
+            "streak": chosen.get("streak", 0),
+            "score": round(score, 3),
+        }
+
+        if levels_gained > 0:
+            log_entry["milestone"] = int(chosen.get("level", 0))
+        self.personal_pursuit_log.append(log_entry)
+
+        events.append(
+            {
+                "type": "pursuit_engaged",
+                "pursuit": chosen.get("key"),
+                "name": chosen.get("name"),
+                "category": chosen.get("category"),
+                "stage": int(chosen.get("level", 0)),
+                "progress": round(chosen.get("progress", 0.0), 3),
+                "score": round(score, 3),
+                "streak": chosen.get("streak", 0),
+                "mood_delta": mood_delta,
+                "need_focus": need_focus,
+                "need_delta": need_delta,
+            }
+        )
+
+        if levels_gained > 0:
+            summary = chosen.get("milestone_summary") or f"Reached a new milestone in {chosen.get('name', 'a pursuit')}"
+            life_event = self.record_life_event(
+                world,
+                "pursuit_milestone",
+                summary,
+                related=[chosen.get("name")],
+                tags=["pursuit", chosen.get("category", "personal")],
+                significance=2,
+                details={
+                    "pursuit": chosen.get("key"),
+                    "category": chosen.get("category"),
+                    "level": int(chosen.get("level", 0)),
+                    "streak": chosen.get("streak", 0),
+                },
+            )
+            milestone_event = {
+                "type": "pursuit_milestone",
+                "pursuit": chosen.get("key"),
+                "name": chosen.get("name"),
+                "category": chosen.get("category"),
+                "stage": int(chosen.get("level", 0)),
+                "streak": chosen.get("streak", 0),
+            }
+            if life_event:
+                milestone_event["life_event"] = life_event
+            self.personal_pursuit_log.append(
+                {
+                    "day": day,
+                    "type": "milestone",
+                    "pursuit": chosen.get("name", chosen.get("key")),
+                    "stage": int(chosen.get("level", 0)),
+                }
+            )
+            events.append(milestone_event)
+
+        return events
+
+    def export_personal_pursuits(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        pursuits = list(self.personal_pursuits)
+        if limit is not None and limit > 0:
+            pursuits = pursuits[:limit]
+        exported: List[Dict[str, Any]] = []
+        for entry in pursuits:
+            exported.append(
+                {
+                    "key": entry.get("key"),
+                    "name": entry.get("name"),
+                    "category": entry.get("category"),
+                    "progress": round(float(entry.get("progress", 0.0)), 3),
+                    "level": int(entry.get("level", 0)),
+                    "streak": int(entry.get("streak", 0)),
+                    "affinity": round(float(entry.get("affinity", 0.0)), 3),
+                    "need_focus": entry.get("need_focus"),
+                    "tags": list(entry.get("tags", [])),
+                    "last_day": entry.get("last_day"),
+                    "progress_per_day": round(float(entry.get("progress_per_day", 0.0)), 3),
+                }
+            )
+        return exported
+
+    def export_personal_pursuit_log(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        entries = list(self.personal_pursuit_log)
+        if limit is not None and limit > 0:
+            entries = entries[-limit:]
+        return [deepcopy(entry) for entry in entries]
 
     def get_romantic_partners(self) -> List[str]:
         return sorted(self.romantic_partners)

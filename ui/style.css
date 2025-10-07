@@ -1141,6 +1141,78 @@ button:focus-visible {
     display: grid;
 }
 
+.pursuit-grid {
+    display: grid;
+    gap: 0.75rem;
+    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+}
+
+.pursuit-card {
+    display: grid;
+    gap: 0.35rem;
+    padding: 0.75rem 0.85rem;
+    border-radius: 12px;
+    background: rgba(10, 16, 28, 0.58);
+    border: 1px solid rgba(93, 224, 255, 0.12);
+    box-shadow: inset 0 0 0 1px rgba(12, 38, 60, 0.35);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.pursuit-card.active {
+    border-color: rgba(93, 224, 255, 0.35);
+    box-shadow: 0 0 12px rgba(93, 224, 255, 0.18);
+}
+
+.pursuit-card header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+}
+
+.pursuit-card header h5 {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+}
+
+.pursuit-card .tag {
+    font-size: 0.7rem;
+    padding: 0.2rem 0.55rem;
+    border-radius: 999px;
+    border: 1px solid rgba(93, 224, 255, 0.26);
+    background: rgba(93, 224, 255, 0.14);
+    color: rgba(186, 240, 255, 0.9);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.pursuit-meta {
+    margin: 0;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+}
+
+.pursuit-footnote {
+    margin: 0;
+    font-size: 0.76rem;
+    color: var(--text-muted);
+}
+
+.progress-bar {
+    width: 100%;
+    height: 6px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.09);
+    overflow: hidden;
+}
+
+.progress-bar .fill {
+    height: 100%;
+    background: linear-gradient(90deg, rgba(93, 224, 255, 0.35), rgba(93, 224, 255, 0.9));
+    border-radius: inherit;
+}
+
 .opinion-block {
     padding: 0.6rem 0.8rem;
     border-radius: 12px;

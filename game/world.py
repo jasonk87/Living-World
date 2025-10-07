@@ -67,6 +67,7 @@ class World:
         self.businesses: Dict[str, Dict[str, Any]] = {}
         self._business_counter: int = 0
         self.latest_wealth_snapshot: Dict[str, Any] = {}
+        self.latest_personal_pursuit_events: List[Dict[str, Any]] = []
         self._last_wealth_tension_day: Optional[int] = None
         self.active_world_effects: Dict[str, Any] = {}
         self.recent_notable_events: List[Dict[str, Any]] = [] # For rumor spreading
@@ -7452,6 +7453,9 @@ class World:
         family_events = self.process_family_dynamics_daily()
         if family_events:
             report["family_events"] = family_events
+        personal_events = self.process_personal_pursuits_daily()
+        if personal_events:
+            report["personal_pursuits"] = personal_events
 
         summary = (
             f"Economic summary — Treasury {self.treasury_coins}c "
@@ -7590,9 +7594,51 @@ class World:
                         self.add_event_log_message(
                             f"{parents[0]} and {parents[1]} welcome {child}."
                         )
+        if personal_events:
+            for event in personal_events:
+                event_type = event.get("type")
+                pursuit_name = event.get("name") or event.get("pursuit")
+                actor = event.get("character")
+                if event_type == "pursuit_milestone":
+                    if pursuit_name and actor:
+                        stage = event.get("stage")
+                        self.add_event_log_message(
+                            f"{actor} reached {pursuit_name} stage {stage}."
+                        )
+                elif event_type == "pursuit_engaged":
+                    if pursuit_name and actor:
+                        self.add_event_log_message(
+                            f"{actor} dedicated time to {pursuit_name} (progress {event.get('progress')})."
+                        )
+                elif event_type == "pursuit_skipped":
+                    if pursuit_name and actor:
+                        reason = event.get("reason", "tired")
+                        self.add_event_log_message(
+                            f"{actor} deferred {pursuit_name} today ({reason})."
+                        )
 
         self.last_daily_economic_report = report
         self.today_surplus_sales = []
+
+    def process_personal_pursuits_daily(self) -> List[Dict[str, Any]]:
+        if not self.game_time:
+            return []
+
+        pursuit_events: List[Dict[str, Any]] = []
+        for character in self.characters:
+            if not hasattr(character, "evaluate_personal_pursuits_daily"):
+                continue
+            updates = character.evaluate_personal_pursuits_daily(self)
+            for update in updates or []:
+                payload = dict(update)
+                payload.setdefault("character", character.name)
+                pursuit_events.append(payload)
+
+        if pursuit_events:
+            self.latest_personal_pursuit_events = pursuit_events
+        else:
+            self.latest_personal_pursuit_events = []
+        return pursuit_events
 
     # --- Governance & Campaign Management ---
 

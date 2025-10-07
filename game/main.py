@@ -502,6 +502,7 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "workforce": game_world.get_workforce_snapshot() if hasattr(game_world, 'get_workforce_snapshot') else {},
                     "families": game_world.get_family_snapshot() if hasattr(game_world, 'get_family_snapshot') else {},
                     "governance": game_world.get_governance_snapshot() if hasattr(game_world, 'get_governance_snapshot') else {},
+                    "personal_pursuit_events": getattr(game_world, 'latest_personal_pursuit_events', []),
                 }
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
@@ -629,6 +630,9 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "dialogue_history": getattr(character, 'dialogue_history', [])[-10:], # Last 10 dialogue entries
                     "life_history": character.export_life_history(limit=20) if hasattr(character, 'export_life_history') else [],
                     "life_highlights": character.get_life_highlights(limit=6) if hasattr(character, 'get_life_highlights') else [],
+                    "personal_pursuits": character.export_personal_pursuits() if hasattr(character, 'export_personal_pursuits') else [],
+                    "personal_pursuit_log": character.export_personal_pursuit_log(limit=12) if hasattr(character, 'export_personal_pursuit_log') else [],
+                    "active_personal_project": getattr(character, 'active_personal_project', None),
                     "family_profile": game_world.get_family_profile_for_character(character.name) if hasattr(game_world, 'get_family_profile_for_character') else None,
                     "family_members": list(getattr(character, 'family_members', [])),
                     "age": getattr(character, 'age_years', None),
