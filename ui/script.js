@@ -27,6 +27,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const hudRationsValue = document.getElementById('hud-rations-value');
     const hudHydrationValue = document.getElementById('hud-hydration-value');
     const hudHousingValue = document.getElementById('hud-housing-value');
+    const hudResourceWoodValue = document.getElementById('hud-resource-wood-value');
+    const hudResourceStoneValue = document.getElementById('hud-resource-stone-value');
+    const hudResourceFoodValue = document.getElementById('hud-resource-food-value');
+    const hudResourceHerbsValue = document.getElementById('hud-resource-herbs-value');
+    const hudResourceWaterValue = document.getElementById('hud-resource-water-value');
     const hudBadgeWorld = document.getElementById('hud-badge-world');
     const hudBadgeEconomy = document.getElementById('hud-badge-economy');
     const hudBadgeCivic = document.getElementById('hud-badge-civic');
@@ -117,6 +122,16 @@ document.addEventListener('DOMContentLoaded', () => {
         if (typeof value !== 'number' || Number.isNaN(value)) return '—';
         const percent = Math.max(0, Math.min(100, Math.round(value * 100)));
         return `${percent}%`;
+    }
+
+    function updateResourceChip(element, value) {
+        if (!element) return;
+        const hostChip = element.closest('.hud-chip');
+        const safeValue = Number.isFinite(value) ? value : 0;
+        element.textContent = safeValue.toLocaleString();
+        if (hostChip) {
+            hostChip.classList.toggle('muted', safeValue <= 0);
+        }
     }
 
     function updateHudBadge(element, count) {
@@ -337,6 +352,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const populationSnapshot = gameState.population || report.population_snapshot || {};
         const trainingReport = gameState.training || report.training || {};
         const workforceReport = gameState.workforce || report.workforce || {};
+        const landscape = gameState.landscape || report.landscape || {};
         const governance = gameState.governance || {};
         const neighborhoodGatherings = Array.isArray(housingSnapshot.neighborhood_gatherings)
             ? housingSnapshot.neighborhood_gatherings
@@ -610,10 +626,11 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
+        const tileEntries = Object.entries(landscape.tiles || {});
+        const resourceCounts = landscape.resources || {};
+        const resourceEntries = Object.entries(resourceCounts);
+
         if (landscapeSummaryList) {
-            const landscape = gameState.landscape || {};
-            const tileEntries = Object.entries(landscape.tiles || {});
-            const resourceEntries = Object.entries(landscape.resources || {});
             if (!tileEntries.length && !resourceEntries.length) {
                 landscapeSummaryList.innerHTML = '<li class="empty">Landscape survey pending.</li>';
             } else {
@@ -641,6 +658,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     : '<li class="empty">Landscape survey pending.</li>';
             }
         }
+
+        updateResourceChip(hudResourceWoodValue, resourceCounts.Wood);
+        updateResourceChip(hudResourceStoneValue, resourceCounts.Stone);
+        updateResourceChip(hudResourceFoodValue, resourceCounts.Food);
+        updateResourceChip(hudResourceHerbsValue, resourceCounts.Herbs);
+        updateResourceChip(hudResourceWaterValue, resourceCounts.Water);
 
         if (workCrewNote) {
             const gatheredTotal = typeof workforceReport.gathered_total === 'number' ? workforceReport.gathered_total : 0;

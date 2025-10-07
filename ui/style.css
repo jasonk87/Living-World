@@ -288,6 +288,22 @@ button:focus-visible {
     transition: background 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
 }
 
+.map-cell::before {
+    content: '';
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    font-size: calc(var(--tile-size) * 0.48);
+    line-height: 1;
+    pointer-events: none;
+    opacity: 0;
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.35));
+}
+
+.map-cell[data-building='true']::before {
+    content: none;
+}
+
 .map-cell.resource-node {
     box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.18);
 }
@@ -326,6 +342,49 @@ button:focus-visible {
 .map-cell.resource-depleted::after {
     opacity: 0.45;
     filter: grayscale(0.85) drop-shadow(0 1px 2px rgba(0, 0, 0, 0.2));
+}
+
+.tile-Grass::before {
+    content: '';
+}
+
+.tile-Forest::before {
+    content: '🌲';
+    opacity: 1;
+}
+
+.tile-Wood::before {
+    content: '🪵';
+    opacity: 1;
+}
+
+.tile-Rocks::before,
+.tile-Stone::before {
+    content: '🪨';
+    opacity: 1;
+}
+
+.tile-Herbs::before {
+    content: '🌿';
+    opacity: 1;
+}
+
+.tile-Meadow::before {
+    content: '🌼';
+    opacity: 0.9;
+}
+
+.tile-Fields::before {
+    content: '🌾';
+    opacity: 1;
+}
+
+.tile-Water::before,
+.tile-Lake::before,
+.tile-Stream::before,
+.tile-River::before {
+    content: '💧';
+    opacity: 1;
 }
 
 .tile-Grass {
@@ -1129,6 +1188,18 @@ button:focus-visible {
     background: rgba(255, 255, 255, 0.14);
     border: 1px solid rgba(255, 255, 255, 0.18);
     min-width: 86px;
+}
+
+.hud-chip.hud-chip-resource {
+    min-width: 70px;
+    padding: 0.36rem 0.55rem;
+    text-align: center;
+    background: rgba(24, 68, 38, 0.35);
+    border-color: rgba(141, 233, 176, 0.35);
+}
+
+.hud-chip.hud-chip-resource .hud-chip-label {
+    letter-spacing: 0.1em;
 }
 
 .hud-chip-label {
