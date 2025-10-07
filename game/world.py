@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import random
-from collections import Counter
+from collections import Counter, defaultdict
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Set, Tuple
 
@@ -44,6 +44,8 @@ class World:
         self.season = World.SEASONS[self.season_index]
         self.weather = "Sunny"
         self.characters: List['Character'] = []
+        self._characters_by_name: Dict[str, 'Character'] = {}
+        self._characters_by_tile: Dict[Tuple[int, int], Set[str]] = defaultdict(set)
         self.stockpiles: List[Stockpile] = []
         self.stockpile_tiles: Dict[Tuple[int, int], str] = {}
         self.buildings: List[Building] = [] # Re-added
@@ -243,10 +245,11 @@ class World:
         if reservation_holder and reservation_holder not in ignore_set and not goal_override:
             return False
 
-        for char in self.characters:
-            if char.name in ignore_set:
-                continue
-            if (char.x, char.y) == (x, y):
+        occupants = self._characters_by_tile.get((x, y))
+        if occupants:
+            for occupant in occupants:
+                if occupant in ignore_set:
+                    continue
                 if goal_override:
                     continue
                 return False
@@ -257,6 +260,12 @@ class World:
         current_holder = self._tile_reservations.get(coords)
         if current_holder and current_holder != character_name:
             return False
+
+        occupants = self._characters_by_tile.get(coords)
+        if occupants:
+            for occupant in occupants:
+                if occupant != character_name:
+                    return False
 
         previous = self._reservation_by_character.get(character_name)
         if previous == coords:
@@ -282,6 +291,28 @@ class World:
 
     def clear_reservations_for_character(self, character_name: str) -> None:
         self.release_tile(character_name)
+
+    def update_character_position(
+        self,
+        character: 'Character',
+        old_coords: Optional[Tuple[int, int]],
+        new_coords: Optional[Tuple[int, int]],
+    ) -> None:
+        """Refresh spatial indexes when a citizen moves."""
+
+        if old_coords:
+            occupants = self._characters_by_tile.get(old_coords)
+            if occupants and character.name in occupants:
+                occupants.discard(character.name)
+                if not occupants:
+                    del self._characters_by_tile[old_coords]
+
+        if new_coords:
+            self._characters_by_tile[new_coords].add(character.name)
+            self._characters_by_name[character.name] = character
+        else:
+            # Character removed from the world entirely.
+            self._characters_by_name.pop(character.name, None)
 
     def find_path(
         self,
@@ -833,6 +864,7 @@ class World:
         if character in self.characters:
             return
         self.characters.append(character)
+        self.update_character_position(character, None, (character.x, character.y))
         self.clear_reservations_for_character(character.name)
         if hasattr(character, "arrival_day") and character.arrival_day is None and self.game_time:
             character.arrival_day = self.game_time.current_day
@@ -871,6 +903,7 @@ class World:
             for business_id, role in list(character.business_roles.items()):
                 self._handle_character_departure_from_business(business_id, character.name, role == "owner")
         self.characters.remove(character)
+        self.update_character_position(character, (character.x, character.y), None)
         self.clear_reservations_for_character(character.name)
         if character.name in self._resident_registry:
             del self._resident_registry[character.name]
@@ -1508,16 +1541,43 @@ class World:
             "families": families[:8],
             "recent_history": [deepcopy(evt) for evt in self.family_history[-10:]],
         }
+
     def get_characters_at_location(self, x: int, y: int) -> List['Character']:
-        return [char for char in self.characters if char.x == x and char.y == y]
+        occupants = self._characters_by_tile.get((x, y))
+        if not occupants:
+            return []
+        found: List['Character'] = []
+        for name in occupants:
+            character = self._characters_by_name.get(name)
+            if character:
+                found.append(character)
+        return found
 
     def get_nearby_characters(self, character: 'Character', radius: int = 1) -> List['Character']:
-        nearby = []
-        for other_char in self.characters:
-            if other_char.name == character.name: continue
-            if abs(other_char.x - character.x) + abs(other_char.y - character.y) <= radius:
-                nearby.append(other_char)
-        return nearby
+        if radius <= 0:
+            return []
+
+        origin = (character.x, character.y)
+        seen: Set[str] = set()
+        neighbors: List['Character'] = []
+
+        for dx in range(-radius, radius + 1):
+            for dy in range(-radius, radius + 1):
+                if abs(dx) + abs(dy) > radius:
+                    continue
+                tile = (origin[0] + dx, origin[1] + dy)
+                occupants = self._characters_by_tile.get(tile)
+                if not occupants:
+                    continue
+                for name in occupants:
+                    if name == character.name or name in seen:
+                        continue
+                    other = self._characters_by_name.get(name)
+                    if other:
+                        neighbors.append(other)
+                        seen.add(name)
+
+        return neighbors
 
     def add_notable_event(self, event_type: str, details: Dict[str, Any], max_events: int = 10):
         """Adds a notable event to the world's recent memory, used for rumor spreading."""
@@ -1598,10 +1658,7 @@ class World:
         return None
 
     def get_character_by_name(self, name: str) -> Optional['Character']: # Added utility
-        for char in self.characters:
-            if char.name == name:
-                return char
-        return None
+        return self._characters_by_name.get(name)
 
     def _next_crime_id(self) -> str:
         self._crime_incident_counter += 1

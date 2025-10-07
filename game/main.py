@@ -389,22 +389,25 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                             "x": char.x,
                             "y": char.y,
                             "job": char.job,
+                            "rank": getattr(char, 'rank', None),
                             "goal": goal_payload,
                             "is_sick": getattr(char, 'is_sick', False), # Add health status
                             "is_injured": getattr(char, 'is_injured', False),
                             "inventory_load": char.get_inventory_load(),
-                            "known_characters": getattr(char, 'known_characters', []),
-                            "dialogue_history_count": len(getattr(char, 'dialogue_history', [])), # Just count for overview
-                            "needs": getattr(char, 'needs', {}),
                             "resting_at_home": getattr(char, 'resting_at_home', False),
                             "home_location": getattr(char, 'home_location', None),
                             "energy": getattr(char, 'needs', {}).get('Energy'),
                             "thirst": getattr(char, 'needs', {}).get('Thirst'),
-                            "inventory": getattr(char, 'inventory', {}),
+                            "money": getattr(char, 'money', None),
+                            "net_worth": getattr(char, 'net_worth', None),
+                            "wealth_status": getattr(char, 'wealth_status', None),
+                            "businesses_owned": list(getattr(char, 'businesses_owned', [])),
+                            "business_roles": dict(getattr(char, 'business_roles', {})),
                             "age": getattr(char, 'age_years', None),
+                            "origin": getattr(char, 'origin', None),
                             "citizenship": getattr(char, 'citizenship_status', 'Resident'),
+                            "family_members": list(getattr(char, 'family_members', [])),
                             "life_highlights": char.get_life_highlights(limit=3) if hasattr(char, 'get_life_highlights') else [],
-                            "family_profile": game_world.get_family_profile_for_character(char.name) if hasattr(game_world, 'get_family_profile_for_character') else None,
                         })
 
                 event_log_repr = game_world.event_log[-20:] if game_world else []
@@ -579,6 +582,15 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "memory": character.memory[-10:], # Last 10 memories
                     "personality": character.personality,
                     "traits": character.traits,
+                    "money": getattr(character, 'money', None),
+                    "net_worth": getattr(character, 'net_worth', None),
+                    "wealth_status": getattr(character, 'wealth_status', None),
+                    "businesses_owned": list(getattr(character, 'businesses_owned', [])),
+                    "business_roles": dict(getattr(character, 'business_roles', {})),
+                    "wealth_history": [
+                        {"day": entry[0], "net_worth": entry[1]}
+                        for entry in getattr(character, 'wealth_history', [])
+                    ],
                     "performance_rating": getattr(character, 'performance_rating', "N/A"),
                     "warning_count": getattr(character, 'warning_count', 0),
                     "known_characters": getattr(character, 'known_characters', []),
@@ -588,6 +600,10 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "life_history": character.export_life_history(limit=20) if hasattr(character, 'export_life_history') else [],
                     "life_highlights": character.get_life_highlights(limit=6) if hasattr(character, 'get_life_highlights') else [],
                     "family_profile": game_world.get_family_profile_for_character(character.name) if hasattr(game_world, 'get_family_profile_for_character') else None,
+                    "family_members": list(getattr(character, 'family_members', [])),
+                    "age": getattr(character, 'age_years', None),
+                    "origin": getattr(character, 'origin', None),
+                    "citizenship": getattr(character, 'citizenship_status', 'Resident'),
                 }
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')

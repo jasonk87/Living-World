@@ -1158,7 +1158,8 @@ class Character:
         if dx == 0 and dy == 0:
             return True
 
-        new_x, new_y = self.x + dx, self.y + dy
+        old_coords = (self.x, self.y)
+        new_x, new_y = old_coords[0] + dx, old_coords[1] + dy
         if not world.is_walkable(new_x, new_y, ignore_characters={self.name}):
             return False
 
@@ -1166,6 +1167,7 @@ class Character:
             return False
 
         self.x, self.y = new_x, new_y
+        world.update_character_position(self, old_coords, (new_x, new_y))
         world.release_tile(self.name)
         self._clear_cached_path()
         return True

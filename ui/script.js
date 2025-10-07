@@ -94,6 +94,11 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Utility Helpers ---
     const getTileSize = () => parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--tile-size')) || 48;
 
+    function formatCoins(value) {
+        if (typeof value !== 'number' || Number.isNaN(value)) return null;
+        return `${Math.round(value).toLocaleString()}c`;
+    }
+
     function openPanel(panelId) {
         const panel = document.getElementById(panelId);
         if (!panel) return;
@@ -972,19 +977,47 @@ document.addEventListener('DOMContentLoaded', () => {
         updateVirtualizedRoster();
     }
 
+    function positionFollowOverlay(character) {
+        if (!followOverlay || !mapStage || !character) return;
+        const marker = characterMarkers.get(character.name);
+        if (!marker) return;
+
+        requestAnimationFrame(() => {
+            const markerRect = marker.getBoundingClientRect();
+            const stageRect = mapStage.getBoundingClientRect();
+            const overlayRect = followOverlay.getBoundingClientRect();
+            const offset = 16;
+
+            let top = markerRect.top - stageRect.top - overlayRect.height / 2 + markerRect.height / 2;
+            top = Math.max(16, Math.min(top, stageRect.height - overlayRect.height - 16));
+
+            let left = markerRect.right - stageRect.left + offset;
+            if (left + overlayRect.width + 16 > stageRect.width) {
+                left = markerRect.left - stageRect.left - overlayRect.width - offset;
+            }
+            left = Math.max(16, Math.min(left, stageRect.width - overlayRect.width - 16));
+
+            followOverlay.style.top = `${top}px`;
+            followOverlay.style.left = `${left}px`;
+            followOverlay.style.right = 'auto';
+        });
+    }
+
     function updateFollowedCharacterOverlay(character) {
         if (!followOverlay || !followOverlayBody) return;
 
         if (!character || character.name !== followedCharacterName) {
             followOverlay.classList.add('hidden');
             followOverlayBody.innerHTML = '<p>Select a character to follow.</p>';
+            followOverlay.style.top = '';
+            followOverlay.style.left = '';
+            followOverlay.style.right = '';
             return;
         }
 
         followOverlay.classList.remove('hidden');
         const sicknessText = character.is_sick ? `Sick${character.sickness_severity !== undefined ? ` (sev ${character.sickness_severity})` : ''}` : 'Well';
         const injuryText = character.is_injured ? `Injured${character.injury_severity !== undefined ? ` (sev ${character.injury_severity})` : ''}` : 'Unhurt';
-        const healthSummary = `Health: ${sicknessText}, ${injuryText}`;
         const goalDetails = extractGoal(character.current_goal);
         const goalSummary = `${goalDetails.type}${goalDetails.priority !== '—' ? ` (prio ${goalDetails.priority})` : ''}`;
         const energyText = typeof character.energy === 'number' ? character.energy : '—';
@@ -994,30 +1027,70 @@ document.addEventListener('DOMContentLoaded', () => {
             : Array.isArray(character.home_location)
                 ? `Sheltered at (${character.home_location[0]}, ${character.home_location[1]})`
                 : 'No assigned housing';
-        const lastDialogue = (character.dialogue_history || []).slice(-1)[0];
-        let dialogueSummary = 'No recent conversations logged.';
-        if (lastDialogue) {
-            const exchanges = Array.isArray(lastDialogue.dialogue_exchanges) ? lastDialogue.dialogue_exchanges : [];
-            if (exchanges.length) {
-                dialogueSummary = exchanges.map(line => `${line.speaker}: “${line.line}”`).join('<br>');
-            } else {
-                dialogueSummary = 'Conversation noted, but no transcript available.';
-            }
+        const ageText = typeof character.age === 'number' ? `${character.age}` : '—';
+        const originText = character.origin || 'Unknown origin';
+        const citizenshipText = character.citizenship || 'Resident';
+        const rankTitle = character.rank ? character.rank : null;
+        const netWorthValue = formatCoins(character.net_worth);
+        const netWorthText = netWorthValue
+            ? `${netWorthValue}${character.wealth_status ? ` (${character.wealth_status})` : ''}`
+            : 'Unknown';
+        const purseText = formatCoins(character.money) || '—';
+
+        const ownedVentures = Array.isArray(character.businesses_owned) ? character.businesses_owned : [];
+        const businessRoles = Object.entries(character.business_roles || {});
+        const businessLines = [];
+        if (ownedVentures.length) {
+            businessLines.push(`Owns ${ownedVentures.length} venture${ownedVentures.length === 1 ? '' : 's'}`);
+        }
+        businessRoles.forEach(([businessId, role]) => {
+            const label = role.replace(/_/g, ' ');
+            businessLines.push(`${label} @ ${businessId}`);
+        });
+        const businessSummary = businessLines.length
+            ? `<ul class="mini-list">${businessLines.slice(0, 4).map(line => `<li>${line}</li>`).join('')}</ul>`
+            : '<p class="muted">No active business roles.</p>';
+
+        const familyMembers = Array.isArray(character.family_members)
+            ? character.family_members.filter(name => name && name !== character.name)
+            : [];
+        let familySummary = '<p class="muted">No immediate kin registered.</p>';
+        if (familyMembers.length) {
+            const preview = familyMembers.slice(0, 5);
+            const remainder = familyMembers.length - preview.length;
+            const namesText = preview.join(', ');
+            familySummary = `<p>${namesText}${remainder > 0 ? `, +${remainder} more` : ''}</p>`;
         }
 
-        const jobTitle = character.job || 'Unassigned';
+        const highlights = Array.isArray(character.life_highlights) ? character.life_highlights : [];
+        const highlightSummary = highlights.length
+            ? `<ul class="mini-list compact">${highlights.slice(-3).reverse().map(evt => {
+                const when = evt.day !== undefined ? `Day ${evt.day}` : (evt.type || 'Milestone');
+                const summary = evt.summary || evt.type || 'Notable moment recorded.';
+                return `<li><strong>${when}</strong>: ${summary}</li>`;
+            }).join('')}</ul>`
+            : '<p class="muted">No highlights logged.</p>';
 
         followOverlayBody.innerHTML = `
-            <p><strong>${character.name}</strong> — ${jobTitle}</p>
-            <p>Location: (${character.x}, ${character.y})</p>
-            <p>Goal: ${goalSummary}</p>
-            <p>${healthSummary}</p>
+            <p><strong>${character.name}</strong>${rankTitle ? ` • ${rankTitle}` : ''}</p>
+            <p>${character.job || 'Unassigned'} • Goal: ${goalSummary}</p>
+            <p>Coords: (${character.x}, ${character.y}) • Age ${ageText} • ${originText} • ${citizenshipText}</p>
+            <p>Health: ${sicknessText}, ${injuryText}</p>
             <p>Needs: Energy ${energyText} • Thirst ${thirstText}</p>
             <p>Housing: ${housingSummary}</p>
             <hr>
-            <p><strong>Latest Social Exchange</strong></p>
-            <p class="dialogue-snippet">${dialogueSummary}</p>
+            <p><strong>Wealth</strong></p>
+            <p>Net Worth ${netWorthText} • Purse ${purseText}</p>
+            ${businessSummary}
+            <hr>
+            <p><strong>Family</strong></p>
+            ${familySummary}
+            <hr>
+            <p><strong>Highlights</strong></p>
+            ${highlightSummary}
         `;
+
+        positionFollowOverlay(character);
     }
 
     function updateWorldSummary(gameState) {
@@ -1288,6 +1361,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function buildOverviewContent(character) {
         const wrapper = document.createElement('div');
+
+        const profileSection = document.createElement('section');
+        profileSection.innerHTML = '<h4>Profile</h4>';
+        const ageLabel = typeof character.age === 'number' ? character.age : '—';
+        const originLabel = character.origin || 'Unknown';
+        const citizenshipLabel = character.citizenship || 'Resident';
+        const rankLabel = character.rank ? ` • ${character.rank}` : '';
+        const netWorthLabel = formatCoins(character.net_worth);
+        const purseLabel = formatCoins(character.money);
+        profileSection.innerHTML += `
+            <p><strong>Role:</strong> ${character.job || 'Unassigned'}${rankLabel}</p>
+            <p><strong>Age:</strong> ${ageLabel} • <strong>Origin:</strong> ${originLabel} • <strong>Citizenship:</strong> ${citizenshipLabel}</p>
+            <p><strong>Wealth:</strong> ${netWorthLabel ? netWorthLabel : 'Unknown'}${character.wealth_status ? ` (${character.wealth_status})` : ''} • <strong>Purse:</strong> ${purseLabel || '—'}</p>
+        `;
+
         const needsSection = document.createElement('section');
         needsSection.innerHTML = '<h4>Needs</h4>';
         needsSection.appendChild(formatKeyValueList(character.needs));
@@ -1316,7 +1404,51 @@ document.addEventListener('DOMContentLoaded', () => {
             inventorySection.appendChild(empty);
         }
 
-        wrapper.append(needsSection, housingSection, skillsSection, inventorySection);
+        const venturesSection = document.createElement('section');
+        venturesSection.innerHTML = '<h4>Ventures</h4>';
+        const ventureLines = [];
+        (character.businesses_owned || []).forEach(name => {
+            ventureLines.push(`Owner • ${name}`);
+        });
+        Object.entries(character.business_roles || {}).forEach(([businessId, role]) => {
+            ventureLines.push(`${role.replace(/_/g, ' ')} • ${businessId}`);
+        });
+        if (ventureLines.length) {
+            const list = document.createElement('ul');
+            list.classList.add('mini-list');
+            ventureLines.forEach(line => {
+                const li = document.createElement('li');
+                li.textContent = line;
+                list.appendChild(li);
+            });
+            venturesSection.appendChild(list);
+        } else {
+            const empty = document.createElement('p');
+            empty.textContent = 'No current business roles.';
+            venturesSection.appendChild(empty);
+        }
+
+        const wealthHistorySection = document.createElement('section');
+        wealthHistorySection.innerHTML = '<h4>Wealth Trend</h4>';
+        const history = Array.isArray(character.wealth_history) ? character.wealth_history : [];
+        if (history.length) {
+            const list = document.createElement('ul');
+            list.classList.add('mini-list', 'compact', 'subtle');
+            history.slice(-6).reverse().forEach(entry => {
+                const li = document.createElement('li');
+                const day = typeof entry.day === 'number' ? entry.day : '—';
+                const worth = formatCoins(entry.net_worth);
+                li.innerHTML = `<strong>Day ${day}</strong>: ${worth || '—'}`;
+                list.appendChild(li);
+            });
+            wealthHistorySection.appendChild(list);
+        } else {
+            const empty = document.createElement('p');
+            empty.textContent = 'No wealth records logged yet.';
+            wealthHistorySection.appendChild(empty);
+        }
+
+        wrapper.append(profileSection, needsSection, housingSection, skillsSection, inventorySection, venturesSection, wealthHistorySection);
         return wrapper;
     }
 
@@ -1548,6 +1680,9 @@ document.addEventListener('DOMContentLoaded', () => {
     function updateViewportTransform() {
         if (!mapViewport) return;
         mapViewport.style.transform = `translate(${viewportPan.x}px, ${viewportPan.y}px) scale(${viewportZoom})`;
+        if (followedCharacterName) {
+            positionFollowOverlay({ name: followedCharacterName });
+        }
     }
 
     function centerViewportOn(x, y) {
