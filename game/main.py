@@ -436,6 +436,10 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                             "structure_type": b.structure_type, # Added for frontend differentiation
                             "occupants": getattr(b, 'occupants', []),
                             "provides_shelter": b.functionality.get('provides_shelter') if b.functionality else None,
+                            "wealth_tier": b.functionality.get('wealth_tier') if b.functionality else None,
+                            "household_style": getattr(b, 'household_style', None),
+                            "latest_household_story": getattr(b, 'latest_household_story', None),
+                            "latest_neighborhood_story": getattr(b, 'latest_neighborhood_story', None),
                         })
                 if hasattr(game_world, 'stockpiles'): # Also include stockpiles as "buildings" for map display
                     for sp in game_world.stockpiles:
@@ -665,12 +669,46 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "map_char": building.get_current_map_char(),
                     "occupants": getattr(building, 'occupants', []),
                     "provides_shelter": building.functionality.get('provides_shelter') if building.functionality else None,
+                    "wealth_tier": building.functionality.get('wealth_tier') if building.functionality else None,
+                    "household_style": getattr(building, 'household_style', None),
+                    "amenities": list(getattr(building, 'amenities', [])),
+                    "tile_layout": building.get_tile_layout() if hasattr(building, 'get_tile_layout') else [],
                 }
                 # If it's a stockpile or has inventory (like some workshops might)
                 if hasattr(building, 'inventory'):
                     building_data["inventory"] = building.inventory
                 if hasattr(building, 'allowed_resources'): # For stockpiles
                     building_data["allowed_resources"] = building.allowed_resources
+
+                occupant_profiles = []
+                for occupant_name in getattr(building, 'occupants', []):
+                    character = game_world.get_character_by_name(occupant_name)
+                    if not character:
+                        continue
+                    occupant_profiles.append({
+                        "name": character.name,
+                        "job": character.job,
+                        "wealth_status": getattr(character, 'wealth_status', None),
+                        "mood": getattr(character, 'mood', None),
+                    })
+                if occupant_profiles:
+                    building_data["occupant_profiles"] = occupant_profiles
+
+                latest_story = None
+                for story in getattr(game_world, '_latest_household_vignettes', []):
+                    if story.get("building") == building.display_name:
+                        latest_story = story
+                        break
+                if latest_story:
+                    building_data["latest_household_story"] = latest_story
+
+                latest_neighborhood_story = None
+                for story in getattr(game_world, '_latest_neighborhood_gatherings', []):
+                    if story.get("host") == building.display_name:
+                        latest_neighborhood_story = story
+                        break
+                if latest_neighborhood_story:
+                    building_data["latest_neighborhood_story"] = latest_neighborhood_story
 
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')

@@ -39,6 +39,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const environmentModifierList = document.getElementById('environment-modifier-list');
     const rumorFeedList = document.getElementById('rumor-feed-list');
     const housingStatusList = document.getElementById('housing-status-list');
+    const housingStoryList = document.getElementById('housing-story-list');
+    const neighborhoodGatheringList = document.getElementById('neighborhood-gathering-list');
     const resourceNodeList = document.getElementById('resource-node-list');
     const populationEventList = document.getElementById('population-event-list');
     const weatherEventNote = document.getElementById('environment-weather-event');
@@ -334,6 +336,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const trainingReport = gameState.training || report.training || {};
         const workforceReport = gameState.workforce || report.workforce || {};
         const governance = gameState.governance || {};
+        const neighborhoodGatherings = Array.isArray(housingSnapshot.neighborhood_gatherings)
+            ? housingSnapshot.neighborhood_gatherings
+            : [];
         let economyBadgeCount = 0;
         let civicBadgeCount = 0;
         let worldBadgeExtras = 0;
@@ -364,6 +369,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 worldBadgeExtras += amount;
             }
         };
+
+        addEconomyCount(neighborhoodGatherings.length);
 
         if (hudPopulationValue) {
             const totalPopulation = typeof populationSnapshot.population === 'number'
@@ -859,10 +866,23 @@ document.addEventListener('DOMContentLoaded', () => {
                 const occupantPreview = occupants.length
                     ? `${occupants.slice(0, 3).join(', ')}${occupants.length > 3 ? '…' : ''}`
                     : 'Vacant';
+                const tierLabel = structure.tier ? String(structure.tier) : '';
+                const amenities = Array.isArray(structure.amenities) ? structure.amenities : [];
+                const amenityPreview = amenities.length
+                    ? `${amenities.slice(0, 2).join(', ')}${amenities.length > 2 ? '…' : ''}`
+                    : '';
+                const metaParts = [`${available} open`];
+                if (occupantPreview && occupantPreview !== 'Vacant') {
+                    metaParts.push(occupantPreview);
+                }
+                const statusLine = metaParts.join(' • ');
+                const amenityLine = amenityPreview ? `<span class="meta subtle">${amenityPreview}</span>` : '';
+                const tierBadge = tierLabel ? `<span class="tier-label tier-${tierLabel}">${tierLabel}</span>` : '';
                 lines.push(`
                     <li class="${className}">
-                        <strong>${structure.name}</strong>: ${used}/${capacity} beds
-                        <span class="meta">${available} open • ${occupantPreview}</span>
+                        <strong>${structure.name}</strong>${tierBadge ? ` ${tierBadge}` : ''}: ${used}/${capacity} beds
+                        <span class="meta">${statusLine}</span>
+                        ${amenityLine}
                     </li>
                 `.trim());
             });
@@ -877,6 +897,51 @@ document.addEventListener('DOMContentLoaded', () => {
             housingStatusList.innerHTML = lines.length
                 ? lines.join('')
                 : '<li class="empty">No housing data.</li>';
+        }
+
+        if (housingStoryList) {
+            const stories = Array.isArray(housingSnapshot.household_vignettes)
+                ? housingSnapshot.household_vignettes
+                : [];
+            if (stories.length) {
+                const recent = stories.slice(-4).reverse();
+                housingStoryList.innerHTML = recent
+                    .map(story => {
+                        const summary = story.summary || 'Evening passed quietly.';
+                        const buildingName = story.building || 'Household';
+                        const dayLabel = typeof story.day === 'number' ? `Day ${story.day}` : 'Today';
+                        return `
+                            <li>
+                                <strong>${buildingName}</strong>: ${summary}
+                                <span class="meta subtle">${dayLabel}</span>
+                            </li>
+                        `.trim();
+                    })
+                    .join('');
+            } else {
+                housingStoryList.innerHTML = '<li class="empty">No household stories recorded today.</li>';
+            }
+        }
+
+        if (neighborhoodGatheringList) {
+            if (neighborhoodGatherings.length) {
+                const recentGatherings = neighborhoodGatherings.slice(-4).reverse();
+                neighborhoodGatheringList.innerHTML = recentGatherings
+                    .map(gathering => {
+                        const summary = gathering.summary || 'Neighbors spent time together.';
+                        const hostLabel = gathering.host || 'Neighbor';
+                        const dayLabel = typeof gathering.day === 'number' ? `Day ${gathering.day}` : 'Recent';
+                        return `
+                            <li>
+                                <strong>${hostLabel}</strong>: ${summary}
+                                <span class="meta subtle">${dayLabel}</span>
+                            </li>
+                        `.trim();
+                    })
+                    .join('');
+            } else {
+                neighborhoodGatheringList.innerHTML = '<li class="empty">No neighborhood gatherings yet.</li>';
+            }
         }
 
         if (economyCrimeNote) {
@@ -1920,12 +1985,144 @@ document.addEventListener('DOMContentLoaded', () => {
         return wrapper;
     }
 
+    function abbreviateTileName(name) {
+        if (typeof name !== 'string' || !name.length) return '';
+        const spaced = name.replace(/([a-z])([A-Z])/g, '$1 $2');
+        const parts = spaced.split(/\s+/).filter(Boolean);
+        if (!parts.length) return name.slice(0, 2).toUpperCase();
+        return parts
+            .map(part => part.charAt(0))
+            .join('')
+            .slice(0, 3)
+            .toUpperCase();
+    }
+
+    function buildBuildingPlan(tileLayout) {
+        if (!Array.isArray(tileLayout) || !tileLayout.length) return null;
+        const plan = document.createElement('div');
+        plan.classList.add('building-plan');
+        tileLayout.forEach(row => {
+            const rowEl = document.createElement('div');
+            rowEl.classList.add('building-plan-row');
+            const cells = Array.isArray(row) ? row : [];
+            cells.forEach(tileName => {
+                const cellEl = document.createElement('div');
+                cellEl.classList.add('building-plan-cell');
+                if (tileName) {
+                    const safeName = String(tileName);
+                    cellEl.classList.add('tile-chip');
+                    cellEl.classList.add(`tile-${safeName}`);
+                    cellEl.textContent = abbreviateTileName(safeName);
+                    cellEl.title = safeName.replace(/([a-z])([A-Z])/g, '$1 $2');
+                } else {
+                    cellEl.classList.add('empty');
+                }
+                rowEl.appendChild(cellEl);
+            });
+            plan.appendChild(rowEl);
+        });
+        return plan;
+    }
+
+    function buildBuildingDetails(building) {
+        const wrapper = document.createElement('div');
+        wrapper.classList.add('building-details');
+
+        const heading = document.createElement('h3');
+        heading.textContent = building.display_name || building.structure_type || 'Structure';
+        wrapper.appendChild(heading);
+
+        const dl = document.createElement('dl');
+        dl.innerHTML = `
+            <dt>Type</dt><dd>${building.structure_type || 'Unknown'}</dd>
+            <dt>Operational</dt><dd>${building.is_operational ? 'Yes' : 'No'}</dd>
+        `;
+        if (typeof building.provides_shelter === 'number') {
+            dl.innerHTML += `<dt>Shelter Capacity</dt><dd>${building.provides_shelter}</dd>`;
+        }
+        if (building.wealth_tier) {
+            dl.innerHTML += `<dt>Wealth Tier</dt><dd class="tier-text tier-${building.wealth_tier}">${building.wealth_tier}</dd>`;
+        }
+        if (building.household_style) {
+            dl.innerHTML += `<dt>Household Style</dt><dd>${building.household_style}</dd>`;
+        }
+        if (Array.isArray(building.amenities) && building.amenities.length) {
+            dl.innerHTML += `<dt>Amenities</dt><dd>${building.amenities.join(', ')}</dd>`;
+        }
+        if (Array.isArray(building.occupants)) {
+            const occupants = building.occupants.length
+                ? building.occupants.join(', ')
+                : 'None';
+            dl.innerHTML += `<dt>Occupants</dt><dd>${occupants}</dd>`;
+        }
+        wrapper.appendChild(dl);
+
+        if (Array.isArray(building.occupant_profiles) && building.occupant_profiles.length) {
+            const occupantSection = document.createElement('section');
+            occupantSection.classList.add('building-occupants');
+            occupantSection.innerHTML = '<h4>Residents</h4>';
+            const list = document.createElement('ul');
+            list.classList.add('mini-list', 'compact');
+            building.occupant_profiles.forEach(profile => {
+                const job = profile.job || 'Unassigned';
+                const wealth = profile.wealth_status ? ` • ${profile.wealth_status}` : '';
+                const mood = profile.mood ? ` • Mood: ${profile.mood}` : '';
+                list.innerHTML += `
+                    <li>
+                        <strong>${profile.name}</strong> — ${job}${wealth}${mood}
+                    </li>
+                `;
+            });
+            occupantSection.appendChild(list);
+            wrapper.appendChild(occupantSection);
+        }
+
+        if (Array.isArray(building.tile_layout) && building.tile_layout.length) {
+            const plan = buildBuildingPlan(building.tile_layout);
+            if (plan) {
+                const planSection = document.createElement('section');
+                planSection.classList.add('building-plan-section');
+                planSection.innerHTML = '<h4>Floor Plan</h4>';
+                planSection.appendChild(plan);
+                wrapper.appendChild(planSection);
+            }
+        }
+
+        if (building.latest_household_story) {
+            const story = building.latest_household_story;
+            const storySection = document.createElement('section');
+            storySection.classList.add('building-story');
+            const dayLabel = typeof story.day === 'number' ? `Day ${story.day}` : 'Recent';
+            storySection.innerHTML = `
+                <h4>Recent Evening</h4>
+                <p>${story.summary || 'A quiet night passed.'}</p>
+                <p class="meta subtle">${dayLabel}</p>
+            `;
+            wrapper.appendChild(storySection);
+        }
+
+        if (building.latest_neighborhood_story) {
+            const story = building.latest_neighborhood_story;
+            const section = document.createElement('section');
+            section.classList.add('building-story');
+            const dayLabel = typeof story.day === 'number' ? `Day ${story.day}` : 'Recent';
+            const neighborhood = story.neighborhood || 'Neighborhood';
+            section.innerHTML = `
+                <h4>Neighborhood Highlight</h4>
+                <p>${story.summary || 'Neighbors gathered nearby.'}</p>
+                <p class="meta subtle">${neighborhood} • ${dayLabel}</p>
+            `;
+            wrapper.appendChild(section);
+        }
+
+        return wrapper;
+    }
+
     function displayEntityDetails(entity, type, targetPanelId) {
         const targetPanel = document.getElementById(targetPanelId || 'entity-details');
         if (!targetPanel) return;
 
         targetPanel.innerHTML = '';
-        const dl = document.createElement('dl');
 
         if (type === 'character') {
             targetPanel.appendChild(buildCharacterDetails(entity));
@@ -1940,16 +2137,17 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (type === 'building') {
-            dl.innerHTML = `
-                <h3>${entity.display_name}</h3>
-                <dt>Type</dt><dd>${entity.structure_type}</dd>
-                <dt>Operational</dt><dd>${entity.is_operational}</dd>
-                ${entity.provides_shelter ? `<dt>Shelter Capacity</dt><dd>${entity.provides_shelter}</dd>` : ''}
-                ${Array.isArray(entity.occupants) ? `<dt>Occupants</dt><dd>${entity.occupants.length ? entity.occupants.join(', ') : 'None'}</dd>` : ''}
-                ${entity.inventory ? `<dt>Inventory</dt><dd>${JSON.stringify(entity.inventory)}</dd>` : ''}
-            `;
+            const details = buildBuildingDetails(entity);
+            if (entity.inventory) {
+                const inventorySection = document.createElement('section');
+                inventorySection.classList.add('building-inventory');
+                inventorySection.innerHTML = `<h4>Inventory</h4><pre>${JSON.stringify(entity.inventory, null, 2)}</pre>`;
+                details.appendChild(inventorySection);
+            }
+            targetPanel.appendChild(details);
+            openPanel('info-panel');
+            return;
         }
-        targetPanel.appendChild(dl);
         openPanel('info-panel');
     }
 
@@ -2052,7 +2250,9 @@ document.addEventListener('DOMContentLoaded', () => {
             const slug = rawType
                 ? String(rawType).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
                 : '';
-            const signature = JSON.stringify({ overlayType, label, originX, originY, slug });
+            const tier = building.wealth_tier || '';
+            const style = building.household_style || '';
+            const signature = JSON.stringify({ overlayType, label, originX, originY, slug, tier, style });
             for (let r = 0; r < heightCells; r++) {
                 for (let c = 0; c < widthCells; c++) {
                     const x = originX + c;
@@ -2080,6 +2280,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 delete cell.dataset.buildingOriginY;
                 delete cell.dataset.buildingName;
                 delete cell.dataset.buildingType;
+                if (cell.dataset.buildingTierClass) {
+                    cell.classList.remove(cell.dataset.buildingTierClass);
+                    delete cell.dataset.buildingTierClass;
+                }
+                delete cell.dataset.householdStyle;
                 const baseTitle = cell.dataset.baseTitle || mapTerrainCache[index] || 'Unknown';
                 const x = index % cols;
                 const y = Math.floor(index / cols);
@@ -2105,7 +2310,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!overlayDescriptor) {
                 continue;
             }
-            const { overlayType, label, originX, originY, slug } = overlayDescriptor;
+            const { overlayType, label, originX, originY, slug, tier, style } = overlayDescriptor;
             const isStockpile = overlayType === 'stockpile';
             cell.classList.toggle('stockpile-cell', isStockpile);
             cell.classList.toggle('building-cell', !isStockpile);
@@ -2117,6 +2322,22 @@ document.addEventListener('DOMContentLoaded', () => {
                 cell.dataset.buildingType = slug;
             } else {
                 delete cell.dataset.buildingType;
+            }
+            if (tier) {
+                const tierClass = `building-tier-${tier}`;
+                if (cell.dataset.buildingTierClass && cell.dataset.buildingTierClass !== tierClass) {
+                    cell.classList.remove(cell.dataset.buildingTierClass);
+                }
+                cell.classList.add(tierClass);
+                cell.dataset.buildingTierClass = tierClass;
+            } else if (cell.dataset.buildingTierClass) {
+                cell.classList.remove(cell.dataset.buildingTierClass);
+                delete cell.dataset.buildingTierClass;
+            }
+            if (style) {
+                cell.dataset.householdStyle = style;
+            } else {
+                delete cell.dataset.householdStyle;
             }
             const x = index % cols;
             const y = Math.floor(index / cols);

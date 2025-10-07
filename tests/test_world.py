@@ -5,6 +5,8 @@ from unittest.mock import patch
 
 import pytest
 
+from typing import Any, Dict
+
 from game import config
 from game.building import Building
 from game.character import Character
@@ -198,6 +200,137 @@ def test_population_migration_when_surplus_resources_exist():
     assert world.population_stats["migrants_today"] == 1
     assert any(event["type"] == "arrival" for event in report.get("population_events", []))
     assert report["population_snapshot"]["population"] == len(world.characters)
+
+
+def test_building_tile_layout_used_for_map_tiles():
+    world, _ = _make_world()
+    layout = [["WoodWall", "Bedroll"], ["Hearth", "Bed"]]
+    building = Building(
+        structure_type="House",
+        display_name="Layout House",
+        location=(1, 2),
+        size=(2, 2),
+        required_resources={},
+        functionality={"provides_shelter": 2, "tags": ["residential"], "wealth_tier": "modest"},
+        required_skill={},
+        tile_layout=layout,
+    )
+    building.is_operational = True
+    world.add_building(building)
+
+    assert world.get_tile(1, 2) == "WoodWall"
+    assert world.get_tile(2, 2) == "Bedroll"
+    assert world.get_tile(1, 3) == "Hearth"
+    assert world.get_tile(2, 3) == "Bed"
+
+
+@patch("random.choice", side_effect=lambda options: options[0])
+def test_household_evening_generates_story_and_bonuses(mock_choice):  # noqa: ARG001
+    world, game_time = _make_world()
+    game_time.current_day = 5
+    layout = [["WoodWall", "Bedroll"], ["Hearth", "Bed"]]
+    building = Building(
+        structure_type="House",
+        display_name="Hearthstead",
+        location=(2, 2),
+        size=(2, 2),
+        required_resources={},
+        functionality={"provides_shelter": 2, "tags": ["residential"], "wealth_tier": "modest"},
+        required_skill={},
+        tile_layout=layout,
+        household_style="hearthfire",
+    )
+    building.is_operational = True
+    world.add_building(building)
+
+    resident = Character(
+        name="Rhea",
+        personality="Warm",
+        traits=["Compassionate"],
+        skills={},
+        needs=_standard_needs(),
+        job="Farmer",
+    )
+    world.add_character(resident)
+    building.add_occupant(resident.name)
+    resident.home_location = building.location
+
+    baseline_mood = resident.mood_score
+    baseline_belonging = resident.needs.get("Belonging", 0)
+
+    snapshot = world.get_housing_snapshot()
+    report: Dict[str, Any] = {}
+    world._resolve_household_evenings(snapshot, report)
+
+    assert world._latest_household_vignettes, "Expected a household vignette to be recorded."
+    story = world._latest_household_vignettes[0]
+    assert story["building"] == "Hearthstead"
+    assert resident.mood_score > baseline_mood
+    assert resident.needs["Belonging"] >= baseline_belonging
+    assert "housing_highlights" in report
+
+
+@patch("random.choice", side_effect=lambda options: options[0])
+def test_neighborhood_gathering_records_story(mock_choice):  # noqa: ARG001
+    world, game_time = _make_world()
+    game_time.current_day = 9
+
+    names = ["Caro", "Devi", "Eamon"]
+    baseline_moods = {}
+    buildings: List[Building] = []
+
+    for idx, name in enumerate(names):
+        building = Building(
+            structure_type="House",
+            display_name=f"Lane Home {idx + 1}",
+            location=(idx * 2, 3),
+            size=(2, 2),
+            required_resources={},
+            functionality={"provides_shelter": 2, "tags": ["residential"], "wealth_tier": "modest"},
+            required_skill={},
+            tile_layout=[["WoodWall", "Bedroll"], ["Hearth", "Bed"]],
+        )
+        building.is_operational = True
+        world.add_building(building)
+        buildings.append(building)
+
+        resident = Character(
+            name=name,
+            personality="Cheerful",
+            traits=[],
+            skills={},
+            job="Laborer",
+            needs=_standard_needs(),
+        )
+        resident.net_worth = 50 + (len(names) - idx) * 5
+        world.add_character(resident)
+        building.add_occupant(resident.name)
+        resident.home_location = building.location
+        baseline_moods[name] = resident.mood_score
+
+    snapshot = world.get_housing_snapshot()
+    report: Dict[str, Any] = {}
+    baseline_spirit = world.community_spirit
+
+    with patch.object(config, "NEIGHBORHOOD_GATHERING_BASE_CHANCE", 1.0), patch(
+        "random.random", return_value=0.0
+    ):
+        gatherings = world._resolve_neighborhood_gatherings(snapshot, report)
+
+    assert gatherings, "Expected a neighborhood gathering to be recorded."
+    story = gatherings[0]
+    assert story["host"] in {building.display_name for building in buildings}
+    assert len(story["attendees"]) == len(names)
+    assert snapshot["neighborhood_gatherings"], "Snapshot should include neighborhood gatherings"
+    assert world._latest_neighborhood_gatherings, "World should track recent neighborhood gatherings"
+    assert "neighborhood_gatherings" in report
+
+    for name in names:
+        character = world.get_character_by_name(name)
+        assert character is not None
+        assert character.mood_score >= baseline_moods[name]
+
+    assert world.community_spirit >= baseline_spirit
 
 
 def test_population_departure_under_hardship_and_low_mood():

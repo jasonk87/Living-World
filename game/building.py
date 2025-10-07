@@ -2,13 +2,24 @@
 from typing import Tuple, Dict, Optional, List, Any
 
 class Building:
-    def __init__(self, structure_type: str, display_name: str, location: Tuple[int, int],
-                 size: Tuple[int, int], required_resources: Dict[str, int],
-                 functionality: Optional[Dict[str, Any]], required_skill: Optional[Dict[str, Any]],
-                 construction_phases: Optional[List[Dict[str, Any]]] = None, # For phased construction
-                 map_char_initial: str = 'X',  # Default map character while construction is underway
-                 map_char_complete: str = 'B', # Default for completed building
-                 build_time: int = 0): # build_time might be deprecated if phases define all work
+    def __init__(
+        self,
+        structure_type: str,
+        display_name: str,
+        location: Tuple[int, int],
+        size: Tuple[int, int],
+        required_resources: Dict[str, int],
+        functionality: Optional[Dict[str, Any]],
+        required_skill: Optional[Dict[str, Any]],
+        construction_phases: Optional[List[Dict[str, Any]]] = None,  # For phased construction
+        map_char_initial: str = 'X',  # Default map character while construction is underway
+        map_char_complete: str = 'B',  # Default for completed building
+        build_time: int = 0,  # build_time might be deprecated if phases define all work
+        tile_layout: Optional[List[Any]] = None,
+        tile_palette: Optional[Dict[str, str]] = None,
+        amenities: Optional[List[str]] = None,
+        household_style: Optional[str] = None,
+    ):
 
         self.structure_type = structure_type
         self.display_name = display_name
@@ -39,13 +50,20 @@ class Building:
              self.build_time = build_time
 
 
-        self.current_progress = 0.0 # Overall progress across all phases
+        self.current_progress = 0.0  # Overall progress across all phases
         self.is_operational = False
         self.occupants: List[str] = []
 
         # These are set by the blueprint but stored on instance for get_current_map_char
         self.map_char_initial = map_char_initial
         self.map_char_complete = map_char_complete
+
+        self.tile_palette: Dict[str, str] = dict(tile_palette or {})
+        self.tile_layout: List[List[str]] = self._normalize_tile_layout(tile_layout, self.tile_palette)
+        self.amenities: List[str] = list(amenities or [])
+        self.household_style: Optional[str] = household_style
+        self.latest_household_story: Optional[Dict[str, Any]] = None
+        self.latest_neighborhood_story: Optional[Dict[str, Any]] = None
 
 
     def __str__(self):
@@ -128,6 +146,24 @@ class Building:
                 tiles.append((x_base + c_offset, y_base + r_offset))
         return tiles
 
+    def get_tile_label(self, x: int, y: int) -> Optional[str]:
+        if not self.tile_layout:
+            return None
+        offset_x = x - self.location[0]
+        offset_y = y - self.location[1]
+        if offset_y < 0 or offset_y >= len(self.tile_layout):
+            return None
+        row = self.tile_layout[offset_y]
+        if offset_x < 0 or offset_x >= len(row):
+            return None
+        label = row[offset_x]
+        if label in self.tile_palette:
+            return self.tile_palette[label]
+        return label
+
+    def get_tile_layout(self) -> List[List[str]]:
+        return [list(row) for row in self.tile_layout]
+
     def is_inside(self, char_x: int, char_y: int) -> bool:
         building_tiles = self.get_tiles_occupied()
         return (char_x, char_y) in building_tiles
@@ -152,5 +188,30 @@ class Building:
             "build_time": self.build_time,
             "map_char": self.get_current_map_char(),
             "current_phase_name": self.get_current_phase_name(),
-            "occupants": self.occupants
+            "occupants": self.occupants,
+            "tile_layout": self.get_tile_layout(),
+            "amenities": list(self.amenities),
+            "household_style": self.household_style,
         }
+
+    @staticmethod
+    def _normalize_tile_layout(
+        layout: Optional[List[Any]],
+        palette: Optional[Dict[str, str]] = None,
+    ) -> List[List[str]]:
+        if not layout:
+            return []
+        normalized: List[List[str]] = []
+        for row in layout:
+            if isinstance(row, str):
+                entries = list(row)
+            else:
+                entries = list(row)
+            normalized_row: List[str] = []
+            for entry in entries:
+                if isinstance(entry, str) and palette and entry in palette:
+                    normalized_row.append(palette[entry])
+                else:
+                    normalized_row.append(entry)
+            normalized.append(normalized_row)
+        return normalized

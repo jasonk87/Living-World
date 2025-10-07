@@ -109,6 +109,8 @@ class World:
         self.today_surplus_sales: List[Dict[str, Any]] = []
         self._residential_assignments: Dict[str, Tuple[int, int]] = {}
         self.last_housing_evaluation_day: Optional[int] = None
+        self._latest_household_vignettes: List[Dict[str, Any]] = []
+        self._latest_neighborhood_gatherings: List[Dict[str, Any]] = []
         self.latest_housing_snapshot: Dict[str, Any] = self.get_housing_snapshot()
         self.current_phase: Dict[str, Any] = {}
         self.phase_history: List[Dict[str, Any]] = []
@@ -213,6 +215,9 @@ class World:
 
         building_at_loc = self.get_building_at(x, y)
         if building_at_loc:
+            tile_label = building_at_loc.get_tile_label(x, y)
+            if tile_label:
+                return tile_label
             return building_at_loc.get_current_map_char()
 
         if (x, y) in self.stockpile_tiles:
@@ -476,6 +481,9 @@ class World:
                     "capacity": capacity,
                     "occupants": occupants,
                     "available": available,
+                    "tier": self._get_building_tier(building),
+                    "amenities": list(getattr(building, "amenities", [])),
+                    "style": getattr(building, "household_style", None),
                 }
             )
 
@@ -510,6 +518,8 @@ class World:
             "assignments": assignments,
             "homeless_characters": homeless,
             "resting_characters": resting_characters,
+            "household_vignettes": list(self._latest_household_vignettes),
+            "neighborhood_gatherings": list(self._latest_neighborhood_gatherings),
         }
         return snapshot
 
@@ -598,6 +608,10 @@ class World:
             construction_phases=deepcopy(blueprint.get("construction_phases")),
             map_char_initial=blueprint.get("map_char_initial", "X"),
             map_char_complete=blueprint.get("map_char_complete", "B"),
+            tile_layout=deepcopy(blueprint.get("tile_layout")),
+            tile_palette=deepcopy(blueprint.get("tile_palette")),
+            amenities=deepcopy(blueprint.get("amenities")),
+            household_style=blueprint.get("household_style"),
         )
         building.is_operational = True
         building.current_phase_index = len(building.phases)
@@ -605,12 +619,22 @@ class World:
         building.current_phase_progress = 0.0
         self.add_building(building)
 
-        interior_tile = blueprint.get("interior_tile")
-        if interior_tile:
-            for tx, ty in building.get_tiles_occupied():
-                if 0 <= tx < self.grid_size[0] and 0 <= ty < self.grid_size[1]:
-                    self.grid[tx][ty] = interior_tile
+        layout = building.get_tile_layout()
+        if layout:
+            for row_idx, row in enumerate(layout):
+                for col_idx, tile_name in enumerate(row):
+                    tx = building.location[0] + col_idx
+                    ty = building.location[1] + row_idx
+                    if 0 <= tx < self.grid_size[0] and 0 <= ty < self.grid_size[1] and tile_name:
+                        self.grid[tx][ty] = tile_name
             self.map_revision += 1
+        else:
+            interior_tile = blueprint.get("interior_tile")
+            if interior_tile:
+                for tx, ty in building.get_tiles_occupied():
+                    if 0 <= tx < self.grid_size[0] and 0 <= ty < self.grid_size[1]:
+                        self.grid[tx][ty] = interior_tile
+                self.map_revision += 1
 
         tier = building.functionality.get("wealth_tier") if building.functionality else None
         tier_label = tier or "residential"
@@ -717,6 +741,269 @@ class World:
             self.latest_housing_snapshot = self.get_housing_snapshot()
 
         return changed
+
+    def _format_household_label(self, occupants: List['Character'], host: 'Character') -> str:
+        others = [char.name for char in occupants if char and char.name != host.name]
+        if not others:
+            return host.name
+        if len(others) == 1:
+            return f"{host.name} and {others[0]}"
+        if len(others) == 2:
+            return f"{host.name}, {others[0]}, and {others[1]}"
+        return f"{host.name}, {others[0]}, and {len(others) - 1} others"
+
+    def _format_neighborhood_label(self, block_key: Tuple[int, int], block_size: int) -> str:
+        block_x, block_y = block_key
+        start_x = block_x * block_size
+        start_y = block_y * block_size
+        human_x = block_x + 1
+        human_y = block_y + 1
+        return f"District {human_x}-{human_y} (tiles {start_x}–{start_x + block_size - 1}, {start_y}–{start_y + block_size - 1})"
+
+    def _resolve_household_evenings(
+        self,
+        snapshot: Dict[str, Any],
+        report: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        stories: List[Dict[str, Any]] = []
+        style_moments = getattr(config, "HOUSEHOLD_STYLE_MOMENTS", {})
+        default_moments = style_moments.get("general", [])
+
+        for building in self.buildings:
+            if hasattr(building, "latest_household_story"):
+                building.latest_household_story = None
+
+        if not self.game_time:
+            self._latest_household_vignettes = stories
+            snapshot["household_vignettes"] = stories
+            return stories
+
+        today = self.game_time.current_day
+        for building in self.buildings:
+            if not self._is_residential(building):
+                continue
+
+            occupant_objects = [
+                self.get_character_by_name(name)
+                for name in building.occupants
+            ]
+            occupants: List['Character'] = [char for char in occupant_objects if char]
+            if not occupants:
+                continue
+
+            style_key = getattr(building, "household_style", None) or self._get_building_tier(building)
+            options = style_moments.get(style_key, []) or default_moments
+            if not options:
+                continue
+
+            moment = random.choice(options)
+            host = max(occupants, key=lambda char: getattr(char, "net_worth", 0))
+
+            group_summary = moment.get("group_summary")
+            solo_summary = moment.get("solo_summary")
+            if len(occupants) > 1:
+                summary_core = group_summary or solo_summary or "shared a quiet evening together"
+                subject = self._format_household_label(occupants, host)
+                summary_text = f"{subject} {summary_core} at {building.display_name}."
+            else:
+                summary_core = solo_summary or group_summary or "spent a reflective evening at home"
+                summary_text = f"{host.name} {summary_core} at {building.display_name}."
+
+            memory_text = moment.get("memory") or f"Evening at {building.display_name}"
+            memory_detail = summary_text
+            mood_bonus = int(moment.get("mood_bonus", 0) or 0)
+            belonging_bonus = int(moment.get("belonging_bonus", 0) or 0)
+            esteem_bonus = int(moment.get("esteem_bonus", 0) or 0)
+
+            for occupant in occupants:
+                if mood_bonus:
+                    occupant.update_mood_score(mood_bonus, memory_text)
+                if belonging_bonus:
+                    current_belonging = occupant.needs.get("Belonging", config.NEED_BELONGING_DEFAULT)
+                    occupant.needs["Belonging"] = min(
+                        config.NEED_SCORE_MAX,
+                        current_belonging + belonging_bonus,
+                    )
+                if esteem_bonus:
+                    current_esteem = occupant.needs.get("Esteem", config.NEED_ESTEEM_DEFAULT)
+                    occupant.needs["Esteem"] = min(
+                        config.NEED_SCORE_MAX,
+                        current_esteem + esteem_bonus,
+                    )
+                occupant.add_memory(f"{memory_text}: {memory_detail}")
+
+            story = {
+                "day": today,
+                "building": building.display_name,
+                "tier": self._get_building_tier(building),
+                "style": getattr(building, "household_style", None),
+                "summary": summary_text,
+                "occupants": [char.name for char in occupants],
+            }
+            stories.append(story)
+            if hasattr(building, "latest_household_story"):
+                building.latest_household_story = story
+            self.add_event_log_message(f"Household Highlight: {summary_text}")
+            if report is not None:
+                report.setdefault("housing_highlights", []).append(story)
+
+        self._latest_household_vignettes = stories
+        snapshot["household_vignettes"] = stories
+        return stories
+
+    def _resolve_neighborhood_gatherings(
+        self,
+        snapshot: Dict[str, Any],
+        report: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        gatherings: List[Dict[str, Any]] = []
+        block_size = max(1, int(getattr(config, "NEIGHBORHOOD_BLOCK_SIZE", 6)))
+        min_households = max(1, int(getattr(config, "NEIGHBORHOOD_MIN_HOUSEHOLDS", 2)))
+        base_chance = max(0.0, float(getattr(config, "NEIGHBORHOOD_GATHERING_BASE_CHANCE", 0.35)))
+        spirit_weight = float(getattr(config, "NEIGHBORHOOD_SPIRIT_WEIGHT", 0.4))
+        extra_bonus = float(getattr(config, "NEIGHBORHOOD_EXTRA_HOUSEHOLD_BONUS", 0.05))
+        style_moments = getattr(config, "NEIGHBORHOOD_MOMENTS", {})
+        default_moments = style_moments.get("general", [])
+
+        for building in self.buildings:
+            if hasattr(building, "latest_neighborhood_story"):
+                building.latest_neighborhood_story = None
+
+        snapshot["neighborhood_gatherings"] = gatherings
+        self._latest_neighborhood_gatherings = gatherings
+
+        if not self.game_time:
+            return gatherings
+
+        blocks: Dict[Tuple[int, int], List[Building]] = defaultdict(list)
+        for building in self.buildings:
+            if not self._is_residential(building):
+                continue
+            block_x = building.location[0] // block_size
+            block_y = building.location[1] // block_size
+            blocks[(block_x, block_y)].append(building)
+
+        today = self.game_time.current_day
+        community_spirit = float(getattr(self, "community_spirit", 0.0))
+
+        for block_key, homes in blocks.items():
+            populated_homes: List[Tuple[Building, List['Character']]] = []
+            for home in homes:
+                occupants = [
+                    self.get_character_by_name(name)
+                    for name in getattr(home, "occupants", [])
+                ]
+                valid = [char for char in occupants if char]
+                if valid:
+                    populated_homes.append((home, valid))
+
+            if len(populated_homes) < min_households:
+                continue
+
+            attendee_count = sum(len(chars) for _, chars in populated_homes)
+            if attendee_count < 2:
+                continue
+
+            attendance_bonus = extra_bonus * max(0, len(populated_homes) - min_households)
+            trigger_chance = base_chance + community_spirit * spirit_weight + attendance_bonus
+            trigger_chance = max(0.0, min(0.95, trigger_chance))
+            if random.random() > trigger_chance:
+                continue
+
+            host_home, host_residents = max(
+                populated_homes,
+                key=lambda item: max(
+                    (getattr(char, "net_worth", 0) for char in item[1]),
+                    default=0,
+                ),
+            )
+            host_character = max(
+                host_residents,
+                key=lambda char: getattr(char, "net_worth", 0),
+            )
+
+            style_key = getattr(host_home, "household_style", None) or self._get_building_tier(host_home)
+            moment_options = style_moments.get(style_key, []) or default_moments
+            if not moment_options:
+                continue
+
+            moment = random.choice(moment_options)
+            neighborhood_label = self._format_neighborhood_label(block_key, block_size)
+            summary_template = moment.get("summary") or "Neighbors gathered near {host} in {neighborhood}."
+
+            attendees = sorted({char.name for _, chars in populated_homes for char in chars})
+            attendee_count = len(attendees)
+            summary_text = summary_template.format(
+                host=host_home.display_name,
+                host_name=host_character.name,
+                neighborhood=neighborhood_label,
+                attendee_count=attendee_count,
+            )
+
+            memory_text = moment.get("memory") or "Neighborhood gathering"
+            memory_detail = summary_text
+            mood_bonus = int(moment.get("mood_bonus", 0) or 0)
+            belonging_bonus = int(moment.get("belonging_bonus", 0) or 0)
+            esteem_bonus = int(moment.get("esteem_bonus", 0) or 0)
+            spirit_delta = float(moment.get("spirit_delta", 0.0) or 0.0)
+
+            for _, chars in populated_homes:
+                for character in chars:
+                    if mood_bonus:
+                        character.update_mood_score(mood_bonus, memory_text)
+                    if belonging_bonus:
+                        current_belonging = character.needs.get(
+                            "Belonging",
+                            config.NEED_BELONGING_DEFAULT,
+                        )
+                        character.needs["Belonging"] = min(
+                            config.NEED_SCORE_MAX,
+                            current_belonging + belonging_bonus,
+                        )
+                    if esteem_bonus:
+                        current_esteem = character.needs.get(
+                            "Esteem",
+                            config.NEED_ESTEEM_DEFAULT,
+                        )
+                        character.needs["Esteem"] = min(
+                            config.NEED_SCORE_MAX,
+                            current_esteem + esteem_bonus,
+                        )
+                    character.add_memory(f"{memory_text}: {memory_detail}")
+
+            if spirit_delta and hasattr(self, "community_spirit"):
+                self.community_spirit = max(
+                    0.0,
+                    min(1.0, float(self.community_spirit) + spirit_delta),
+                )
+
+            gathering = {
+                "day": today,
+                "neighborhood": neighborhood_label,
+                "neighborhood_key": block_key,
+                "host": host_home.display_name,
+                "host_character": host_character.name,
+                "tier": self._get_building_tier(host_home),
+                "style": getattr(host_home, "household_style", None),
+                "summary": summary_text,
+                "attendees": attendees,
+                "attending_buildings": [home.display_name for home, _ in populated_homes],
+            }
+            gatherings.append(gathering)
+            if hasattr(host_home, "latest_neighborhood_story"):
+                host_home.latest_neighborhood_story = gathering
+
+            self.add_event_log_message(
+                f"Neighborhood Gathering: {summary_text} (attendees: {attendee_count})"
+            )
+            if report is not None:
+                report.setdefault("neighborhood_gatherings", []).append(gathering)
+
+        if gatherings:
+            snapshot["neighborhood_gatherings"] = gatherings
+            self._latest_neighborhood_gatherings = gatherings
+
+        return gatherings
 
     def get_operational_buildings_of_type(self, structure_type_str: str) -> List[Building]:
         return [b for b in self.buildings if b.structure_type == structure_type_str and b.is_operational]
@@ -4424,6 +4711,14 @@ class World:
         if self._synchronize_estate_expectations(snapshot):
             snapshot = self.latest_housing_snapshot
             report["housing"] = snapshot
+
+        stories = self._resolve_household_evenings(snapshot, report)
+        if stories:
+            report.setdefault("household_vignettes", stories)
+        gatherings = self._resolve_neighborhood_gatherings(snapshot, report)
+        if gatherings:
+            report.setdefault("neighborhood_gatherings", gatherings)
+        self.latest_housing_snapshot = snapshot
 
         self.last_housing_evaluation_day = today
         return snapshot

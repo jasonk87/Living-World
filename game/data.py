@@ -367,6 +367,12 @@ STRUCTURE_BLUEPRINTS = {
         "map_char_initial": ".", # Initial representation on map before construction starts
         "map_char_complete": "H",
         "interior_tile": "Floor",
+        "tile_layout": [
+            ["WoodWall", "WoodWall"],
+            ["Bedroll", "Hearth"],
+        ],
+        "amenities": ["Shared hearth", "Sleeping pallets"],
+        "household_style": "hearthfire",
     },
     "stone_cottage": {
         "display_name": "Stone Cottage",
@@ -386,6 +392,13 @@ STRUCTURE_BLUEPRINTS = {
         "map_char_initial": ".",
         "map_char_complete": "C",
         "interior_tile": "Flagstone",
+        "tile_layout": [
+            ["StoneWall", "StoneWall", "StoneWall"],
+            ["Bed", "Flagstone", "Bed"],
+            ["Chest", "Hearth", "Table"],
+        ],
+        "amenities": ["Sturdy bunks", "Warm hearth", "Provision chest"],
+        "household_style": "artisan",
     },
     "merchant_manor": {
         "display_name": "Merchant Manor",
@@ -405,6 +418,13 @@ STRUCTURE_BLUEPRINTS = {
         "map_char_initial": ".",
         "map_char_complete": "M",
         "interior_tile": "Parquet",
+        "tile_layout": [
+            ["StoneWall", "StoneWall", "StoneWall", "StoneWall"],
+            ["Dining", "Parquet", "Parquet", "Study"],
+            ["Garden", "Parlor", "Parlor", "Garden"],
+        ],
+        "amenities": ["Formal dining table", "Parlor for guests", "Private study"],
+        "household_style": "mercantile",
     },
     "noble_estate": {
         "display_name": "Noble Estate",
@@ -425,6 +445,14 @@ STRUCTURE_BLUEPRINTS = {
         "map_char_initial": ".",
         "map_char_complete": "N",
         "interior_tile": "Marble",
+        "tile_layout": [
+            ["StoneWall", "StoneWall", "StoneWall", "StoneWall"],
+            ["Marble", "GrandHall", "GrandHall", "Marble"],
+            ["Garden", "Library", "Library", "Garden"],
+            ["Courtyard", "Courtyard", "Courtyard", "Courtyard"],
+        ],
+        "amenities": ["Grand hall", "Private library", "Garden courtyard"],
+        "household_style": "noble",
     },
     "small_workshop": {
         "display_name": "Small Workshop",

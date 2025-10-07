@@ -179,6 +179,183 @@ RESIDENTIAL_TIER_PRIORITY = {
 RESIDENTIAL_FALLBACK_TIER = "modest"
 RESIDENTIAL_ANCHOR = (4, 4)
 
+HOUSEHOLD_STYLE_MOMENTS = {
+    "general": [
+        {
+            "group_summary": "shared a humble meal and spoke of the day's work",
+            "solo_summary": "took a quiet moment to plan the days ahead",
+            "memory": "Quiet evening",
+            "mood_bonus": 2,
+            "belonging_bonus": 2,
+        }
+    ],
+    "hearthfire": [
+        {
+            "group_summary": "gathered around the hearth to savor a pot of stew",
+            "solo_summary": "kept the hearth embers alive for tomorrow",
+            "memory": "Hearthside evening",
+            "mood_bonus": 4,
+            "belonging_bonus": 6,
+        },
+        {
+            "group_summary": "sang low songs while patching worn cloaks",
+            "solo_summary": "hummed a folk tune to chase away the chill",
+            "memory": "Songs by the fire",
+            "mood_bonus": 3,
+            "belonging_bonus": 4,
+        },
+    ],
+    "artisan": [
+        {
+            "group_summary": "reviewed the day's craftwork and shared tips over bread",
+            "solo_summary": "sketched tomorrow's designs beside the embers",
+            "memory": "Workshop reflections",
+            "mood_bonus": 3,
+            "belonging_bonus": 3,
+            "esteem_bonus": 2,
+        },
+        {
+            "group_summary": "played a quick game of stones and laughed at close calls",
+            "solo_summary": "sorted materials and admired careful handiwork",
+            "memory": "Friendly games",
+            "mood_bonus": 4,
+            "belonging_bonus": 2,
+        },
+    ],
+    "mercantile": [
+        {
+            "group_summary": "hosted guests in the parlor to trade tales and favors",
+            "solo_summary": "balanced the ledgers in a quiet study",
+            "memory": "Parlor conversations",
+            "mood_bonus": 3,
+            "belonging_bonus": 3,
+            "esteem_bonus": 2,
+        },
+        {
+            "group_summary": "planned new ventures over a rich supper spread",
+            "solo_summary": "drafted trade letters deep into the night",
+            "memory": "Ambitious plotting",
+            "mood_bonus": 4,
+            "belonging_bonus": 2,
+            "esteem_bonus": 3,
+        },
+    ],
+    "noble": [
+        {
+            "group_summary": "hosted a salon in the grand hall to debate governance",
+            "solo_summary": "walked the marble hallways in thoughtful solitude",
+            "memory": "Grand hall gathering",
+            "mood_bonus": 5,
+            "belonging_bonus": 3,
+            "esteem_bonus": 3,
+        },
+        {
+            "group_summary": "toured the library and shared verses of treasured tomes",
+            "solo_summary": "studied histories beneath gilded lanterns",
+            "memory": "Library stroll",
+            "mood_bonus": 4,
+            "belonging_bonus": 2,
+            "esteem_bonus": 4,
+        },
+    ],
+}
+
+NEIGHBORHOOD_BLOCK_SIZE = 6
+NEIGHBORHOOD_MIN_HOUSEHOLDS = 2
+NEIGHBORHOOD_GATHERING_BASE_CHANCE = 0.35
+NEIGHBORHOOD_SPIRIT_WEIGHT = 0.45
+NEIGHBORHOOD_EXTRA_HOUSEHOLD_BONUS = 0.04
+NEIGHBORHOOD_MOMENTS = {
+    "general": [
+        {
+            "summary": "Neighbors along {neighborhood} shared a potluck outside {host}.",
+            "memory": "Neighborhood potluck",
+            "mood_bonus": 3,
+            "belonging_bonus": 4,
+            "spirit_delta": 0.02,
+        },
+        {
+            "summary": "{attendee_count} villagers swapped stories by lantern light near {host} in {neighborhood}.",
+            "memory": "Lantern stories",
+            "mood_bonus": 2,
+            "belonging_bonus": 3,
+            "esteem_bonus": 1,
+            "spirit_delta": 0.015,
+        },
+    ],
+    "hearthfire": [
+        {
+            "summary": "{host_name} invited the lane for ember-warm ballads in {neighborhood} outside {host}.",
+            "memory": "Firelit ballads",
+            "mood_bonus": 4,
+            "belonging_bonus": 5,
+            "spirit_delta": 0.025,
+        },
+        {
+            "summary": "Families gathered around {host} in {neighborhood} to roast root vegetables and share blessings.",
+            "memory": "Roasted roots",
+            "mood_bonus": 3,
+            "belonging_bonus": 4,
+            "esteem_bonus": 1,
+            "spirit_delta": 0.02,
+        },
+    ],
+    "artisan": [
+        {
+            "summary": "Craftsfolk lined the stoops near {host} in {neighborhood} to compare handiwork and trade tips.",
+            "memory": "Craft stoop circle",
+            "mood_bonus": 3,
+            "belonging_bonus": 3,
+            "esteem_bonus": 2,
+            "spirit_delta": 0.02,
+        },
+        {
+            "summary": "Sketchbooks and samples filled the tables as neighbors gathered at {host} in {neighborhood} for a maker's critique.",
+            "memory": "Maker's critique",
+            "mood_bonus": 2,
+            "belonging_bonus": 2,
+            "esteem_bonus": 3,
+            "spirit_delta": 0.018,
+        },
+    ],
+    "mercantile": [
+        {
+            "summary": "Merchants staged a curbside tasting outside {host} in {neighborhood}, bartering delights and news.",
+            "memory": "Curbside tasting",
+            "mood_bonus": 3,
+            "belonging_bonus": 2,
+            "esteem_bonus": 2,
+            "spirit_delta": 0.02,
+        },
+        {
+            "summary": "Ledgers and laughter mingled as {attendee_count} entrepreneurs met outside {host} in {neighborhood} to plot ventures.",
+            "memory": "Merchant moot",
+            "mood_bonus": 2,
+            "belonging_bonus": 2,
+            "esteem_bonus": 3,
+            "spirit_delta": 0.018,
+        },
+    ],
+    "noble": [
+        {
+            "summary": "{host_name} opened the courtyard of {host} in {neighborhood} for a lantern promenade and policy debate.",
+            "memory": "Lantern promenade",
+            "mood_bonus": 4,
+            "belonging_bonus": 3,
+            "esteem_bonus": 4,
+            "spirit_delta": 0.03,
+        },
+        {
+            "summary": "Envoys and nobles convened at {host} in {neighborhood} for a tasting of cellar reserves and whispered alliances.",
+            "memory": "Cellar conclave",
+            "mood_bonus": 3,
+            "belonging_bonus": 2,
+            "esteem_bonus": 4,
+            "spirit_delta": 0.028,
+        },
+    ],
+}
+
 # Career & Profession Simulation
 CAREER_DEFAULT_STAGE = "Apprentice"
 CAREER_STAGE_THRESHOLDS = {
