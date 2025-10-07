@@ -309,6 +309,68 @@ def test_household_evening_generates_story_and_bonuses(mock_choice):  # noqa: AR
     assert "housing_highlights" in report
 
 
+def test_household_comfort_cycle_consumes_resources_and_updates_mood():
+    world, game_time = _make_world()
+    stockpile = Stockpile(
+        name="CentralStore",
+        x=0,
+        y=0,
+        width=1,
+        height=1,
+        allowed_resources=None,
+        total_capacity=200,
+    )
+    stockpile.add_item("Wood", 12)
+    stockpile.add_item("Furniture", 4)
+    world.add_stockpile(stockpile)
+
+    cottage = _residential_building(location=(2, 2), capacity=2)
+    cottage.household_style = "hearthfire"
+    cottage.amenities = ["Shared hearth"]
+    world.add_building(cottage)
+
+    resident = Character(
+        name="June",
+        personality="Cheerful",
+        traits=[],
+        skills={},
+        needs=_standard_needs(),
+    )
+    world.add_character(resident)
+    world.claim_residential_spot(resident)
+
+    resident.mood_score = config.MOOD_SCORE_NEUTRAL_START
+    initial_mood = resident.mood_score
+    game_time.current_day = 1
+
+    report: Dict[str, Any] = {}
+    updates = world._maintain_household_comforts(report)
+
+    hearth_events = [entry for entry in updates if entry.get("rule") == "hearth_fire"]
+    assert hearth_events, "Expected hearth comfort routine to resolve."
+    hearth_event = hearth_events[0]
+    assert 0 < hearth_event["withdrawn"] <= hearth_event["required"]
+    assert resident.mood_score > initial_mood
+    assert cottage.comfort_score > 0
+    assert report["household_comfort_summary"]["satisfied"] >= 1
+    assert stockpile.inventory.get("Wood", 0) < 12
+    assert any("warm hearth" in memory.lower() for memory in resident.memory)
+
+    stockpile.inventory["Wood"] = 0
+    previous_mood = resident.mood_score
+    game_time.current_day += 1
+
+    report_shortage: Dict[str, Any] = {}
+    updates_shortage = world._maintain_household_comforts(report_shortage)
+    hearth_follow_up = [entry for entry in updates_shortage if entry.get("rule") == "hearth_fire"]
+    assert hearth_follow_up, "Expected hearth comfort routine to be evaluated again."
+    outcome = hearth_follow_up[0]["outcome"]
+    assert outcome in {"partial", "missed"}
+    assert resident.mood_score <= previous_mood
+    summary = report_shortage["household_comfort_summary"]
+    assert summary["partial"] + summary["missed"] >= 1
+
+
 @patch("random.choice", side_effect=lambda options: options[0])
 def test_neighborhood_gathering_records_story(mock_choice):  # noqa: ARG001
     world, game_time = _make_world()

@@ -1,4 +1,5 @@
 # game/building.py
+from copy import deepcopy
 from typing import Tuple, Dict, Optional, List, Any
 
 class Building:
@@ -64,6 +65,8 @@ class Building:
         self.household_style: Optional[str] = household_style
         self.latest_household_story: Optional[Dict[str, Any]] = None
         self.latest_neighborhood_story: Optional[Dict[str, Any]] = None
+        self.comfort_score: float = 0.0
+        self.household_comfort_state: Dict[str, Dict[str, Any]] = {}
 
 
     def __str__(self):
@@ -192,6 +195,8 @@ class Building:
             "tile_layout": self.get_tile_layout(),
             "amenities": list(self.amenities),
             "household_style": self.household_style,
+            "comfort_score": round(self.comfort_score, 1),
+            "household_comfort_state": deepcopy(self.household_comfort_state),
         }
 
     @staticmethod

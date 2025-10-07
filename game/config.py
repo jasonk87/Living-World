@@ -501,6 +501,56 @@ HOUSEHOLD_STYLE_MOMENTS = {
     ],
 }
 
+HOUSEHOLD_COMFORT_MAX = 100.0
+HOUSEHOLD_COMFORT_DECAY_BASE = 1.4
+HOUSEHOLD_COMFORT_EMPTY_DECAY = 2.5
+HOUSEHOLD_COMFORT_GOOD_THRESHOLD = 62.0
+HOUSEHOLD_COMFORT_RULES = [
+    {
+        "key": "hearth_fire",
+        "name": "Keep the Hearth",
+        "resource": "Wood",
+        "base_amount": 1.0,
+        "per_resident": 0.5,
+        "minimum": 1,
+        "interval_days": 1,
+        "style_multipliers": {"hearthfire": 1.2, "artisan": 1.0, "mercantile": 0.85, "noble": 0.7},
+        "tier_multipliers": {"prosperous": 1.15, "noble": 1.3},
+        "success_ratio": 0.75,
+        "comfort_gain": 14.0,
+        "comfort_penalty": 12.0,
+        "decay": 3.0,
+        "mood_bonus": 4,
+        "mood_penalty": -6,
+        "need_bonus": {"Belonging": 4, "Safety": 3},
+        "need_penalty": {"Belonging": -6, "Safety": -6},
+        "success_memory": "Enjoyed a warm hearth inside {building}.",
+        "partial_memory": "Shared embers to stretch the hearth fire in {building}.",
+        "failure_memory": "Shivered through the night in {building} after the fire died.",
+    },
+    {
+        "key": "fine_furnishings",
+        "name": "Refresh Furnishings",
+        "resource": "Furniture",
+        "base_amount": 0.0,
+        "per_resident": 0.25,
+        "minimum": 1,
+        "interval_days": 4,
+        "tier_multipliers": {"comfortable": 0.9, "prosperous": 1.35, "noble": 1.6},
+        "success_ratio": 0.6,
+        "comfort_gain": 16.0,
+        "comfort_penalty": 10.0,
+        "decay": 2.0,
+        "mood_bonus": 3,
+        "mood_penalty": -4,
+        "need_bonus": {"Esteem": 4},
+        "need_penalty": {"Esteem": -5},
+        "success_memory": "Polished the furnishings of {building} and felt proud of the home.",
+        "partial_memory": "Managed a token tidy-up in {building}, but finer touches are lacking.",
+        "failure_memory": "Furniture in {building} has gone shabby—spirits fell.",
+    },
+]
+
 NEIGHBORHOOD_BLOCK_SIZE = 6
 NEIGHBORHOOD_MIN_HOUSEHOLDS = 2
 NEIGHBORHOOD_GATHERING_BASE_CHANCE = 0.35

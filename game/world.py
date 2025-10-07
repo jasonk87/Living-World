@@ -120,6 +120,8 @@ class World:
         self.last_housing_evaluation_day: Optional[int] = None
         self._latest_household_vignettes: List[Dict[str, Any]] = []
         self._latest_neighborhood_gatherings: List[Dict[str, Any]] = []
+        self._latest_household_comforts: List[Dict[str, Any]] = []
+        self._latest_household_comfort_summary: Dict[str, Any] = {}
         self.latest_housing_snapshot: Dict[str, Any] = self.get_housing_snapshot()
         self.current_phase: Dict[str, Any] = {}
         self.phase_history: List[Dict[str, Any]] = []
@@ -1037,6 +1039,10 @@ class World:
                     "tier": self._get_building_tier(building),
                     "amenities": list(getattr(building, "amenities", [])),
                     "style": getattr(building, "household_style", None),
+                    "comfort": round(getattr(building, "comfort_score", 0.0), 1),
+                    "comfort_state": deepcopy(
+                        getattr(building, "household_comfort_state", {})
+                    ),
                 }
             )
 
@@ -1074,6 +1080,8 @@ class World:
             "household_vignettes": list(self._latest_household_vignettes),
             "neighborhood_gatherings": list(self._latest_neighborhood_gatherings),
         }
+        snapshot["comfort_summary"] = deepcopy(self._latest_household_comfort_summary)
+        snapshot["comfort_events"] = deepcopy(self._latest_household_comforts[-8:])
         return snapshot
 
     def _can_place_structure(
@@ -1311,6 +1319,266 @@ class World:
         human_x = block_x + 1
         human_y = block_y + 1
         return f"District {human_x}-{human_y} (tiles {start_x}–{start_x + block_size - 1}, {start_y}–{start_y + block_size - 1})"
+
+    def _maintain_household_comforts(
+        self, report: Optional[Dict[str, Any]] = None
+    ) -> List[Dict[str, Any]]:
+        rules = list(getattr(config, "HOUSEHOLD_COMFORT_RULES", []))
+        if report is not None:
+            report.setdefault("household_comforts", [])
+            report.setdefault("household_comfort_summary", {})
+        if not self.game_time or not rules:
+            self._latest_household_comforts = []
+            self._latest_household_comfort_summary = {}
+            if report is not None:
+                report["household_comforts"] = []
+                report["household_comfort_summary"] = {}
+            return []
+
+        today = self.game_time.current_day
+        base_decay = float(getattr(config, "HOUSEHOLD_COMFORT_DECAY_BASE", 0.0))
+        empty_decay = float(getattr(config, "HOUSEHOLD_COMFORT_EMPTY_DECAY", base_decay))
+        max_score = float(getattr(config, "HOUSEHOLD_COMFORT_MAX", 100.0))
+        good_threshold = float(
+            getattr(config, "HOUSEHOLD_COMFORT_GOOD_THRESHOLD", max_score * 0.6)
+        )
+        need_cap = getattr(config, "NEED_SCORE_MAX", 100)
+        need_min = getattr(config, "NEED_SCORE_MIN", 0)
+
+        updates: List[Dict[str, Any]] = []
+        summary_counts: Counter[str] = Counter()
+        comfort_scores: List[float] = []
+        comfortable_households = 0
+        resource_usage: Dict[str, Dict[str, int]] = defaultdict(lambda: {"required": 0, "withdrawn": 0})
+
+        for building in self.buildings:
+            if not self._is_residential(building):
+                continue
+
+            occupants: List['Character'] = []
+            for name in list(building.occupants):
+                occupant = self.get_character_by_name(name)
+                if occupant:
+                    occupants.append(occupant)
+                else:
+                    building.remove_occupant(name)
+
+            occupant_count = len(occupants)
+            current_score = float(getattr(building, "comfort_score", 0.0))
+            decay_amount = base_decay if occupant_count > 0 else max(base_decay, empty_decay)
+            if decay_amount:
+                current_score = max(0.0, current_score - decay_amount)
+            building.comfort_score = current_score
+
+            tier = self._get_building_tier(building)
+            style = getattr(building, "household_style", None)
+
+            for rule in rules:
+                state = building.household_comfort_state.setdefault(
+                    rule.get("key", "comfort"),
+                    {
+                        "comfort": 0.0,
+                        "last_serviced_day": None,
+                        "last_outcome": None,
+                    },
+                )
+                rule_decay = float(rule.get("decay", 0.0))
+                if rule_decay:
+                    state["comfort"] = max(
+                        0.0, float(state.get("comfort", 0.0)) - rule_decay
+                    )
+
+                interval = max(1, int(rule.get("interval_days", 1)))
+                last_day = state.get("last_serviced_day")
+                if (
+                    occupant_count > 0
+                    and last_day is not None
+                    and today - int(last_day) < interval
+                ):
+                    continue
+
+                resource_name = rule.get("resource")
+                if not resource_name or occupant_count <= 0:
+                    continue
+
+                base_amount = float(rule.get("base_amount", 0.0))
+                per_resident = float(rule.get("per_resident", 0.0))
+                required_float = base_amount + per_resident * occupant_count
+
+                style_multipliers = rule.get("style_multipliers", {}) or {}
+                if style and style in style_multipliers:
+                    required_float *= float(style_multipliers[style])
+
+                tier_multipliers = rule.get("tier_multipliers", {}) or {}
+                if tier and tier in tier_multipliers:
+                    required_float *= float(tier_multipliers[tier])
+
+                minimum_amount = float(rule.get("minimum", 0.0))
+                if minimum_amount > 0:
+                    required_float = max(required_float, minimum_amount)
+
+                required = int(math.ceil(required_float)) if required_float > 0 else 0
+
+                usage_entry = resource_usage[resource_name]
+                usage_entry["required"] += required
+
+                withdrawn = 0
+                if required > 0:
+                    withdrawn = self._withdraw_from_stockpiles(resource_name, required)
+                usage_entry["withdrawn"] += withdrawn
+
+                ratio = 1.0 if required == 0 else max(0.0, min(1.0, withdrawn / required))
+                success_ratio = float(rule.get("success_ratio", 0.75))
+                if ratio >= success_ratio:
+                    outcome = "satisfied"
+                elif withdrawn > 0:
+                    outcome = "partial"
+                else:
+                    outcome = "missed"
+
+                state["last_outcome"] = outcome
+                if withdrawn > 0:
+                    state["last_serviced_day"] = today
+
+                comfort_gain = float(rule.get("comfort_gain", 0.0))
+                comfort_penalty = float(rule.get("comfort_penalty", comfort_gain))
+                comfort_delta = 0.0
+                if outcome == "satisfied":
+                    comfort_delta = comfort_gain
+                elif outcome == "partial":
+                    comfort_delta = (comfort_gain * ratio) - (comfort_penalty * (1 - ratio))
+                else:
+                    comfort_delta = -comfort_penalty
+
+                state["comfort"] = max(
+                    0.0,
+                    min(max_score, float(state.get("comfort", 0.0)) + comfort_delta),
+                )
+                building.comfort_score = max(
+                    0.0, min(max_score, building.comfort_score + comfort_delta)
+                )
+
+                mood_change = 0
+                need_changes: Dict[str, int] = {}
+                memory_template: Optional[str] = None
+                reason_label = rule.get("name") or rule.get("key", "Household Comfort")
+
+                if outcome == "satisfied":
+                    mood_change = int(rule.get("mood_bonus", 0))
+                    need_changes = {
+                        key: int(value)
+                        for key, value in (rule.get("need_bonus") or {}).items()
+                        if value
+                    }
+                    memory_template = rule.get("success_memory")
+                elif outcome == "partial":
+                    mood_change = int(round(rule.get("mood_bonus", 0) * ratio))
+                    need_changes = {
+                        key: int(round(value * ratio))
+                        for key, value in (rule.get("need_bonus") or {}).items()
+                        if value
+                    }
+                    penalty_needs = {
+                        key: int(round(value * (1 - ratio)))
+                        for key, value in (rule.get("need_penalty") or {}).items()
+                        if value
+                    }
+                    for need_name, delta in penalty_needs.items():
+                        need_changes[need_name] = need_changes.get(need_name, 0) + delta
+                    memory_template = rule.get("partial_memory") or rule.get("success_memory")
+                else:
+                    mood_change = int(rule.get("mood_penalty", 0))
+                    need_changes = {
+                        key: int(value)
+                        for key, value in (rule.get("need_penalty") or {}).items()
+                        if value
+                    }
+                    memory_template = rule.get("failure_memory")
+
+                reason = f"{reason_label} ({outcome})"
+                for occupant in occupants:
+                    if mood_change:
+                        occupant.update_mood_score(mood_change, reason)
+                    if need_changes:
+                        for need_name, delta in need_changes.items():
+                            if not delta:
+                                continue
+                            default_attr = f"NEED_{need_name.upper()}_DEFAULT"
+                            baseline = getattr(
+                                config,
+                                default_attr,
+                                (need_cap + need_min) // 2,
+                            )
+                            current_value = occupant.needs.get(need_name, baseline)
+                            occupant.needs[need_name] = max(
+                                need_min,
+                                min(need_cap, current_value + delta),
+                            )
+                    if memory_template:
+                        occupant.add_memory(
+                            memory_template.format(building=building.display_name)
+                        )
+
+                shortage = max(0, required - withdrawn)
+                update_entry = {
+                    "building": building.display_name,
+                    "location": tuple(building.location),
+                    "rule": rule.get("key", "comfort"),
+                    "name": rule.get("name"),
+                    "resource": resource_name,
+                    "required": required,
+                    "withdrawn": withdrawn,
+                    "outcome": outcome,
+                    "occupants": occupant_count,
+                    "ratio": round(ratio, 2),
+                    "comfort_score": round(building.comfort_score, 1),
+                    "state_comfort": round(float(state.get("comfort", 0.0)), 1),
+                }
+                if shortage:
+                    update_entry["shortage"] = shortage
+                updates.append(update_entry)
+                summary_counts[outcome] += 1
+
+            comfort_scores.append(building.comfort_score)
+            if building.comfort_score >= good_threshold:
+                comfortable_households += 1
+
+        average_score = (
+            round(sum(comfort_scores) / len(comfort_scores), 1)
+            if comfort_scores
+            else 0.0
+        )
+        summary_data = {
+            "average_score": average_score,
+            "comfortable_households": comfortable_households,
+            "total_households": len(comfort_scores),
+            "satisfied": summary_counts.get("satisfied", 0),
+            "partial": summary_counts.get("partial", 0),
+            "missed": summary_counts.get("missed", 0),
+            "resource_usage": {
+                resource: dict(values) for resource, values in resource_usage.items()
+            },
+        }
+
+        if summary_counts:
+            parts: List[str] = []
+            if summary_counts.get("satisfied"):
+                parts.append(f"{summary_counts['satisfied']} cozy")
+            if summary_counts.get("partial"):
+                parts.append(f"{summary_counts['partial']} rationed")
+            if summary_counts.get("missed"):
+                parts.append(f"{summary_counts['missed']} cold")
+            if parts:
+                self.add_event_log_message(
+                    f"Household comforts: {', '.join(parts)}."
+                )
+
+        self._latest_household_comforts = updates
+        self._latest_household_comfort_summary = summary_data
+        if report is not None:
+            report["household_comforts"] = updates
+            report["household_comfort_summary"] = summary_data
+        return updates
 
     def _resolve_household_evenings(
         self,
@@ -5226,6 +5494,7 @@ class World:
         report["water_deficit"] = total_deficit
 
     def _evaluate_housing_daily(self, report: Dict[str, Any]) -> Dict[str, Any]:
+        self._maintain_household_comforts(report)
         snapshot = self.get_housing_snapshot()
         report["housing"] = snapshot
         self.latest_housing_snapshot = snapshot

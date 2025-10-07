@@ -48,6 +48,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const rumorFeedList = document.getElementById('rumor-feed-list');
     const housingStatusList = document.getElementById('housing-status-list');
     const housingStoryList = document.getElementById('housing-story-list');
+    const housingComfortList = document.getElementById('housing-comfort-list');
     const neighborhoodGatheringList = document.getElementById('neighborhood-gathering-list');
     const resourceNodeList = document.getElementById('resource-node-list');
     const landscapeSummaryList = document.getElementById('landscape-summary-list');
@@ -1040,6 +1041,78 @@ document.addEventListener('DOMContentLoaded', () => {
             housingStatusList.innerHTML = lines.length
                 ? lines.join('')
                 : '<li class="empty">No housing data.</li>';
+        }
+
+        if (housingComfortList) {
+            const comfortEntries = Array.isArray(report.household_comforts)
+                ? report.household_comforts
+                : Array.isArray(housingSnapshot.comfort_events)
+                    ? housingSnapshot.comfort_events
+                    : [];
+            const summary = report.household_comfort_summary
+                || housingSnapshot.comfort_summary
+                || {};
+            const lines = [];
+            const average = typeof summary.average_score === 'number' ? summary.average_score : null;
+            const totalHomes = typeof summary.total_households === 'number' ? summary.total_households : null;
+            if (average !== null || totalHomes !== null) {
+                const breakdown = [];
+                if (typeof summary.satisfied === 'number' && summary.satisfied) {
+                    breakdown.push(`${summary.satisfied} cozy`);
+                }
+                if (typeof summary.partial === 'number' && summary.partial) {
+                    breakdown.push(`${summary.partial} rationed`);
+                }
+                if (typeof summary.missed === 'number' && summary.missed) {
+                    breakdown.push(`${summary.missed} cold`);
+                }
+                const avgLabel = average !== null ? Math.round(average) : '–';
+                const homeLabel = totalHomes !== null ? `${totalHomes} homes` : '';
+                const metaBits = [];
+                if (homeLabel) {
+                    metaBits.push(homeLabel);
+                }
+                if (breakdown.length) {
+                    metaBits.push(breakdown.join(' • '));
+                }
+                const meta = metaBits.length ? `<span class="meta subtle">${metaBits.join(' • ')}</span>` : '';
+                lines.push(`<li><strong>Comfort Avg</strong>: ${avgLabel}${meta ? ` ${meta}` : ''}</li>`);
+            }
+
+            const recentComforts = comfortEntries.slice(-4).reverse();
+            recentComforts.forEach(entry => {
+                const buildingName = entry.building || 'Household';
+                const routineName = entry.name || (entry.rule ? entry.rule.replace(/_/g, ' ') : 'Routine');
+                const outcome = entry.outcome || 'resolved';
+                const outcomeLabel = outcome.charAt(0).toUpperCase() + outcome.slice(1);
+                const outcomeSymbol = outcome === 'satisfied' ? '✨' : outcome === 'partial' ? '⋯' : outcome === 'missed' ? '⚠️' : '•';
+                const details = [];
+                if (typeof entry.withdrawn === 'number' && typeof entry.required === 'number' && entry.required) {
+                    const resourceLabel = entry.resource ? entry.resource : 'goods';
+                    details.push(`${entry.withdrawn}/${entry.required} ${resourceLabel}`);
+                } else if (typeof entry.required === 'number' && entry.resource) {
+                    details.push(`${entry.required} ${entry.resource}`);
+                }
+                if (typeof entry.comfort_score === 'number') {
+                    details.push(`comfort ${Math.round(entry.comfort_score)}`);
+                }
+                if (typeof entry.occupants === 'number' && entry.occupants) {
+                    details.push(`${entry.occupants} residents`);
+                }
+                if (entry.shortage) {
+                    details.push(`short ${entry.shortage}`);
+                }
+                const meta = details.length ? `<span class="meta subtle">${details.join(' • ')}</span>` : '';
+                lines.push(`
+                    <li>
+                        ${outcomeSymbol} <strong>${buildingName}</strong>: ${outcomeLabel} ${routineName}${meta ? ` ${meta}` : ''}
+                    </li>
+                `.trim());
+            });
+
+            housingComfortList.innerHTML = lines.length
+                ? lines.join('')
+                : '<li class="empty">No comfort routines resolved.</li>';
         }
 
         if (housingStoryList) {
