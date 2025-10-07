@@ -43,6 +43,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const trainingNeedsNote = document.getElementById('training-needs-note');
     const trainingSessionList = document.getElementById('training-session-list');
     const trainingWaitlistList = document.getElementById('training-waitlist-list');
+    const familySpotlight = document.getElementById('family-spotlight');
+    const familyStoriesList = document.getElementById('family-stories-list');
+    const familyHouseholdList = document.getElementById('family-household-list');
     const characterSearchInput = document.getElementById('character-search');
     const infoPanel = document.getElementById('info-panel');
 
@@ -801,6 +804,78 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    function updateFamilyIntel(gameState) {
+        if (!familySpotlight && !familyStoriesList && !familyHouseholdList) return;
+        const snapshot = (gameState && gameState.families) || {};
+        const families = Array.isArray(snapshot.families) ? snapshot.families : [];
+        const recentHistory = Array.isArray(snapshot.recent_history) ? snapshot.recent_history : [];
+        const familyById = new Map(families.map(family => [family.family_id, family]));
+
+        if (familyHouseholdList) {
+            if (!families.length) {
+                familyHouseholdList.innerHTML = '<li class="empty">No families registered.</li>';
+            } else {
+                familyHouseholdList.innerHTML = families.slice(0, 5).map(family => {
+                    const members = Array.isArray(family.members) && family.members.length
+                        ? family.members.join(', ')
+                        : 'No members listed.';
+                    const tagline = family.tagline || 'Household';
+                    const memberCount = Array.isArray(family.members) ? family.members.length : 0;
+                    const lineagePreview = Array.isArray(family.lineage_preview) && family.lineage_preview.length
+                        ? family.lineage_preview.join(' • ')
+                        : null;
+                    const metaParts = [`${memberCount} member${memberCount === 1 ? '' : 's'}`];
+                    if (lineagePreview) {
+                        metaParts.push(lineagePreview);
+                    }
+                    const meta = `<div class="meta">${metaParts.join(' • ')}</div>`;
+                    return `
+                        <li>
+                            <strong>${tagline}</strong>
+                            <div>${members}</div>
+                            ${meta}
+                        </li>
+                    `;
+                }).join('');
+            }
+        }
+
+        if (familyStoriesList) {
+            if (!recentHistory.length) {
+                familyStoriesList.innerHTML = '<li class="empty">No family events recorded.</li>';
+            } else {
+                familyStoriesList.innerHTML = recentHistory.slice(-6).reverse().map(event => {
+                    const dayLabel = typeof event.day === 'number' ? `Day ${event.day}` : 'Day —';
+                    const family = familyById.get(event.family_id);
+                    const familyLabel = family ? (family.tagline || (family.members || []).join(', ')) : (event.family_id || 'Household');
+                    const summary = event.summary || 'No details recorded.';
+                    const typeLabel = event.type ? event.type.replace(/_/g, ' ') : 'Event';
+                    const source = event.source ? `<div class="meta">${typeLabel} • ${event.source}</div>` : `<div class="meta">${typeLabel}</div>`;
+                    return `
+                        <li>
+                            <strong>${dayLabel}</strong> • ${familyLabel}
+                            <div>${summary}</div>
+                            ${source}
+                        </li>
+                    `;
+                }).join('');
+            }
+        }
+
+        if (familySpotlight) {
+            if (!recentHistory.length) {
+                familySpotlight.textContent = 'No family stories logged.';
+            } else {
+                const latest = recentHistory[recentHistory.length - 1];
+                const dayLabel = typeof latest.day === 'number' ? `Day ${latest.day}` : 'Day —';
+                const family = familyById.get(latest.family_id);
+                const familyLabel = family ? (family.tagline || (family.members || []).join(', ')) : (latest.family_id || 'Household');
+                const summary = latest.summary || 'No details recorded.';
+                familySpotlight.textContent = `${dayLabel}: ${summary} (${familyLabel})`;
+            }
+        }
+    }
+
     function togglePanel(panelId) {
         const panel = document.getElementById(panelId);
         if (!panel) return;
@@ -1072,6 +1147,88 @@ document.addEventListener('DOMContentLoaded', () => {
         return container;
     }
 
+    function renderLifeEventList(events, limit = 10, emptyMessage = 'No events recorded.') {
+        const list = document.createElement('ul');
+        list.classList.add('mini-list');
+
+        if (!events || !events.length) {
+            const empty = document.createElement('li');
+            empty.classList.add('empty');
+            empty.textContent = emptyMessage;
+            list.appendChild(empty);
+            return list;
+        }
+
+        const slice = events.slice(-limit).reverse();
+        slice.forEach(event => {
+            const li = document.createElement('li');
+            const dayLabel = typeof event.day === 'number' ? `Day ${event.day}` : 'Day —';
+            const typeLabel = event.type ? event.type.replace(/_/g, ' ') : 'Event';
+            const summary = event.summary || 'No details recorded.';
+
+            const metaParts = [];
+            if (event.source) {
+                metaParts.push(`Source: ${event.source}`);
+            }
+            const related = Array.isArray(event.related) ? event.related.filter(name => name && name !== event.source) : [];
+            if (related.length) {
+                metaParts.push(`With ${related.join(', ')}`);
+            }
+            const metaHtml = metaParts.length ? `<div class="meta">${metaParts.join(' • ')}</div>` : '';
+
+            const tags = Array.isArray(event.tags) ? event.tags : [];
+            const tagHtml = tags.length
+                ? `<div class="event-tags">${tags.slice(0, 5).map(tag => `<span>${tag}</span>`).join('')}</div>`
+                : '';
+
+            li.innerHTML = `
+                <strong>${dayLabel}</strong> • ${typeLabel}
+                <div>${summary}</div>
+                ${metaHtml}
+                ${tagHtml}
+            `;
+            list.appendChild(li);
+        });
+
+        return list;
+    }
+
+    function renderLineageDetails(lineage) {
+        const panel = document.createElement('div');
+        panel.classList.add('lineage-panel');
+
+        const heading = document.createElement('h5');
+        heading.textContent = 'Lineage web';
+        panel.appendChild(heading);
+
+        const list = document.createElement('dl');
+        list.classList.add('lineage-grid');
+
+        Object.entries(lineage)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .forEach(([member, ties]) => {
+                const term = document.createElement('dt');
+                term.textContent = member;
+                list.appendChild(term);
+
+                const desc = document.createElement('dd');
+                if (ties && Object.keys(ties).length) {
+                    const fragments = Object.entries(ties).map(([role, names]) => {
+                        const label = role.replace(/_/g, ' ');
+                        const formatted = Array.isArray(names) ? names.join(', ') : String(names);
+                        return `<span><strong>${label}:</strong> ${formatted}</span>`;
+                    });
+                    desc.innerHTML = fragments.join(' • ');
+                } else {
+                    desc.textContent = 'No documented ties yet.';
+                }
+                list.appendChild(desc);
+            });
+
+        panel.appendChild(list);
+        return panel;
+    }
+
     function buildOverviewContent(character) {
         const wrapper = document.createElement('div');
         const needsSection = document.createElement('section');
@@ -1108,6 +1265,35 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function buildSocialContent(character) {
         const wrapper = document.createElement('div');
+
+        const familySection = document.createElement('section');
+        familySection.innerHTML = '<h4>Family</h4>';
+        const familyProfile = character.family_profile;
+        if (familyProfile && Array.isArray(familyProfile.members) && familyProfile.members.length) {
+            if (familyProfile.tagline) {
+                const tagline = document.createElement('p');
+                tagline.classList.add('mini-note');
+                tagline.textContent = familyProfile.tagline;
+                familySection.appendChild(tagline);
+            }
+            const membersPara = document.createElement('p');
+            membersPara.innerHTML = `<strong>Members:</strong> ${familyProfile.members.join(', ')}`;
+            familySection.appendChild(membersPara);
+            if (familyProfile.role_snapshot && Object.keys(familyProfile.role_snapshot).length) {
+                const rolesBlock = document.createElement('div');
+                rolesBlock.classList.add('mini-note');
+                const roleParts = Object.entries(familyProfile.role_snapshot).map(([role, names]) => `${role}: ${names.join(', ')}`);
+                rolesBlock.innerHTML = `<strong>Roles:</strong> ${roleParts.join(' • ')}`;
+                familySection.appendChild(rolesBlock);
+            }
+            if (familyProfile.lineage && Object.keys(familyProfile.lineage).length) {
+                familySection.appendChild(renderLineageDetails(familyProfile.lineage));
+            }
+            const sharedMoments = renderLifeEventList(familyProfile.latest_events || [], 4, 'No shared moments logged.');
+            familySection.appendChild(sharedMoments);
+        } else {
+            familySection.innerHTML += '<p>No registered family ties.</p>';
+        }
 
         const knownSection = document.createElement('section');
         knownSection.innerHTML = '<h4>Known Characters</h4>';
@@ -1147,7 +1333,7 @@ document.addEventListener('DOMContentLoaded', () => {
         dialogueSection.innerHTML = '<h4>Recent Conversations</h4>';
         dialogueSection.appendChild(formatDialogueHistory(character.dialogue_history));
 
-        wrapper.append(knownSection, relationshipsSection, opinionsSection, dialogueSection);
+        wrapper.append(familySection, knownSection, relationshipsSection, opinionsSection, dialogueSection);
         return wrapper;
     }
 
@@ -1184,7 +1370,15 @@ document.addEventListener('DOMContentLoaded', () => {
             historySection.innerHTML += '<p>No recent activity recorded.</p>';
         }
 
-        wrapper.append(goalSection, placementSection, historySection);
+        const highlightsSection = document.createElement('section');
+        highlightsSection.innerHTML = '<h4>Life Highlights</h4>';
+        highlightsSection.appendChild(renderLifeEventList(character.life_highlights || [], 6, 'No highlights logged.'));
+
+        const chronicleSection = document.createElement('section');
+        chronicleSection.innerHTML = '<h4>Life Chronicle</h4>';
+        chronicleSection.appendChild(renderLifeEventList(character.life_history || [], 12, 'No life events recorded.'));
+
+        wrapper.append(goalSection, placementSection, historySection, highlightsSection, chronicleSection);
         return wrapper;
     }
 
@@ -1677,6 +1871,7 @@ document.addEventListener('DOMContentLoaded', () => {
             updateEventFeed(gameState.event_log);
             updateWorldSummary(gameState);
             updateEconomyIntel(gameState);
+            updateFamilyIntel(gameState);
             renderCharacterList(gameState.characters);
             if (followedCharacterName) {
                 loadCharacterDetails(followedCharacterName, { worldPanel: false, characterPanel: true, showLoading: false });

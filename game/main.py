@@ -401,6 +401,8 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                             "inventory": getattr(char, 'inventory', {}),
                             "age": getattr(char, 'age_years', None),
                             "citizenship": getattr(char, 'citizenship_status', 'Resident'),
+                            "life_highlights": char.get_life_highlights(limit=3) if hasattr(char, 'get_life_highlights') else [],
+                            "family_profile": game_world.get_family_profile_for_character(char.name) if hasattr(game_world, 'get_family_profile_for_character') else None,
                         })
 
                 event_log_repr = game_world.event_log[-20:] if game_world else []
@@ -468,6 +470,7 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "cultural": game_world.get_cultural_snapshot() if hasattr(game_world, 'get_cultural_snapshot') else {},
                     "training": game_world.get_training_snapshot() if hasattr(game_world, 'get_training_snapshot') else {},
                     "workforce": game_world.get_workforce_snapshot() if hasattr(game_world, 'get_workforce_snapshot') else {},
+                    "families": game_world.get_family_snapshot() if hasattr(game_world, 'get_family_snapshot') else {},
                 }
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
@@ -578,7 +581,10 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "known_characters": getattr(character, 'known_characters', []),
                     "relationships": getattr(character, 'relationships', {}),
                     "opinions": getattr(character, 'opinions', {}), # Added opinions
-                    "dialogue_history": getattr(character, 'dialogue_history', [])[-10:] # Last 10 dialogue entries
+                    "dialogue_history": getattr(character, 'dialogue_history', [])[-10:], # Last 10 dialogue entries
+                    "life_history": character.export_life_history(limit=20) if hasattr(character, 'export_life_history') else [],
+                    "life_highlights": character.get_life_highlights(limit=6) if hasattr(character, 'get_life_highlights') else [],
+                    "family_profile": game_world.get_family_profile_for_character(character.name) if hasattr(game_world, 'get_family_profile_for_character') else None,
                 }
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')

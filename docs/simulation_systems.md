@@ -33,4 +33,11 @@ This document summarizes the systemic layers that drive the Living World settlem
 - Active sessions grant experience through `Character.participate_in_training()` while boosting esteem, logging notable level-ups, and archiving cohort outcomes for the HUD.
 - The command UI surfaces active cohorts, queue pressure, and flagged disciplines so managers can see where expertise is still lagging.
 
+## Family Registries & Life Histories
+- `World._rebuild_family_profiles()` clusters characters into households using their declared family ties, generating taglines that summarize each clan's makeup.
+- `Character.record_life_event()` captures notable beats such as arrivals, trials, and medical outcomes; `World.share_family_event()` echoes those moments to relatives and stores them inside the family ledger.
+- New helpers—`World.register_union()` and `World.record_birth()`—formalize marriages, log witnesses, assign parent/child links, and update lineage maps so each family profile exposes partners, children, and guardians at a glance.
+- Fatal medical resolutions feed into `_record_bereavement_events()` which now issues "witnessed tragedy" and "family loss" entries and records the moment inside the family chronicle.
+- The `/game_state` payload now publishes a `families` snapshot plus per-character `life_history`, `life_highlights`, and per-family `lineage` data so the HUD can surface webs of kinship alongside recent milestones.
+
 These systems feed directly into the `/game_state` payload for the HUD overlays, enabling the command interface to highlight phase shifts, weather hazards, resource pressure, and demographic changes in real time.

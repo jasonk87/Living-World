@@ -40,3 +40,8 @@ include:
 - **Civic services:** the legal system, healthcare triage, and housing reviews
   all report their status through the API so that the HUD can surface key
   pressures without digging into logs.
+- **Family chronicles:** a settlement-wide family registry now records arrivals,
+  marriages, births, and bereavement. Lineage charts surface who is partnered
+  to whom, which households are raising children, and how witnesses processed
+  shared tragedies so every citizen carries a readable, evolving biography in
+  the UI.

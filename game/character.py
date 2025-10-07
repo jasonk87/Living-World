@@ -1,6 +1,7 @@
 # game/character.py
 from collections import deque
-from typing import TYPE_CHECKING, Optional, Dict, List, Tuple, Any, Set, Deque, Union
+from copy import deepcopy
+from typing import TYPE_CHECKING, Optional, Dict, List, Tuple, Any, Set, Deque, Union, Iterable
 import random
 from .llm_integration import generate_dialogue # Kept as it's used
 # from .stockpile import Stockpile # Not directly used by Character methods
@@ -50,10 +51,13 @@ class Character:
         self.job = job
 
         self.relationships = {} # Initialize relationships first
+        self.family_roles: Dict[str, Set[str]] = {}
         if self.family_members: # Then set family scores
             for member_name in self.family_members:
                 if member_name != self.name:
                     self.relationships[member_name] = config.RELATIONSHIP_SCORE_FAMILY_BASE
+                    kin_set = self.family_roles.setdefault("kin", set())
+                    kin_set.add(member_name)
 
         # Initialize current_goal with a Goal object
         if current_goal_obj:
@@ -115,6 +119,8 @@ class Character:
         self.known_characters: List[str] = []
         self.opinions: Dict[str, Dict[str, int]] = {}
         self.dialogue_history: List[Dict[str, Any]] = []
+        self.life_history: List[Dict[str, Any]] = []
+        self._life_event_flags: Set[str] = set()
         self.known_events: List[str] = []
 
         self.age_years: int = age if age is not None else random.randint(18, 45)
@@ -674,6 +680,175 @@ class Character:
     def remove_subordinate(self, s: str): self.subordinates_names.remove(s) if s in self.subordinates_names else None
     def get_inventory_load(self) -> int: return sum(self.inventory.values())
     def add_memory(self, e: str): self.memory.append(e); self.memory=self.memory[-20:]
+
+    def record_life_event(
+        self,
+        world: Optional['World'],
+        event_type: str,
+        summary: str,
+        *,
+        related: Optional[Iterable[str]] = None,
+        tags: Optional[Iterable[str]] = None,
+        significance: int = 1,
+        propagate_to_family: bool = False,
+        details: Optional[Dict[str, Any]] = None,
+        dedupe_key: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Append a structured life event to the character's personal chronicle."""
+
+        related_list: List[str] = []
+        if related:
+            if isinstance(related, (list, tuple, set)):
+                related_list = [str(item) for item in related if item]
+            else:
+                related_list = [str(related)]
+
+        tags_list: List[str] = []
+        if tags:
+            if isinstance(tags, (list, tuple, set)):
+                tags_list = [str(tag) for tag in tags if tag]
+            else:
+                tags_list = [str(tags)]
+
+        day = None
+        if world and world.game_time:
+            day = world.game_time.current_day
+        elif self.arrival_day is not None:
+            day = self.arrival_day
+        else:
+            day = len(self.life_history)
+
+        significance = max(1, int(significance))
+
+        event: Dict[str, Any] = {
+            "day": day,
+            "type": event_type,
+            "summary": summary,
+            "related": related_list,
+            "tags": tags_list,
+            "significance": significance,
+            "source": self.name,
+        }
+        if details:
+            event["details"] = deepcopy(details)
+
+        if dedupe_key:
+            for existing in reversed(self.life_history):
+                if existing.get("dedupe_key") == dedupe_key:
+                    return deepcopy(existing)
+            event["dedupe_key"] = dedupe_key
+
+        self.life_history.append(event)
+        max_events = getattr(config, "LIFE_HISTORY_MAX_EVENTS", 120)
+        if len(self.life_history) > max_events:
+            self.life_history = self.life_history[-max_events:]
+
+        if propagate_to_family and world and hasattr(world, "share_family_event"):
+            world.share_family_event(self, event)
+
+        return deepcopy(event)
+
+    def _life_event_exists(self, candidate: Dict[str, Any]) -> bool:
+        signature = (
+            candidate.get("day"),
+            candidate.get("type"),
+            candidate.get("summary"),
+            candidate.get("source"),
+        )
+        for existing in self.life_history:
+            if existing.get("dedupe_key") and candidate.get("dedupe_key"):
+                if existing.get("dedupe_key") == candidate.get("dedupe_key"):
+                    return True
+            existing_signature = (
+                existing.get("day"),
+                existing.get("type"),
+                existing.get("summary"),
+                existing.get("source"),
+            )
+            if existing_signature == signature:
+                return True
+        return False
+
+    def register_family_role(self, relation_type: str, other_name: str) -> None:
+        if not relation_type or not other_name or other_name == self.name:
+            return
+
+        bucket = self.family_roles.setdefault(relation_type, set())
+        bucket.add(other_name)
+
+        if relation_type != "kin" and "kin" in self.family_roles:
+            kin_bucket = self.family_roles["kin"]
+            if other_name in kin_bucket:
+                kin_bucket.discard(other_name)
+                if not kin_bucket:
+                    self.family_roles.pop("kin")
+
+    def get_family_roles_snapshot(self) -> Dict[str, List[str]]:
+        snapshot: Dict[str, List[str]] = {}
+        for role, members in self.family_roles.items():
+            if members:
+                snapshot[role] = sorted(members)
+        return snapshot
+
+    def receive_family_event(
+        self,
+        world: Optional['World'],
+        source_name: str,
+        original_event: Dict[str, Any],
+    ) -> None:
+        """Record a family update echoed from another household member."""
+
+        if not original_event:
+            return
+
+        day = original_event.get("day")
+        if day is None and world and world.game_time:
+            day = world.game_time.current_day
+
+        base_summary = original_event.get("summary", "Family update.")
+        summary = f"{source_name}: {base_summary}" if source_name else base_summary
+
+        related = list(original_event.get("related", []) or [])
+        if source_name and source_name not in related:
+            related.append(source_name)
+
+        tags = list(original_event.get("tags", []) or [])
+        if "family_echo" not in tags:
+            tags.append("family_echo")
+
+        significance = max(1, int(original_event.get("significance", 1)))
+        echo_event = {
+            "day": day,
+            "type": f"family_{original_event.get('type', 'update')}",
+            "summary": summary,
+            "related": related,
+            "tags": tags,
+            "significance": max(1, significance // 2),
+            "source": source_name,
+            "is_family_echo": True,
+        }
+        if "details" in original_event:
+            echo_event["details"] = deepcopy(original_event["details"])
+
+        if self._life_event_exists(echo_event):
+            return
+
+        self.life_history.append(echo_event)
+        max_events = getattr(config, "LIFE_HISTORY_MAX_EVENTS", 120)
+        if len(self.life_history) > max_events:
+            self.life_history = self.life_history[-max_events:]
+
+    def get_life_highlights(self, limit: int = 5) -> List[Dict[str, Any]]:
+        threshold = getattr(config, "LIFE_HISTORY_HIGHLIGHT_THRESHOLD", 2)
+        highlights = [evt for evt in self.life_history if evt.get("significance", 1) >= threshold]
+        return [deepcopy(evt) for evt in highlights[-limit:]]
+
+    def export_life_history(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        if limit is None or limit >= len(self.life_history):
+            events = self.life_history
+        else:
+            events = self.life_history[-limit:]
+        return [deepcopy(evt) for evt in events]
 
     def receive_cultural_event_boost(self, event_data: Dict[str, Any], world: 'World') -> None:
         """Apply morale and need adjustments when the settlement hosts a cultural event."""
@@ -4560,6 +4735,7 @@ class Character:
         """Modifies the relationship score with the target character."""
         if self.name == target_char_name: return # Cannot have a relationship with oneself
 
+        previous_tier = self.get_relationship_tier(target_char_name)
         current_score = self.relationships.get(target_char_name, 0)
         new_score = current_score + value_change
 
@@ -4571,6 +4747,35 @@ class Character:
         if reason:
             self.add_memory(f"My relationship with {target_char_name} changed by {value_change} to {new_score}. Reason: {reason}")
             # print(f"DEBUG: {self.name}'s relationship with {target_char_name} changed by {value_change} to {new_score}. Reason: {reason}")
+
+        new_tier = self.get_relationship_tier(target_char_name)
+        if new_tier != previous_tier:
+            tier_direction = "deepened" if new_score >= current_score else "soured"
+            tier_summary = (
+                f"Bond with {target_char_name} {tier_direction} into {new_tier.lower()} territory."
+                if new_tier not in {config.RELATIONSHIP_TIER_FAMILY, config.RELATIONSHIP_TIER_STRANGER}
+                else f"Family ties with {target_char_name} shifted." if new_tier == config.RELATIONSHIP_TIER_FAMILY
+                else f"Grew closer to {target_char_name}."
+            )
+            highlight_tiers = {
+                "Soulmate": 3,
+                "Close Friend": 2,
+                "Friend": 2,
+                "Rival": 2,
+                "Archenemy": 3,
+            }
+            significance = highlight_tiers.get(new_tier, 1)
+            tag_slug = new_tier.lower().replace(" ", "_")
+            self.record_life_event(
+                world,
+                "relationship_tier_change",
+                tier_summary,
+                related=[target_char_name],
+                tags=["relationship", tag_slug],
+                significance=significance,
+                propagate_to_family=False,
+                details={"previous_tier": previous_tier, "new_tier": new_tier, "score": new_score},
+            )
 
         # Optionally, have the target character reciprocate or have their own view change (more complex social model)
         # For now, relationships are one-way perspectives.

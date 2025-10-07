@@ -572,3 +572,188 @@ def test_manufacturing_crews_surface_shortages():
     assert "notes" in carpentry_entry and any("Awaiting inputs" in note for note in carpentry_entry["notes"])
     assert report["alerts"] and any("Lumber" in alert for alert in report["alerts"])
     assert "inputs_consumed" not in carpentry_entry or not carpentry_entry["inputs_consumed"]
+
+def test_family_arrival_event_and_profile():
+    world, _ = _make_world()
+    alice = Character(
+        name="Alice",
+        personality="Brave",
+        traits=[],
+        skills={},
+        family_members=["Bryn"],
+    )
+    bryn = Character(
+        name="Bryn",
+        personality="Calm",
+        traits=[],
+        skills={},
+        family_members=["Alice"],
+    )
+
+    world.add_character(alice)
+    world.add_character(bryn)
+
+    profile = world.get_family_profile_for_character("Alice")
+    assert profile
+    assert sorted(profile["members"]) == ["Alice", "Bryn"]
+
+    arrival_event = next((evt for evt in alice.life_history if evt.get("type") == "arrival"), None)
+    assert arrival_event is not None
+    assert arrival_event.get("significance", 0) >= 3
+
+    echoed = next((evt for evt in bryn.life_history if evt.get("is_family_echo")), None)
+    assert echoed is not None
+    assert "Alice" in echoed.get("summary", "")
+
+
+def test_record_birth_creates_family_links_and_events():
+    world, _ = _make_world()
+
+    parent = Character(
+        name="Elena",
+        personality="Caring",
+        traits=["Compassionate"],
+        skills={},
+    )
+    partner = Character(
+        name="Garrin",
+        personality="Steadfast",
+        traits=["Diligent"],
+        skills={},
+    )
+
+    world.add_character(parent)
+    world.add_character(partner)
+
+    assert world.register_union("Elena", "Garrin", ceremony_name="Harvest vows") is True
+
+    child = world.record_birth("Elena", other_parent="Garrin")
+    assert child is not None
+
+    assert child.name in parent.family_members
+    assert child.name in partner.family_members
+    assert parent.name in child.family_members
+
+    parent_event = next((evt for evt in parent.life_history if evt.get("type") == "welcomed_child"), None)
+    assert parent_event is not None
+    assert child.name in parent_event.get("summary", "")
+
+    child_event = next((evt for evt in child.life_history if evt.get("type") == "birth"), None)
+    assert child_event is not None
+    assert "Elena" in child_event.get("summary", "")
+
+    profile = world.get_family_profile_for_character("Elena")
+    assert child.name in profile["lineage"].get("Elena", {}).get("children", [])
+    child_profile = world.get_family_profile_for_character(child.name)
+    assert "Elena" in child_profile["lineage"].get(child.name, {}).get("parents", [])
+
+
+def test_medical_events_populate_life_history():
+    world, _ = _make_world()
+    patient = Character(
+        name="Mae",
+        personality="Patient",
+        traits=[],
+        skills={},
+        family_members=["Nox"],
+    )
+    kin = Character(
+        name="Nox",
+        personality="Guarded",
+        traits=[],
+        skills={},
+        family_members=["Mae"],
+    )
+
+    world.add_character(patient)
+    world.add_character(kin)
+
+    case, created = world.register_medical_case("Mae", "injury", 4.5, reporter="Nox", cause="Logging accident")
+    assert created is True
+    case_id = case["case_id"]
+
+    open_event = next(
+        evt
+        for evt in patient.life_history
+        if evt.get("type") == "medical_case_opened" and evt.get("details", {}).get("case_id") == case_id
+    )
+    assert "injury" in open_event.get("summary", "")
+
+    kin_echo = next((evt for evt in kin.life_history if evt.get("is_family_echo") and "injury" in evt.get("summary", "")), None)
+    assert kin_echo is not None
+
+    world.resolve_medical_case(case_id, "recovered", notes="Nox stitched the wound.")
+
+    outcome_event = next(
+        evt
+        for evt in patient.life_history
+        if evt.get("type") == "medical_case_resolved" and evt.get("details", {}).get("case_id") == case_id
+    )
+    assert outcome_event.get("details", {}).get("outcome") == "recovered"
+
+
+def test_register_union_logs_history_and_lineage():
+    world, _ = _make_world()
+
+    rowan = Character(name="Rowan", personality="Curious", traits=[], skills={})
+    sera = Character(name="Sera", personality="Cheerful", traits=[], skills={})
+    witness = Character(name="Bryn", personality="Calm", traits=[], skills={})
+
+    world.add_character(rowan)
+    world.add_character(sera)
+    world.add_character(witness)
+
+    assert world.register_union("Rowan", "Sera", ceremony_name="Moonlit vows", witnesses=["Bryn"]) is True
+
+    marriage_event = next((evt for evt in rowan.life_history if evt.get("type") == "marriage"), None)
+    assert marriage_event is not None
+    assert "Sera" in marriage_event.get("summary", "")
+
+    witness_event = next((evt for evt in witness.life_history if evt.get("type") == "witnessed_union"), None)
+    assert witness_event is not None
+    assert "Rowan" in witness_event.get("summary", "")
+
+    profile = world.get_family_profile_for_character("Rowan")
+    assert profile["lineage"].get("Rowan", {}).get("partners") == ["Sera"]
+
+
+def test_relationship_tier_change_creates_life_event():
+    world, _ = _make_world()
+    iris = Character(name="Iris", personality="Bold", traits=[], skills={})
+    oren = Character(name="Oren", personality="Calm", traits=[], skills={})
+
+    world.add_character(iris)
+    world.add_character(oren)
+
+    iris.modify_relationship("Oren", 50, world, reason="Worked side by side")
+
+    tier_event = next((evt for evt in iris.life_history if evt.get("type") == "relationship_tier_change"), None)
+    assert tier_event is not None
+    assert "Oren" in tier_event.get("summary", "")
+    assert tier_event.get("details", {}).get("new_tier") in {"Friend", "Friendly Acquaintance", "Close Friend", "Soulmate"}
+
+
+def test_fatal_medical_case_creates_bereavement_events():
+    world, _ = _make_world()
+
+    patient = Character(name="Calla", personality="Stoic", traits=[], skills={}, family_members=["Ivor"])
+    kin = Character(name="Ivor", personality="Loyal", traits=[], skills={}, family_members=["Calla"])
+    medic = Character(name="Mae", personality="Patient", traits=[], skills={})
+
+    world.add_character(patient)
+    world.add_character(kin)
+    world.add_character(medic)
+
+    case, created = world.register_medical_case("Calla", "illness", 5.0, reporter="Ivor")
+    assert created is True
+
+    world.record_medical_treatment(case["case_id"], "Mae", severity_after=5.0, success=False)
+    world.resolve_medical_case(case["case_id"], "deceased", notes="Condition worsened overnight.")
+
+    kin_event = next((evt for evt in kin.life_history if evt.get("type") == "family_loss"), None)
+    assert kin_event is not None
+    assert "Calla" in kin_event.get("summary", "")
+
+    medic_event = next((evt for evt in medic.life_history if evt.get("type") == "witnessed_tragedy"), None)
+    assert medic_event is not None
+    assert "Calla" in medic_event.get("summary", "")

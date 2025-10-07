@@ -614,6 +614,11 @@ RELATIONSHIP_TIERS = [
 RELATIONSHIP_TIER_FAMILY = "Family"
 RELATIONSHIP_TIER_STRANGER = "Stranger" # For characters not in relationships dict yet
 
+# Personal histories & family chronicles
+LIFE_HISTORY_MAX_EVENTS = 120
+LIFE_HISTORY_HIGHLIGHT_THRESHOLD = 2
+FAMILY_HISTORY_MAX_EVENTS = 80
+
 # Social Interaction Modifiers based on Relationship Tier (example for 'Ask for Help' success chance)
 # Values are additive modifiers to a base success chance.
 RELATIONSHIP_ASK_FOR_HELP_MODIFIERS = {
