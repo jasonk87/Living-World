@@ -2272,10 +2272,20 @@ document.addEventListener('DOMContentLoaded', () => {
         const tileSize = getTileSize();
         const width = cols * tileSize;
         const height = rows * tileSize;
+
         mapViewport.style.width = `${width}px`;
         mapViewport.style.height = `${height}px`;
         mapCharactersLayer.style.width = `${width}px`;
         mapCharactersLayer.style.height = `${height}px`;
+
+        if (mapGridDiv) {
+            mapGridDiv.style.width = `${width}px`;
+            mapGridDiv.style.height = `${height}px`;
+            mapGridDiv.style.setProperty('--map-cols', cols);
+            mapGridDiv.style.setProperty('--map-rows', rows);
+            mapGridDiv.style.gridTemplateColumns = `repeat(${cols}, var(--tile-size))`;
+            mapGridDiv.style.gridTemplateRows = `repeat(${rows}, var(--tile-size))`;
+        }
 
         const cells = mapGridDiv.children;
         for (let r = 0; r < rows; r++) {

@@ -271,8 +271,8 @@ button:focus-visible {
 
 .map-grid {
     display: grid;
-    grid-auto-rows: var(--tile-size);
-    grid-auto-columns: var(--tile-size);
+    grid-template-columns: repeat(var(--map-cols, 1), minmax(0, var(--tile-size)));
+    grid-template-rows: repeat(var(--map-rows, 1), minmax(0, var(--tile-size)));
     position: relative;
     pointer-events: auto;
     background: rgba(255, 255, 255, 0.05);
