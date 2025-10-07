@@ -890,6 +890,53 @@ button:focus-visible {
     padding-left: 0;
 }
 
+.status-tag-row {
+    margin: 0.3rem 0 0.1rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+}
+
+.status-tag {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.15rem 0.45rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    background: rgba(110, 255, 196, 0.16);
+    border: 1px solid rgba(110, 255, 196, 0.4);
+    color: var(--accent-color);
+    white-space: nowrap;
+}
+
+.status-tag.muted {
+    background: rgba(112, 130, 140, 0.12);
+    border-color: rgba(112, 130, 140, 0.24);
+    color: var(--text-muted);
+}
+
+.status-tag.warn {
+    background: rgba(255, 191, 102, 0.16);
+    border-color: rgba(255, 191, 102, 0.4);
+    color: var(--accent-warning);
+}
+
+.status-tag.alert {
+    background: rgba(255, 118, 140, 0.18);
+    border-color: rgba(255, 118, 140, 0.45);
+    color: #ffdde4;
+}
+
+.status-tag.good {
+    background: rgba(110, 255, 196, 0.25);
+    border-color: rgba(110, 255, 196, 0.55);
+    color: #052920;
+}
+
 .lineage-panel {
     margin: 0.5rem 0 0.75rem;
     padding: 0.75rem 0.85rem;

@@ -704,10 +704,14 @@ PROFESSION_TRACK_DEFINITIONS = {
     "Blacksmith": {"skill": "Blacksmithing", "daily_xp": 1.5, "wealth_expectation": "prosperous", "focus": "craft"},
     "Bookkeeper": {"skill": "Administration", "daily_xp": 1.2, "wealth_expectation": "comfortable", "focus": "service"},
     "Manager": {"skill": "Leadership", "daily_xp": 1.25, "wealth_expectation": "prosperous", "focus": "leadership"},
+    "Chancellor": {"skill": "Leadership", "daily_xp": 1.3, "wealth_expectation": "prosperous", "focus": "leadership"},
     "Mayor": {"skill": "Leadership", "daily_xp": 1.35, "wealth_expectation": "prosperous", "focus": "leadership"},
     "Reeve": {"skill": "Leadership", "daily_xp": 1.3, "wealth_expectation": "prosperous", "focus": "leadership"},
+    "Steward": {"skill": "Administration", "daily_xp": 1.25, "wealth_expectation": "prosperous", "focus": "service"},
     "Bailiff": {"skill": "Security", "daily_xp": 1.2, "wealth_expectation": "comfortable", "focus": "security"},
     "Sheriff": {"skill": "Security", "daily_xp": 1.4, "wealth_expectation": "prosperous", "focus": "security"},
+    "Marshal": {"skill": "Security", "daily_xp": 1.4, "wealth_expectation": "prosperous", "focus": "security"},
+    "Spymaster": {"skill": "Security", "daily_xp": 1.28, "wealth_expectation": "prosperous", "focus": "security"},
     "Deputy": {"skill": "Security", "daily_xp": 1.25, "wealth_expectation": "comfortable", "focus": "security"},
     "Scout": {"skill": "Scouting", "daily_xp": 1.3, "wealth_expectation": "modest", "focus": "agrarian"},
     "Militia Soldier": {"skill": "Security", "daily_xp": 1.2, "wealth_expectation": "modest", "focus": "security"},
@@ -1094,6 +1098,64 @@ CAMPAIGN_SPEECH_COOLDOWN_DAYS = 2
 # Other game settings (can be added later)
 STALE_THRESHOLD_DAYS = 2 # Days after which ledger data is considered stale for manager decisions
 MANAGEMENT_REVIEW_INTERVAL_DAYS = 5 # How often managers review subordinates
+
+# Leadership oversight tuning
+LEADERSHIP_ROLE_TITLES = {
+    "Mayor",
+    "Chancellor",
+    "Manager",
+    "Militia Commander",
+    "Marshal",
+    "Sheriff",
+    "Chief Medical Officer",
+    "Reeve",
+    "Steward",
+    "Spymaster",
+    "Noble Lord",
+    "Baron",
+    "Baroness",
+    "Duke",
+    "Duchess",
+}
+LEADERSHIP_OVERSIGHT_BASELINE = 0.35
+LEADERSHIP_OVERSIGHT_SKILL_WEIGHT = 0.06
+LEADERSHIP_OVERSIGHT_ACTION_WEIGHT = 0.2
+LEADERSHIP_OVERSIGHT_RELATIONSHIP_WEIGHT = 0.2
+LEADERSHIP_OVERSIGHT_PERSONALITY_BONUS = {
+    "Charismatic": 0.05,
+    "Resolute": 0.04,
+    "Demanding": 0.03,
+    "Aloof": -0.06,
+    "Lenient": -0.04,
+}
+LEADERSHIP_OVERSIGHT_TRAIT_BONUS = {
+    "Diligent": 0.08,
+    "Organized": 0.05,
+    "Strict": 0.03,
+    "Careless": -0.08,
+    "Lazy": -0.12,
+}
+LEADERSHIP_NEGLECT_THRESHOLD = 0.45
+LEADERSHIP_CORRUPTION_THRESHOLD = 0.25
+LEADERSHIP_HIGH_WATERMARK = 0.78
+LEADERSHIP_SLACKING_BASE_CHANCE = 0.12
+LEADERSHIP_ILLEGAL_BASE_CHANCE = 0.05
+LEADERSHIP_ILLEGAL_PERSONALITY_MODIFIERS = {
+    "Rebellious": 0.3,
+    "Impulsive": 0.18,
+    "Stoic": -0.12,
+    "Aloof": 0.12,
+    "Honorable": -0.3,
+}
+LEADERSHIP_ILLEGAL_TRAIT_MODIFIERS = {
+    "Greedy": 0.4,
+    "Devious": 0.35,
+    "Honest": -0.45,
+    "Diligent": -0.2,
+    "Careless": 0.15,
+}
+LEADERSHIP_ILLEGAL_MAX_SKIM = 6
+MOOD_CHANGE_MISCONDUCT_THRILL = 3
 FIRING_WARNING_THRESHOLD = 3 # Number of warnings before firing is likely
 
 # Skill System

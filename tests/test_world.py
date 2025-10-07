@@ -263,6 +263,90 @@ def test_building_tile_layout_used_for_map_tiles():
     assert world.get_tile(2, 3) == "Bed"
 
 
+def test_leadership_cycle_records_commendable_oversight():
+    world, game_time = _make_world()
+    game_time.current_day = 3
+
+    mayor = Character(
+        name="Alina",
+        personality="Charismatic",
+        traits=["Diligent"],
+        skills={"Leadership": 3},
+        job="Mayor",
+        needs=_standard_needs(),
+    )
+    steward = Character(
+        name="Bren",
+        personality="Calm",
+        traits=[],
+        skills={},
+        job="Steward",
+        needs=_standard_needs(),
+        supervisor_name=mayor.name,
+    )
+
+    world.add_character(mayor)
+    world.add_character(steward)
+    mayor.subordinates_names.append(steward.name)
+    mayor.relationships[steward.name] = 20
+
+    mayor._record_management_activity(world, "rounds", 1.2)
+    mayor._record_management_activity(world, "briefing", 0.8)
+
+    world._process_leadership_management_cycle()
+
+    assert len(world.leadership_oversight_report) >= 1
+    mayor_entry = next((entry for entry in world.leadership_oversight_report if entry["leader"] == "Alina"), None)
+    assert mayor_entry is not None
+    assert mayor_entry["role"] == "Mayor"
+    assert mayor_entry["actions"] == pytest.approx(2.0)
+    assert "commendable" in mayor_entry["flags"]
+    assert mayor.leadership_oversight_score == pytest.approx(mayor_entry["score"])
+    assert mayor_entry.get("notes") == ["rounds", "briefing"]
+
+
+@patch("random.random", return_value=0.0)
+def test_leadership_cycle_flags_neglect_and_records_incident(mock_random):  # noqa: ARG001
+    world, game_time = _make_world()
+    game_time.current_day = 6
+
+    steward = Character(
+        name="Garrick",
+        personality="Lenient",
+        traits=["Lazy", "Careless"],
+        skills={},
+        job="Steward",
+        needs=_standard_needs(),
+    )
+    worker = Character(
+        name="Hale",
+        personality="Rebellious",
+        traits=["Greedy"],
+        skills={},
+        job="Laborer",
+        needs=_standard_needs(),
+        supervisor_name=steward.name,
+        money=0,
+    )
+
+    world.add_character(steward)
+    world.add_character(worker)
+    steward.subordinates_names.append(worker.name)
+    steward.relationships[worker.name] = -80
+
+    world._process_leadership_management_cycle()
+
+    assert len(world.leadership_oversight_report) == 1
+    entry = world.leadership_oversight_report[0]
+    assert entry["leader"] == "Garrick"
+    assert "neglect" in entry["flags"]
+    assert "incident" in entry["flags"]
+    assert entry.get("incidents")
+    assert any(crime.get("suspect") == worker.name for crime in world.pending_crimes)
+    assert worker.supervisor_oversight == pytest.approx(entry["score"])
+    assert worker.money > 0
+
+
 @patch("random.choice", side_effect=lambda options: options[0])
 def test_household_evening_generates_story_and_bonuses(mock_choice):  # noqa: ARG001
     world, game_time = _make_world()

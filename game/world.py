@@ -170,6 +170,7 @@ class World:
         self.latest_workforce_report: Dict[str, Any] = {}
         self._last_workforce_update_day: Optional[int] = None
         self.work_logistics_history: List[Dict[str, Any]] = []
+        self.leadership_oversight_report: List[Dict[str, Any]] = []
         self.law_petitions: List[Dict[str, Any]] = []
         self.active_laws: Dict[str, Dict[str, Any]] = {}
         self.law_history: List[Dict[str, Any]] = []
@@ -3523,10 +3524,30 @@ class World:
             for assignment in self.pending_interviews
             if assignment.get("status") in {"queued", "assigned"}
         ]
+        oversight_snapshot: List[Dict[str, Any]] = []
+        for entry in self.leadership_oversight_report:
+            record = {
+                "leader": entry.get("leader"),
+                "role": entry.get("role"),
+                "score": entry.get("score"),
+                "actions": entry.get("actions"),
+                "skill": entry.get("skill"),
+                "relationships": entry.get("relationships"),
+                "subordinates": entry.get("subordinates"),
+                "flags": list(entry.get("flags", [])),
+            }
+            if entry.get("notes"):
+                record["notes"] = list(entry.get("notes", []))
+            if entry.get("neglected"):
+                record["neglected"] = list(entry.get("neglected", []))
+            if entry.get("incidents"):
+                record["incidents"] = list(entry.get("incidents", []))
+            oversight_snapshot.append(record)
         return {
             "laws": laws_snapshot,
             "petitions": petitions_snapshot,
             "interviews": interviews_snapshot,
+            "oversight": oversight_snapshot,
         }
 
     def get_crime_by_id(self, crime_id: str) -> Optional[Dict[str, Any]]:
@@ -7855,6 +7876,55 @@ class World:
                 )
                 promise["status"] = "enacted"
                 promise["fulfilled_day"] = self.game_time.current_day
+
+        self._process_leadership_management_cycle()
+
+    def _process_leadership_management_cycle(self) -> None:
+        if not self.game_time:
+            return
+
+        oversight_entries: List[Dict[str, Any]] = []
+        neglect_threshold = getattr(config, "LEADERSHIP_NEGLECT_THRESHOLD", 0.45)
+
+        for character in self.characters:
+            if not hasattr(character, "evaluate_leadership_oversight_daily"):
+                continue
+            if not character.holds_leadership_role():
+                continue
+
+            summary = character.evaluate_leadership_oversight_daily(self)
+            if not summary:
+                continue
+
+            oversight_score = float(summary.get("score", 0.0))
+            flags = summary.setdefault("flags", [])
+            neglected: List[str] = []
+            incidents: List[str] = []
+
+            for subordinate_name in getattr(character, "subordinates_names", []):
+                subordinate = self.get_character_by_name(subordinate_name)
+                if not subordinate:
+                    continue
+                subordinate.receive_oversight_update(character, oversight_score, self, summary)
+                if oversight_score < neglect_threshold:
+                    neglected.append(subordinate.name)
+                incident = subordinate.consider_misconduct_due_to_neglect(self, character, oversight_score)
+                if incident:
+                    incidents.append(incident.get("id"))
+
+            if neglected:
+                summary["neglected"] = neglected
+                if "neglect" not in flags:
+                    flags.append("neglect")
+            if incidents:
+                summary["incidents"] = incidents
+                if "incident" not in flags:
+                    flags.append("incident")
+
+            oversight_entries.append(summary)
+
+        oversight_entries.sort(key=lambda entry: entry.get("score", 0.0), reverse=True)
+        self.leadership_oversight_report = oversight_entries
 
     def manage_economy(self):
         if not self.game_time:

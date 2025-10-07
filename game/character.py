@@ -111,6 +111,17 @@ class Character:
         self.managed_item_targets: Dict[str, int] = {}; self.order_cooldown: Dict[str, int] = {}
         self.active_work_order_id: Optional[str] = None; self.crafting_progress: int = 0
         self.materials_gathered_for_wo: bool = False; self.items_crafted_for_wo: bool = False
+        self.leadership_oversight_score: float = 0.0
+        self._last_oversight_evaluation_day: Optional[int] = None
+        self._last_oversight_summary: Optional[Dict[str, Any]] = None
+        self._last_oversight_memory_day: Optional[int] = None
+        self._last_management_day: Optional[int] = None
+        self._management_actions_today: float = 0.0
+        self._management_action_notes: List[str] = []
+        self.supervisor_oversight: float = 0.0
+        self.last_supervisor_oversight_day: Optional[int] = None
+        self._neglect_slack_pressure: float = 0.0
+        self._neglect_illegal_pressure: float = 0.0
 
         self.rank: str = rank
         self.liege: Optional[str] = liege
@@ -2389,6 +2400,90 @@ class Character:
 
         return updates
 
+    def evaluate_leadership_oversight_daily(self, world: 'World') -> Optional[Dict[str, Any]]:
+        if not world or not world.game_time:
+            return None
+        if not self.holds_leadership_role():
+            self.leadership_oversight_score = 0.0
+            self._last_oversight_summary = None
+            return None
+
+        today = world.game_time.current_day
+        if self._last_management_day != today:
+            self._management_actions_today = 0.0
+            self._management_action_notes = []
+            self._last_management_day = today
+
+        baseline = getattr(config, "LEADERSHIP_OVERSIGHT_BASELINE", 0.35)
+        oversight_score = baseline
+
+        leadership_skill = self.skills.get("Leadership", {}).get("level", 0)
+        oversight_score += leadership_skill * getattr(config, "LEADERSHIP_OVERSIGHT_SKILL_WEIGHT", 0.06)
+
+        oversight_score += min(
+            1.0,
+            self._management_actions_today * getattr(config, "LEADERSHIP_OVERSIGHT_ACTION_WEIGHT", 0.2),
+        )
+
+        if self.subordinates_names:
+            relationship_scores = [self.get_relationship_score(name) for name in self.subordinates_names]
+            average_relationship = sum(relationship_scores) / max(1, len(relationship_scores))
+            normalized_relationship = (average_relationship + 100) / 200
+        else:
+            normalized_relationship = 0.5
+
+        oversight_score += normalized_relationship * getattr(
+            config, "LEADERSHIP_OVERSIGHT_RELATIONSHIP_WEIGHT", 0.2
+        )
+
+        oversight_score += getattr(config, "LEADERSHIP_OVERSIGHT_PERSONALITY_BONUS", {}).get(self.personality, 0.0)
+        for trait in self.traits:
+            oversight_score += getattr(config, "LEADERSHIP_OVERSIGHT_TRAIT_BONUS", {}).get(trait, 0.0)
+
+        oversight_score = max(0.0, min(1.0, oversight_score))
+        self.leadership_oversight_score = oversight_score
+
+        summary: Dict[str, Any] = {
+            "leader": self.name,
+            "role": self.job or self.rank or "Leader",
+            "score": oversight_score,
+            "actions": round(self._management_actions_today, 2),
+            "skill": leadership_skill,
+            "relationships": round(normalized_relationship, 2),
+            "subordinates": len(self.subordinates_names),
+            "flags": [],
+        }
+        if self._management_action_notes:
+            summary["notes"] = list(self._management_action_notes[-4:])
+
+        neglect_threshold = getattr(config, "LEADERSHIP_NEGLECT_THRESHOLD", 0.45)
+        commendable_threshold = getattr(config, "LEADERSHIP_HIGH_WATERMARK", 0.78)
+
+        memory_logged = False
+        if self.subordinates_names and self._management_actions_today <= 0:
+            summary["flags"].append("no_actions")
+            if self._last_oversight_memory_day != today:
+                self.add_memory("Realized I haven't checked on my crew today—I need to make rounds soon.")
+                memory_logged = True
+
+        if oversight_score >= commendable_threshold:
+            summary["flags"].append("commendable")
+            if not memory_logged and self._last_oversight_memory_day != today:
+                self.add_memory("Feeling confident about how closely I'm guiding everyone today.")
+                memory_logged = True
+        elif oversight_score < neglect_threshold:
+            summary["flags"].append("neglect")
+            if not memory_logged and self._last_oversight_memory_day != today:
+                self.add_memory("Too many distractions—I barely checked on my team today.")
+                memory_logged = True
+
+        if memory_logged:
+            self._last_oversight_memory_day = today
+
+        self._last_oversight_evaluation_day = today
+        self._last_oversight_summary = summary.copy()
+        return summary.copy()
+
     def handle_business_closure(self, business_id: str, world: Optional['World'], reason: str) -> None:
         if business_id in self.business_roles:
             self.leave_business_role(business_id, reason)
@@ -2833,16 +2928,20 @@ class Character:
         if self.job == "Fletcher": return "Perform Fletcher Duties"
         if self.job == "Master Craftsman": return "Assess Production Needs"
         if self.job == "Manager": return "Manage Subordinates"
+        if self.job == "Chancellor": return "Oversee Settlement"
         if self.job == "Bookkeeper": return "Maintain Ledger"
         if self.job == "Expedition Leader": return "Oversee Expedition"
         if self.job == "Mayor": return "Oversee Settlement"
         if self.job == "Chief Medical Officer": return "Oversee Medical Operations"
         if self.job == "Medic": return "Provide Medical Care"
         if self.job == "Sheriff": return "Maintain Peace in Settlement"
+        if self.job == "Marshal": return "Maintain Defenses"
+        if self.job == "Spymaster": return "Maintain Peace in Settlement"
         if self.job == "Deputy": return "Patrol Area"
         if self.job == "Scout": return "Patrol Area"
         if self.job == "Militia Soldier": return "Patrol Area"
         if self.job == "Reeve": return "Manage Estate"
+        if self.job == "Steward": return "Manage Estate"
         if self.job == "Bailiff": return "Assist Reeve"
         if self.rank in ["Noble Lord", "Baron"] and not self.subordinates_names:
             return "Oversee Domain"
@@ -2854,6 +2953,65 @@ class Character:
         job_goal_str = self.job_default_goal_type_str()
         goal = create_goal_from_job(job_goal_str, self.name)
         return goal if goal else Goal(GoalType.IDLE, assignee_id=self.name, originator_id="SystemDefault")
+
+    def holds_leadership_role(self) -> bool:
+        if self.subordinates_names:
+            return True
+        leadership_titles = set(getattr(config, "LEADERSHIP_ROLE_TITLES", []))
+        if self.job and self.job in leadership_titles:
+            return True
+        if self.rank and self.rank in leadership_titles:
+            return True
+        noble_titles = set(getattr(config, "NOBLE_RANKS_OR_JOBS", []) or [])
+        if self.rank and self.rank in noble_titles:
+            return True
+        return False
+
+    def _record_management_activity(self, world: Optional['World'], label: Optional[str], weight: float = 1.0) -> None:
+        if not self.holds_leadership_role() or not world or not getattr(world, "game_time", None):
+            return
+        day = world.game_time.current_day
+        if self._last_management_day != day:
+            self._management_actions_today = 0.0
+            self._management_action_notes = []
+            self._last_management_day = day
+        self._management_actions_today += max(0.0, weight)
+        if label:
+            if len(self._management_action_notes) >= 6:
+                self._management_action_notes.pop(0)
+            self._management_action_notes.append(label)
+
+    def _compute_supervision_slack_probability(self, base_chance: float, world: Optional['World']) -> Tuple[float, bool]:
+        chance = max(0.0, base_chance)
+        oversight_bonus_applied = False
+        if not self.supervisor_name:
+            return min(1.0, chance), False
+
+        threshold = getattr(config, "LEADERSHIP_NEGLECT_THRESHOLD", 0.45)
+        oversight = self.supervisor_oversight
+        if world and world.game_time:
+            if (
+                self.last_supervisor_oversight_day is None
+                or self.last_supervisor_oversight_day != world.game_time.current_day
+            ):
+                oversight *= 0.8
+
+        slack_pressure = self._neglect_slack_pressure
+        if threshold > 0:
+            gap_ratio = max(0.0, threshold - oversight) / threshold
+            slack_pressure = max(slack_pressure, gap_ratio)
+
+        if slack_pressure > 0:
+            bonus = slack_pressure * getattr(config, "LEADERSHIP_SLACKING_BASE_CHANCE", 0.12)
+            if "Lazy" in self.traits:
+                bonus *= 1.15
+            if "Diligent" in self.traits or "Focused" in self.traits:
+                bonus *= 0.6
+            chance += bonus
+            oversight_bonus_applied = bonus > 1e-6
+
+        chance = min(1.0, max(0.0, chance))
+        return chance, oversight_bonus_applied
 
     def _execute_fetch_tool(self, world: 'World') -> bool: # True if still fetching, False if done/failed
         if not self.tool_to_fetch_type:
@@ -2957,12 +3115,21 @@ class Character:
             current_progress_gain *= severity_modifier
             if severity_modifier < 1.0: self.add_memory(f"Working with difficulty due to injury on {task_name} (I_Sev: {self.injury_severity}, Mod: {severity_modifier:.2f}).")
 
-        # Trait Effects on Progress
-        # Lazy trait can override everything if triggered
-        if "Lazy" in self.traits and not "Focused" in self.traits: # Focused can counteract Lazy's slacking
-            if random.random() < 0.25: # 25% chance to be lazy
-                current_progress_gain = 0
-                is_lazy_this_tick = True
+        # Trait and supervision effects on progress
+        base_lazy_chance = 0.0
+        if "Lazy" in self.traits and "Focused" not in self.traits:
+            base_lazy_chance = 0.25
+        slack_chance, oversight_slack = self._compute_supervision_slack_probability(base_lazy_chance, world)
+        if slack_chance > 0 and random.random() < slack_chance:
+            current_progress_gain = 0
+            is_lazy_this_tick = True
+            if oversight_slack and base_lazy_chance <= 0:
+                watcher = self.supervisor_name or "leadership"
+                self.add_memory(f"With {watcher} absent I drifted off during '{task_name}'.")
+            elif oversight_slack and base_lazy_chance > 0:
+                watcher = self.supervisor_name or "no one"
+                self.add_memory(f"Felt lazy and noticed {watcher} wasn't watching, so I coasted on '{task_name}'.")
+            else:
                 self.add_memory(f"Felt lazy and decided to slack off for a bit while working on '{task_name}'.")
 
         if current_progress_gain > 0 and not is_lazy_this_tick: # Positive traits only apply if not slacking and some progress is possible
@@ -3084,10 +3251,20 @@ class Character:
 
             is_slacking_craft = False
 
-            if "Lazy" in self.traits and not "Focused" in self.traits:
-                if random.random() < 0.25:
-                    current_crafting_progress_gain = 0
-                    is_slacking_craft = True
+            base_lazy_chance = 0.0
+            if "Lazy" in self.traits and "Focused" not in self.traits:
+                base_lazy_chance = 0.25
+            slack_chance, oversight_slack = self._compute_supervision_slack_probability(base_lazy_chance, world)
+            if slack_chance > 0 and random.random() < slack_chance:
+                current_crafting_progress_gain = 0
+                is_slacking_craft = True
+                if oversight_slack and base_lazy_chance <= 0:
+                    watcher = self.supervisor_name or "leadership"
+                    self.add_memory(f"Took advantage of lax oversight to slack on WO {order.order_id}.")
+                elif oversight_slack and base_lazy_chance > 0:
+                    watcher = self.supervisor_name or "no one"
+                    self.add_memory(f"Felt lazy and noticed {watcher} absent, so I coasted on WO {order.order_id}.")
+                else:
                     self.add_memory(f"Felt lazy and slacked off while crafting {item_name} for WO {order.order_id}.")
 
             if current_crafting_progress_gain > 0 and not is_slacking_craft:
@@ -3359,11 +3536,21 @@ class Character:
         if stale_concerns and not can_approve: print(f"{self.name} (Manager) notes stale data for {order_to_process.order_id}, and resources confirmed insufficient.")
         elif stale_concerns: print(f"{self.name} (Manager) notes stale data for {order_to_process.order_id}, proceeding with caution.")
         if can_approve:
-            order_to_process.status = "Approved"; order_to_process.approved_by = self.name; order_to_process.approval_day = world.game_time.current_day; self.add_memory(f"Approved WO {order_to_process.order_id}"); print(f"{self.name} (Manager) APPROVED {order_to_process.order_id[:8]}.")
+            order_to_process.status = "Approved"
+            order_to_process.approved_by = self.name
+            order_to_process.approval_day = world.game_time.current_day
+            self.add_memory(f"Approved WO {order_to_process.order_id}")
+            print(f"{self.name} (Manager) APPROVED {order_to_process.order_id[:8]}.")
             self._receive_payment(JOB_SALARIES.get("Manage Subordinates", 3), f"reviewing WO {order_to_process.order_id[:4]}", world)
+            self._record_management_activity(world, f"order_approve:{order_to_process.order_id[:4]}", weight=0.5)
         else:
-            order_to_process.status = "Denied"; order_to_process.denied_by = self.name; order_to_process.denial_reason = f"Insuff: {', '.join(missing_notes) or 'stale data'}"; self.add_memory(f"Denied WO {order_to_process.order_id}"); print(f"{self.name} (Manager) DENIED {order_to_process.order_id[:8]}. Reason: {order_to_process.denial_reason}")
+            order_to_process.status = "Denied"
+            order_to_process.denied_by = self.name
+            order_to_process.denial_reason = f"Insuff: {', '.join(missing_notes) or 'stale data'}"
+            self.add_memory(f"Denied WO {order_to_process.order_id}")
+            print(f"{self.name} (Manager) DENIED {order_to_process.order_id[:8]}. Reason: {order_to_process.denial_reason}")
             self._receive_payment(JOB_SALARIES.get("Manage Subordinates", 3), f"reviewing WO {order_to_process.order_id[:4]}", world)
+            self._record_management_activity(world, f"order_deny:{order_to_process.order_id[:4]}", weight=0.5)
     def _execute_maintain_ledger(self, world: 'World'):
         if self.job != "Bookkeeper":
             self.current_goal = self.get_default_goal()
@@ -6340,6 +6527,7 @@ class Character:
         self.add_memory(review_summary)
         print(f"{self.name} ({self.personality}) reviewed {subordinate.name}. Objective: {objective_rating}, Final: {final_rating}. Rel: {relationship_to_sub}.")
         subordinate.add_memory(f"Had performance review with {self.name} ({self.personality}). Rated: {final_rating}. My rel with them: {subordinate.get_relationship_score(self.name)}")
+        self._record_management_activity(world, f"review:{subordinate.name}")
 
     def issue_warning(self, subordinate_char_name: str, world: 'World', reason_message: str):
         if self.name == subordinate_char_name:
@@ -6386,6 +6574,7 @@ class Character:
                 subordinate.update_mood_score(-10, "Performance set to Poor due to warnings")
                 subordinate.needs['Esteem'] = max(config.NEED_SCORE_MIN, subordinate.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) - 10) # Further esteem hit
                 subordinate.add_memory(f"Performance being set to Poor further damaged my esteem. Esteem: {subordinate.needs['Esteem']}")
+        self._record_management_activity(world, f"warning:{subordinate.name}")
 
 
     def fire_subordinate(self, subordinate_char_name: str, world: 'World'):
@@ -6467,6 +6656,7 @@ class Character:
 
         subordinate.add_memory(f"Was fired by {self.name} from job {original_job}. Now Unemployed.")
         self._apply_family_splash_effect(subordinate, -50, world, reason=f"fired") # Use a large, but not extreme, base for splash
+        self._record_management_activity(world, f"fired:{subordinate.name}")
 
         # Optional: Remove from world or mark inactive. For now, they become "Unemployed".
         # If you want to remove them from the simulation entirely:
@@ -6474,6 +6664,116 @@ class Character:
         # print(f"{subordinate.name} has been removed from the world.")
         # However, this could cause issues if other parts of the code expect the character to exist.
         # Keeping them as "Unemployed" is safer for now.
+
+    def receive_oversight_update(
+        self,
+        supervisor: Optional['Character'],
+        oversight_score: float,
+        world: Optional['World'],
+        summary: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        oversight_score = max(0.0, min(1.0, oversight_score))
+        previous_score = self.supervisor_oversight
+        self.supervisor_oversight = oversight_score
+        if world and world.game_time:
+            self.last_supervisor_oversight_day = world.game_time.current_day
+
+        threshold = getattr(config, "LEADERSHIP_NEGLECT_THRESHOLD", 0.45)
+        corruption_threshold = getattr(config, "LEADERSHIP_CORRUPTION_THRESHOLD", 0.25)
+
+        if threshold > 0:
+            self._neglect_slack_pressure = max(0.0, threshold - oversight_score) / threshold
+        else:
+            self._neglect_slack_pressure = 0.0
+
+        if corruption_threshold > 0:
+            self._neglect_illegal_pressure = max(0.0, corruption_threshold - oversight_score) / corruption_threshold
+        else:
+            self._neglect_illegal_pressure = 0.0
+
+        if supervisor and self.supervisor_name == supervisor.name:
+            if oversight_score >= threshold and previous_score < threshold:
+                self.add_memory(f"{supervisor.name} checked in closely today—best stay sharp.")
+            elif oversight_score < threshold and previous_score >= threshold:
+                self.add_memory(f"Barely saw {supervisor.name} today; the crew had free rein.")
+
+        if self._decision_profile is not None:
+            adjusted_risk = 1.0 + (self._neglect_illegal_pressure * 0.25) - (oversight_score * 0.1)
+            self._decision_profile["risk_modifier"] = max(0.5, min(1.5, adjusted_risk))
+
+    def consider_misconduct_due_to_neglect(
+        self,
+        world: 'World',
+        supervisor: Optional['Character'],
+        oversight_score: float,
+    ) -> Optional[Dict[str, Any]]:
+        if not world or not world.game_time:
+            return None
+
+        corruption_threshold = getattr(config, "LEADERSHIP_CORRUPTION_THRESHOLD", 0.25)
+        if corruption_threshold <= 0 or oversight_score >= corruption_threshold:
+            return None
+
+        pressure = max(
+            self._neglect_illegal_pressure,
+            (corruption_threshold - oversight_score) / corruption_threshold,
+        )
+        base_chance = getattr(config, "LEADERSHIP_ILLEGAL_BASE_CHANCE", 0.05)
+        chance = base_chance * pressure
+        chance += base_chance * getattr(
+            config, "LEADERSHIP_ILLEGAL_PERSONALITY_MODIFIERS", {}
+        ).get(self.personality, 0.0)
+        trait_modifiers = getattr(config, "LEADERSHIP_ILLEGAL_TRAIT_MODIFIERS", {})
+        for trait in self.traits:
+            chance += base_chance * trait_modifiers.get(trait, 0.0)
+
+        chance = max(0.0, min(1.0, chance))
+        if chance <= 0 or random.random() >= chance:
+            return None
+
+        skim_amount = max(1, int(round(1 + pressure * getattr(config, "LEADERSHIP_ILLEGAL_MAX_SKIM", 6))))
+        self.money += skim_amount
+
+        day = world.game_time.current_day
+        supervisor_name = supervisor.name if supervisor else None
+        summary_text = f"{self.name} skimmed {skim_amount}c under lax oversight."
+        incident_id = world._next_crime_id()
+        incident = {
+            "id": incident_id,
+            "type": "corruption",
+            "reported_day": day,
+            "suspect": self.name,
+            "supervisor": supervisor_name,
+            "amount": skim_amount,
+            "status": "pending",
+            "caught": False,
+            "summary": summary_text,
+            "description": summary_text,
+            "oversight": round(oversight_score, 3),
+        }
+
+        world.pending_crimes.append(incident)
+        world.active_crimes[incident_id] = incident
+        world._record_crime_history(incident)
+        world.add_event_log_message(summary_text)
+
+        self.add_memory(f"Pocketed {skim_amount}c while no one was watching our crew.")
+        self.update_reputation(-5, "Skimmed funds under lax oversight", world)
+        self.update_mood_score(
+            getattr(config, "MOOD_CHANGE_MISCONDUCT_THRILL", 3),
+            "Skimmed extra coins under lax oversight",
+        )
+
+        if supervisor and self.supervisor_name == supervisor.name:
+            supervisor.add_memory(f"Rumors say {self.name} skimmed funds while I was absent.")
+            supervisor.modify_relationship(
+                self.name,
+                -8,
+                world,
+                reason="Rumored misconduct under my watch",
+            )
+
+        return incident
 
     def get_relationship_score(self, target_char_name: str) -> int:
         """Returns the relationship score towards the target character, default 0."""

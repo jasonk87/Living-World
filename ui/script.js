@@ -66,6 +66,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const lawCodeList = document.getElementById('law-code-list');
     const lawPetitionList = document.getElementById('law-petition-list');
     const lawInvestigationList = document.getElementById('law-investigation-list');
+    const leadershipOversightList = document.getElementById('leadership-oversight-list');
     const characterSearchInput = document.getElementById('character-search');
     const infoPanel = document.getElementById('info-panel');
     const hudPopoverButtons = document.querySelectorAll('[data-popover-target]');
@@ -176,6 +177,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function refreshWorldBadge() {
         updateHudBadge(hudBadgeWorld, worldBadgeBase + worldBadgeSupplement);
+    }
+
+    function prepareOversightNotes(notes) {
+        if (!Array.isArray(notes)) return [];
+        const MAX_LENGTH = 140;
+        return notes
+            .map(note => (typeof note === 'string' ? note.trim() : ''))
+            .filter(Boolean)
+            .map(note => (note.length > MAX_LENGTH ? `${note.slice(0, MAX_LENGTH - 1)}…` : note));
     }
 
     function closeHudPopovers(exceptId = null) {
@@ -569,6 +579,93 @@ document.addEventListener('DOMContentLoaded', () => {
                         const status = interview.status ? interview.status.replace(/_/g, ' ') : 'Pending';
                         const assigned = interview.assigned_to ? ` • ${interview.assigned_to}` : '';
                         return `<li><strong>${interview.witness || 'Witness'}</strong><small>Case ${interview.case_id} • ${status}${assigned}</small></li>`;
+                    })
+                    .join('');
+            }
+        }
+
+        if (leadershipOversightList) {
+            const oversightEntries = Array.isArray(governance.oversight) ? governance.oversight : [];
+            const badgeFlags = new Set(['neglect', 'incident']);
+            const oversightFlagLabel = (flag) => {
+                switch (flag) {
+                    case 'neglect':
+                        return 'Neglect';
+                    case 'incident':
+                        return 'Misconduct';
+                    case 'commendable':
+                        return 'Hands-on';
+                    case 'no_actions':
+                        return 'Idle';
+                    default:
+                        return flag.replace(/_/g, ' ');
+                }
+            };
+            const oversightFlagClass = (flag) => {
+                switch (flag) {
+                    case 'neglect':
+                        return 'status-tag warn';
+                    case 'incident':
+                        return 'status-tag alert';
+                    case 'commendable':
+                        return 'status-tag good';
+                    case 'no_actions':
+                        return 'status-tag muted';
+                    default:
+                        return 'status-tag';
+                }
+            };
+
+            const atRiskCount = oversightEntries
+                .filter(entry => Array.isArray(entry.flags) && entry.flags.some(flag => badgeFlags.has(flag)))
+                .length;
+            addCivicCount(atRiskCount);
+
+            if (!oversightEntries.length) {
+                leadershipOversightList.innerHTML = '<li class="empty">No oversight data.</li>';
+            } else {
+                leadershipOversightList.innerHTML = oversightEntries.slice(0, 5)
+                    .map(entry => {
+                        const leaderName = entry.leader || 'Unknown';
+                        const role = entry.role || 'Leader';
+                        const score = Number.isFinite(entry.score)
+                            ? `${Math.round(entry.score * 100)}%`
+                            : '—';
+                        const actions = Number.isFinite(entry.actions)
+                            ? `${entry.actions}`
+                            : null;
+                        const neglectedCount = Array.isArray(entry.neglected) ? entry.neglected.length : 0;
+                        const incidentCount = Array.isArray(entry.incidents) ? entry.incidents.length : 0;
+                        const detailParts = [`Oversight ${score}`];
+                        if (actions !== null) {
+                            detailParts.push(`${actions} actions`);
+                        }
+                        if (neglectedCount) {
+                            detailParts.push(`Neglect ${neglectedCount}`);
+                        }
+                        if (incidentCount) {
+                            detailParts.push(`Incidents ${incidentCount}`);
+                        }
+                        const detailLine = detailParts.length
+                            ? `<small>${detailParts.join(' • ')}</small>`
+                            : '';
+                        const oversightNotes = prepareOversightNotes(entry.notes).slice(0, 3);
+                        const notes = oversightNotes.length
+                            ? `<small class="muted">${oversightNotes.join(' / ')}</small>`
+                            : '';
+                        const flags = Array.isArray(entry.flags) ? entry.flags : [];
+                        const tagLine = flags.length
+                            ? `<div class="status-tag-row">${flags.map(flag => `<span class="${oversightFlagClass(flag)}">${oversightFlagLabel(flag)}</span>`).join(' ')}</div>`
+                            : '';
+                        return `
+                            <li>
+                                <strong>${leaderName}</strong>
+                                <small>${role}</small>
+                                ${tagLine}
+                                ${detailLine}
+                                ${notes}
+                            </li>
+                        `;
                     })
                     .join('');
             }

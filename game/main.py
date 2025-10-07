@@ -428,6 +428,9 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                             "job_satisfaction": getattr(char, 'job_satisfaction', None),
                             "profession_focus": getattr(char, 'professional_focus', None),
                             "profession_tenure": getattr(char, 'current_profession_tenure', None),
+                            "supervisor_name": getattr(char, 'supervisor_name', None),
+                            "supervisor_oversight": getattr(char, 'supervisor_oversight', None),
+                            "leadership_oversight": getattr(char, 'leadership_oversight_score', None),
                         })
 
                 event_log_repr = game_world.event_log[-20:] if game_world else []
@@ -603,7 +606,6 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "is_injured": getattr(character, 'is_injured', False),
                     "injury_severity": getattr(character, 'injury_severity', 0),
                     "appointed_by": getattr(character, 'appointed_by', None),
-                    "supervisor_name": character.supervisor_name,
                     "subordinates_names": character.subordinates_names,
                     "memory": character.memory[-10:], # Last 10 memories
                     "personality": character.personality,
