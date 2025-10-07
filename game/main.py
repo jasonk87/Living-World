@@ -162,6 +162,8 @@ def tick_simulation():
                 game_world.manage_campaigns()
             if hasattr(game_world, "manage_economy"):
                 game_world.manage_economy()
+            if hasattr(game_world, "process_governance_daily"):
+                game_world.process_governance_daily()
             if hasattr(game_world, "process_daily_economy"):
                 game_world.process_daily_economy()
 
@@ -471,6 +473,7 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "training": game_world.get_training_snapshot() if hasattr(game_world, 'get_training_snapshot') else {},
                     "workforce": game_world.get_workforce_snapshot() if hasattr(game_world, 'get_workforce_snapshot') else {},
                     "families": game_world.get_family_snapshot() if hasattr(game_world, 'get_family_snapshot') else {},
+                    "governance": game_world.get_governance_snapshot() if hasattr(game_world, 'get_governance_snapshot') else {},
                 }
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')

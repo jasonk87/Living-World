@@ -32,6 +32,9 @@ class GoalType(Enum):
     MANAGE_APPOINTMENTS = auto() # Mayor
     ISSUE_STRATEGIC_DIRECTIVE = auto() # Mayor, other leaders
     ENACT_POLICY = auto() # Mayor
+    REVIEW_LAW_PETITIONS = auto() # Mayor
+    DRAFT_SETTLEMENT_LAW = auto() # Mayor
+    ENACT_SETTLEMENT_LAW = auto() # Mayor
     APPROVE_MAJOR_PROJECT = auto() # Mayor
     HOST_EVENT = auto() # Mayor, Nobles (e.g. GiveSpeech, HoldMeeting)
     GIVE_SPEECH = auto() # Specific HOST_EVENT type
@@ -46,6 +49,7 @@ class GoalType(Enum):
     PATROL_AREA = auto() # Deputy, Militia Captain
     INVESTIGATE_DISTURBANCE = auto() # Sheriff
     PREPARE_TRIAL_CASE = auto() # Sheriff legal prep
+    CONDUCT_WITNESS_INTERVIEW = auto() # Sheriff & Deputies
     ATTEND_TRIAL = auto() # Court appearances
 
     # Medical

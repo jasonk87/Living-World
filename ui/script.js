@@ -46,6 +46,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const familySpotlight = document.getElementById('family-spotlight');
     const familyStoriesList = document.getElementById('family-stories-list');
     const familyHouseholdList = document.getElementById('family-household-list');
+    const lawCodeList = document.getElementById('law-code-list');
+    const lawPetitionList = document.getElementById('law-petition-list');
+    const lawInvestigationList = document.getElementById('law-investigation-list');
     const characterSearchInput = document.getElementById('character-search');
     const infoPanel = document.getElementById('info-panel');
 
@@ -245,6 +248,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const populationSnapshot = gameState.population || report.population_snapshot || {};
         const trainingReport = gameState.training || report.training || {};
         const workforceReport = gameState.workforce || report.workforce || {};
+        const governance = gameState.governance || {};
 
         if (hudPopulationValue) {
             const totalPopulation = typeof populationSnapshot.population === 'number'
@@ -325,6 +329,59 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 const homelessText = homelessCount ? ` • Outside ${homelessCount}` : '';
                 hudHousingValue.textContent = `${claimed}/${totalBeds} occupied • ${availableBeds} open${homelessText}`;
+            }
+        }
+
+        if (lawCodeList) {
+            const laws = Array.isArray(governance.laws) ? governance.laws : [];
+            if (!laws.length) {
+                lawCodeList.innerHTML = '<li class="empty">No civic laws enacted.</li>';
+            } else {
+                lawCodeList.innerHTML = laws
+                    .map(law => {
+                        const penalty = law.penalty && typeof law.penalty.amount === 'number'
+                            ? `${law.penalty.amount}c`
+                            : (law.penalty && law.penalty.type) || '—';
+                        const status = law.status === 'draft' ? 'Draft' : 'Active';
+                        return `<li><strong>${law.title}</strong><small>${status} • ${law.offense || 'General'} • Penalty ${penalty}</small></li>`;
+                    })
+                    .join('');
+            }
+        }
+
+        if (lawPetitionList) {
+            const petitions = Array.isArray(governance.petitions) ? governance.petitions : [];
+            if (!petitions.length) {
+                lawPetitionList.innerHTML = '<li class="empty">No petitions awaiting review.</li>';
+            } else {
+                lawPetitionList.innerHTML = petitions
+                    .map(petition => {
+                        const support = typeof petition.support === 'number'
+                            ? `${Math.round(petition.support * 100)}%`
+                            : '—';
+                        const badge = petition.status === 'enacted'
+                            ? 'Enacted'
+                            : petition.status === 'drafting'
+                                ? 'Drafting'
+                                : 'Pending';
+                        return `<li><strong>${petition.title}</strong><small>${badge} • Support ${support} • Incidents ${petition.incident_count ?? 0}</small></li>`;
+                    })
+                    .join('');
+            }
+        }
+
+        if (lawInvestigationList) {
+            const interviews = Array.isArray(governance.interviews) ? governance.interviews : [];
+            if (!interviews.length) {
+                lawInvestigationList.innerHTML = '<li class="empty">No interviews assigned.</li>';
+            } else {
+                lawInvestigationList.innerHTML = interviews
+                    .map(interview => {
+                        const status = interview.status ? interview.status.replace(/_/g, ' ') : 'Pending';
+                        const assigned = interview.assigned_to ? ` • ${interview.assigned_to}` : '';
+                        return `<li><strong>${interview.witness || 'Witness'}</strong><small>Case ${interview.case_id} • ${status}${assigned}</small></li>`;
+                    })
+                    .join('');
             }
         }
 

@@ -149,6 +149,14 @@ class World:
         self.latest_workforce_report: Dict[str, Any] = {}
         self._last_workforce_update_day: Optional[int] = None
         self.work_logistics_history: List[Dict[str, Any]] = []
+        self.law_petitions: List[Dict[str, Any]] = []
+        self.active_laws: Dict[str, Dict[str, Any]] = {}
+        self.law_history: List[Dict[str, Any]] = []
+        self.pending_interviews: List[Dict[str, Any]] = []
+        self.interview_history: Dict[str, List[Dict[str, Any]]] = {}
+        self._law_counter: int = 0
+        self._law_petition_counter: int = 0
+        self._interview_counter: int = 0
         self.family_profiles: Dict[str, Dict[str, Any]] = {}
         self._family_lookup: Dict[str, str] = {}
         self.family_history: List[Dict[str, Any]] = []
@@ -1592,6 +1600,18 @@ class World:
         self._crime_incident_counter += 1
         return f"crime_{self._crime_incident_counter}"
 
+    def _next_law_id(self) -> str:
+        self._law_counter += 1
+        return f"law_{self._law_counter:03d}"
+
+    def _next_petition_id(self) -> str:
+        self._law_petition_counter += 1
+        return f"petition_{self._law_petition_counter:03d}"
+
+    def _next_interview_id(self) -> str:
+        self._interview_counter += 1
+        return f"interview_{self._interview_counter:04d}"
+
     def _record_crime_history(self, incident: Dict[str, Any]):
         """Store or update a snapshot of an incident for HUD/history purposes."""
         summary = {
@@ -1614,6 +1634,369 @@ class World:
         else:
             self.crime_reports.append(summary)
         self.crime_reports = self.crime_reports[-20:]
+
+    # --- Governance & Civic Law Management ---
+
+    def get_law_by_id(self, law_id: str) -> Optional[Dict[str, Any]]:
+        if law_id in self.active_laws:
+            return self.active_laws[law_id]
+        for record in reversed(self.law_history):
+            if record.get("id") == law_id:
+                return record
+        return None
+
+    def has_law_for_offense(self, offense_type: Optional[str]) -> bool:
+        if not offense_type:
+            return False
+        for law in self.active_laws.values():
+            if law.get("status") == "active" and law.get("offense_type") == offense_type:
+                return True
+        return False
+
+    def register_law_petition(
+        self,
+        issue_type: str,
+        summary: str,
+        requested_by: str,
+        *,
+        incident_count: int = 0,
+        severity: int = 1,
+        support: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        petition_id = self._next_petition_id()
+        today = self.game_time.current_day if self.game_time else 0
+        severity = max(1, min(5, severity))
+        if support is None:
+            base_support = 0.28 + 0.09 * max(0, incident_count - 1)
+            support = max(0.2, min(0.9, base_support))
+        title = f"{issue_type.title()} Ordinance"
+        petition = {
+            "id": petition_id,
+            "issue_type": issue_type,
+            "title": title,
+            "summary": summary,
+            "requested_by": requested_by,
+            "status": "pending",
+            "support": round(support, 3),
+            "incident_count": incident_count,
+            "created_day": today,
+            "severity": severity,
+            "last_reviewed_day": None,
+            "last_reviewed_by": None,
+        }
+        self.law_petitions.append(petition)
+        self.add_event_log_message(
+            f"Citizens submit {title}: {summary} (support {petition['support']:.0%})."
+        )
+        self.add_notable_event(
+            "LawPetition",
+            {
+                "petition_id": petition_id,
+                "title": title,
+                "support": petition["support"],
+                "issue_type": issue_type,
+            },
+        )
+        return petition
+
+    def get_petition_by_id(self, petition_id: str) -> Optional[Dict[str, Any]]:
+        for petition in self.law_petitions:
+            if petition.get("id") == petition_id:
+                return petition
+        return None
+
+    def peek_priority_law_petition(self) -> Optional[Dict[str, Any]]:
+        pending = [p for p in self.law_petitions if p.get("status") == "pending"]
+        if not pending:
+            return None
+        pending.sort(
+            key=lambda entry: (
+                entry.get("support", 0.0),
+                entry.get("severity", 0),
+                -(entry.get("created_day", 0) or 0),
+            ),
+            reverse=True,
+        )
+        return pending[0]
+
+    def record_petition_review(
+        self,
+        petition_id: str,
+        reviewer: str,
+        decision: str,
+    ) -> Optional[Dict[str, Any]]:
+        petition = self.get_petition_by_id(petition_id)
+        if not petition:
+            return None
+        today = self.game_time.current_day if self.game_time else 0
+        petition["last_reviewed_day"] = today
+        petition["last_reviewed_by"] = reviewer
+        if decision == "draft":
+            petition["status"] = "drafting"
+            self.add_event_log_message(
+                f"Mayor {reviewer} orders legal drafts for {petition.get('title')}."
+            )
+        elif decision == "defer":
+            petition["status"] = "pending"
+            petition["support"] = max(0.15, petition.get("support", 0.0) - 0.05)
+            self.add_event_log_message(
+                f"Mayor {reviewer} delays action on {petition.get('title')} to gather more input."
+            )
+        return petition
+
+    def draft_law_from_petition(
+        self,
+        petition_id: str,
+        sponsor: str,
+    ) -> Optional[Dict[str, Any]]:
+        petition = self.get_petition_by_id(petition_id)
+        if not petition:
+            return None
+        if petition.get("status") == "enacted":
+            return self.get_law_by_id(petition.get("draft_law_id", ""))
+
+        today = self.game_time.current_day if self.game_time else 0
+        self.record_petition_review(petition_id, sponsor, "draft")
+
+        law_id = petition.get("draft_law_id") or self._next_law_id()
+        fine_amount = config.LAW_BASE_FINE_AMOUNT + 5 * max(0, petition.get("severity", 1) - 1)
+        requires_interviews = petition.get("support", 0.0) >= config.LAW_INTERVIEW_SUPPORT_THRESHOLD
+        baseline_evidence = max(
+            config.LAW_CASE_PREP_BASELINE,
+            min(1.0, 0.25 + 0.1 * petition.get("incident_count", 0)),
+        )
+        law_record = {
+            "id": law_id,
+            "title": petition.get("title"),
+            "description": petition.get("summary"),
+            "offense_type": petition.get("issue_type"),
+            "penalty": {"type": "fine", "amount": fine_amount},
+            "requires_trial": True,
+            "requires_interviews": requires_interviews,
+            "status": "draft",
+            "drafted_day": today,
+            "sponsor": sponsor,
+            "petition_id": petition_id,
+            "support": petition.get("support", 0.0),
+            "severity": petition.get("severity", 1),
+            "evidence_strength": baseline_evidence,
+        }
+        petition["draft_law_id"] = law_id
+        self.law_history.append(law_record)
+        self.add_event_log_message(
+            f"{sponsor} drafts {law_record['title']} targeting {law_record['offense_type']}."
+        )
+        return law_record
+
+    def get_pending_law_draft_for(self, sponsor: str) -> Optional[Dict[str, Any]]:
+        for record in reversed(self.law_history):
+            if (
+                record.get("status") == "draft"
+                and record.get("sponsor") == sponsor
+                and record.get("id") not in self.active_laws
+            ):
+                return record
+        return None
+
+    def enact_law(self, law_id: str, enacted_by: str) -> Optional[Dict[str, Any]]:
+        law = self.get_law_by_id(law_id)
+        if not law:
+            return None
+        if law.get("status") == "active":
+            return law
+        today = self.game_time.current_day if self.game_time else 0
+        law["status"] = "active"
+        law["enacted_day"] = today
+        law["enacted_by"] = enacted_by
+        law.setdefault("enforcement_history", [])
+        self.active_laws[law_id] = law
+        petition_id = law.get("petition_id")
+        if petition_id:
+            petition = self.get_petition_by_id(petition_id)
+            if petition:
+                petition["status"] = "enacted"
+                petition["enacted_day"] = today
+        self.add_event_log_message(
+            f"Mayor {enacted_by} enacts {law.get('title')} (penalty {law.get('penalty', {}).get('amount', 0)}c)."
+        )
+        self.add_notable_event(
+            "LawEnacted",
+            {
+                "law_id": law_id,
+                "title": law.get("title"),
+                "offense": law.get("offense_type"),
+                "penalty": law.get("penalty"),
+            },
+        )
+        return law
+
+    def repeal_law(self, law_id: str, repealed_by: str) -> Optional[Dict[str, Any]]:
+        law = self.get_law_by_id(law_id)
+        if not law:
+            return None
+        if law.get("status") != "active":
+            return law
+        today = self.game_time.current_day if self.game_time else 0
+        law["status"] = "repealed"
+        law["repealed_day"] = today
+        law["repealed_by"] = repealed_by
+        self.active_laws.pop(law_id, None)
+        self.add_event_log_message(f"{repealed_by} repeals {law.get('title')}.")
+        return law
+
+    def identify_applicable_law(self, crime: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        offense = crime.get("type")
+        if not offense:
+            return None
+        candidates: List[Tuple[int, int, Dict[str, Any]]] = []
+        for law in self.active_laws.values():
+            if law.get("status") != "active":
+                continue
+            if law.get("offense_type") != offense:
+                continue
+            enacted_day = law.get("enacted_day", 0) or 0
+            severity = law.get("severity", 1)
+            candidates.append((severity, enacted_day, law))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda entry: (entry[0], entry[1]), reverse=True)
+        return candidates[0][2]
+
+    def _select_witnesses_for_case(self, case: Dict[str, Any], count: int = 2) -> List[str]:
+        excluded = {name for name in [case.get("defendant"), case.get("prosecutor"), case.get("presiding_officer")] if name}
+        available = [char.name for char in self.characters if char.name not in excluded]
+        random.shuffle(available)
+        return available[:count]
+
+    def plan_case_interviews(self, case: Dict[str, Any], law: Optional[Dict[str, Any]] = None) -> None:
+        if not law or not law.get("requires_interviews"):
+            return
+        case.setdefault("interview_plan", [])
+        case.setdefault("interview_statements", [])
+        planned: List[str] = []
+        for witness in self._select_witnesses_for_case(case, count=2):
+            assignment_id = self._next_interview_id()
+            assignment = {
+                "id": assignment_id,
+                "case_id": case.get("case_id"),
+                "law_id": law.get("id"),
+                "witness": witness,
+                "status": "queued",
+                "requested_day": self.game_time.current_day if self.game_time else 0,
+                "topic": law.get("title"),
+            }
+            self.pending_interviews.append(assignment)
+            case["interview_plan"].append(assignment_id)
+            planned.append(witness)
+        if planned:
+            self.add_event_log_message(
+                f"Witness interviews queued for case {case.get('case_id')}: {', '.join(planned)}."
+            )
+
+    def assign_investigative_interview(self, officer_name: str) -> Optional[Dict[str, Any]]:
+        today = self.game_time.current_day if self.game_time else 0
+        for assignment in self.pending_interviews:
+            if assignment.get("status") == "assigned" and assignment.get("assigned_to") == officer_name:
+                return assignment
+        for assignment in self.pending_interviews:
+            if assignment.get("status") != "queued":
+                continue
+            assignment["status"] = "assigned"
+            assignment["assigned_to"] = officer_name
+            assignment["assigned_day"] = today
+            self.add_event_log_message(
+                f"{officer_name} assigned to interview {assignment.get('witness')} for case {assignment.get('case_id')}"
+            )
+            return assignment
+        return None
+
+    def get_interview_assignment_by_id(self, assignment_id: Optional[str]) -> Optional[Dict[str, Any]]:
+        if not assignment_id:
+            return None
+        for assignment in self.pending_interviews:
+            if assignment.get("id") == assignment_id:
+                return assignment
+        return None
+
+    def record_interview_result(
+        self,
+        assignment_id: str,
+        officer_name: str,
+        quality: float,
+        notes: str,
+    ) -> Optional[Dict[str, Any]]:
+        assignment = self.get_interview_assignment_by_id(assignment_id)
+        if not assignment:
+            return None
+        today = self.game_time.current_day if self.game_time else 0
+        assignment["status"] = "completed"
+        assignment["completed_day"] = today
+        assignment["assigned_to"] = assignment.get("assigned_to") or officer_name
+        assignment["quality"] = max(0.0, min(1.0, quality))
+        assignment["notes"] = notes
+
+        case = self.get_case_by_id(assignment.get("case_id"))
+        if case:
+            case.setdefault("interview_statements", [])
+            statement = {
+                "witness": assignment.get("witness"),
+                "officer": officer_name,
+                "quality": assignment["quality"],
+                "notes": notes,
+                "day": today,
+            }
+            case["interview_statements"].append(statement)
+            bonus = config.LAW_INTERVIEW_EVIDENCE_BONUS * assignment["quality"]
+            case["evidence_strength"] = min(1.0, case.get("evidence_strength", 0.0) + bonus)
+            case["preparedness"] = min(1.0, case.get("preparedness", 0.0) + 0.12 * assignment["quality"])
+            self.interview_history.setdefault(case.get("case_id"), []).append(statement)
+            self.add_event_log_message(
+                f"{officer_name} records testimony from {assignment.get('witness')} for case {case.get('case_id')} (quality {assignment['quality']:.0%})."
+            )
+        return assignment
+
+    def get_governance_snapshot(self) -> Dict[str, Any]:
+        laws_snapshot = [
+            {
+                "id": law.get("id"),
+                "title": law.get("title"),
+                "offense": law.get("offense_type"),
+                "penalty": law.get("penalty"),
+                "status": law.get("status"),
+                "enacted_day": law.get("enacted_day"),
+                "support": law.get("support"),
+            }
+            for law in self.law_history
+            if law.get("status") in {"draft", "active"}
+        ]
+        petitions_snapshot = [
+            {
+                "id": petition.get("id"),
+                "title": petition.get("title"),
+                "support": petition.get("support"),
+                "status": petition.get("status"),
+                "created_day": petition.get("created_day"),
+                "incident_count": petition.get("incident_count"),
+            }
+            for petition in self.law_petitions
+        ]
+        interviews_snapshot = [
+            {
+                "id": assignment.get("id"),
+                "case_id": assignment.get("case_id"),
+                "witness": assignment.get("witness"),
+                "status": assignment.get("status"),
+                "assigned_to": assignment.get("assigned_to"),
+                "topic": assignment.get("topic"),
+            }
+            for assignment in self.pending_interviews
+            if assignment.get("status") in {"queued", "assigned"}
+        ]
+        return {
+            "laws": laws_snapshot,
+            "petitions": petitions_snapshot,
+            "interviews": interviews_snapshot,
+        }
 
     def get_crime_by_id(self, crime_id: str) -> Optional[Dict[str, Any]]:
         if crime_id in self.active_crimes:
@@ -1754,7 +2137,22 @@ class World:
             "crime_summary": crime.get("description") or crime.get("summary"),
             "severity": severity_value,
             "preparation_notes": [],
+            "law_id": None,
+            "penalty": None,
+            "requires_interviews": False,
+            "interview_plan": [],
+            "interview_statements": [],
         }
+
+        applicable_law = self.identify_applicable_law(crime)
+        if applicable_law:
+            case["law_id"] = applicable_law.get("id")
+            case["charge"] = applicable_law.get("title", case["charge"])
+            case["penalty"] = deepcopy(applicable_law.get("penalty"))
+            case["requires_interviews"] = bool(applicable_law.get("requires_interviews"))
+            case["evidence_strength"] = max(
+                case["evidence_strength"], applicable_law.get("evidence_strength", config.LAW_CASE_PREP_BASELINE)
+            )
 
         self.legal_cases[case_id] = case
         crime["trial_case_id"] = case_id
@@ -1766,6 +2164,9 @@ class World:
         self.add_event_log_message(
             f"Trial scheduled: {suspect} will face charges of {case['charge']} on Day {scheduled_day}."
         )
+
+        if applicable_law:
+            self.plan_case_interviews(case, applicable_law)
 
         prosecutor = self.get_character_by_name(prosecutor_name)
         if prosecutor:
@@ -5013,6 +5414,72 @@ class World:
                 severity = pressure.get("severity", 0)
                 self._handle_surplus_trade(resource, severity)
                 self._spawn_conversion_work_order(resource, severity)
+
+    def process_governance_daily(self) -> None:
+        if not self.game_time:
+            return
+        today = self.game_time.current_day
+        window = getattr(config, "LAW_PETITION_CRIME_WINDOW", 6)
+        threshold = getattr(config, "LAW_PETITION_THRESHOLD", 3)
+
+        recent_incidents = [
+            report
+            for report in self.crime_reports
+            if report.get("day") is not None and today - report["day"] <= window
+        ]
+        tallies = Counter(report.get("type") for report in recent_incidents if report.get("type"))
+        for offense, count in tallies.items():
+            if not offense or count < threshold:
+                continue
+            if self.has_law_for_offense(offense):
+                continue
+            existing = next(
+                (
+                    petition
+                    for petition in self.law_petitions
+                    if petition.get("issue_type") == offense
+                    and petition.get("status") in {"pending", "drafting"}
+                ),
+                None,
+            )
+            if existing:
+                existing["incident_count"] = max(existing.get("incident_count", 0), count)
+                continue
+            summary = (
+                f"Residents demand stronger action against {offense} after {count} incidents in {window} days."
+            )
+            self.register_law_petition(
+                offense,
+                summary,
+                "Civic Council",
+                incident_count=count,
+                severity=min(5, count),
+            )
+
+        for petition in self.law_petitions:
+            if petition.get("status") != "pending":
+                continue
+            last_review = petition.get("last_reviewed_day")
+            if last_review is not None and today <= last_review:
+                continue
+            previous_support = petition.get("support", 0.0)
+            petition["support"] = min(1.0, previous_support + config.LAW_SUPPORT_ESCALATION)
+            if previous_support < 0.5 <= petition["support"]:
+                self.add_event_log_message(
+                    f"Support surges for {petition.get('title')} (now {petition['support']:.0%})."
+                )
+
+        retention_window = max(2, window)
+        self.pending_interviews = [
+            assignment
+            for assignment in self.pending_interviews
+            if assignment.get("status") in {"queued", "assigned"}
+            or (
+                assignment.get("status") == "completed"
+                and assignment.get("completed_day") is not None
+                and today - assignment.get("completed_day", today) <= retention_window
+            )
+        ]
 
     # --- Cultural Life & Festivals ---
 

@@ -40,6 +40,10 @@ include:
 - **Civic services:** the legal system, healthcare triage, and housing reviews
   all report their status through the API so that the HUD can surface key
   pressures without digging into logs.
+- **Governance & law:** the mayor now evaluates citizen petitions, drafts and
+  enacts settlement laws, and coordinates with the sheriff on witness
+  interviews so that cases gather testimony before trial. Active laws, pending
+  petitions, and investigative assignments stream to the HUD for quick review.
 - **Family chronicles:** a settlement-wide family registry now records arrivals,
   marriages, births, and bereavement. Lineage charts surface who is partnered
   to whom, which households are raising children, and how witnesses processed

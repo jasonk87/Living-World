@@ -33,6 +33,12 @@ This document summarizes the systemic layers that drive the Living World settlem
 - Active sessions grant experience through `Character.participate_in_training()` while boosting esteem, logging notable level-ups, and archiving cohort outcomes for the HUD.
 - The command UI surfaces active cohorts, queue pressure, and flagged disciplines so managers can see where expertise is still lagging.
 
+## Governance & Law
+- `World.process_governance_daily()` reviews recent incident history, grows support for unattended petitions, and automatically registers new civic petitions when repeated offences breach the configured threshold.
+- The mayor evaluates petitions via `_execute_review_law_petitions`, drafts new ordinances with `_execute_draft_settlement_law`, and enacts them through `World.enact_law()` which stores the statute, penalty, and evidence baseline.
+- Law enforcement gains interview queues through `World.plan_case_interviews()`; the sheriff and deputies claim assignments with `assign_investigative_interview` and log testimony using `record_interview_result`, which boosts case evidence before trial.
+- The `/game_state` payload exposes the `governance` snapshot so the HUD lists active laws, petition support, and outstanding witness interviews alongside economic and housing telemetry.
+
 ## Family Registries & Life Histories
 - `World._rebuild_family_profiles()` clusters characters into households using their declared family ties, generating taglines that summarize each clan's makeup.
 - `Character.record_life_event()` captures notable beats such as arrivals, trials, and medical outcomes; `World.share_family_event()` echoes those moments to relatives and stores them inside the family ledger.

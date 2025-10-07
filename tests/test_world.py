@@ -757,3 +757,91 @@ def test_fatal_medical_case_creates_bereavement_events():
     medic_event = next((evt for evt in medic.life_history if evt.get("type") == "witnessed_tragedy"), None)
     assert medic_event is not None
     assert "Calla" in medic_event.get("summary", "")
+
+
+def test_governance_generates_petitions_from_crime_history():
+    world, game_time = _make_world()
+    game_time.current_day = 6
+
+    for day in range(3):
+        incident = {
+            "id": f"crime_{day}",
+            "type": "theft",
+            "reported_day": game_time.current_day - day - 1,
+            "resolved_day": game_time.current_day - day - 1,
+            "status": "resolved",
+        }
+        world._record_crime_history(incident)
+
+    world.process_governance_daily()
+
+    petitions = [p for p in world.law_petitions if p.get("issue_type") == "theft"]
+    assert petitions
+    assert petitions[0]["incident_count"] >= 3
+
+
+def test_enacted_law_applies_to_case_and_queues_interviews():
+    world, _ = _make_world()
+
+    mayor = Character(name="Elena", personality="Resolute", traits=[], skills={"Leadership": 6}, job="Mayor")
+    sheriff = Character(name="Rogan", personality="Stoic", traits=[], skills={"Security": 5}, job="Sheriff")
+    suspect = Character(name="Vail", personality="Impulsive", traits=[], skills={}, job="Laborer")
+    witness = Character(name="Mira", personality="Calm", traits=[], skills={}, job="Farmer")
+
+    for char in (mayor, sheriff, suspect, witness):
+        world.add_character(char)
+
+    petition = world.register_law_petition("theft", "Merchants seek tighter safeguards", "Guild", incident_count=4, severity=3)
+    law = world.draft_law_from_petition(petition["id"], mayor.name)
+    assert law is not None
+    enacted = world.enact_law(law["id"], mayor.name)
+    assert enacted is not None
+
+    crime = {
+        "id": "crime_test",
+        "type": "theft",
+        "suspect": suspect.name,
+        "description": "Caught removing goods from stockpile",
+    }
+
+    case = world.schedule_trial_for_crime(crime, sheriff.name, 0.4)
+    assert case is not None
+    assert case["law_id"] == law["id"]
+    assert case["requires_interviews"] is True
+    assert case["interview_plan"]
+    assert world.pending_interviews
+
+
+def test_interview_result_boosts_case_evidence():
+    world, _ = _make_world()
+
+    mayor = Character(name="Elena", personality="Resolute", traits=[], skills={"Leadership": 6}, job="Mayor")
+    sheriff = Character(name="Rogan", personality="Stoic", traits=[], skills={"Security": 5}, job="Sheriff")
+    suspect = Character(name="Vail", personality="Impulsive", traits=[], skills={}, job="Laborer")
+    witness = Character(name="Mira", personality="Calm", traits=[], skills={}, job="Farmer")
+
+    for char in (mayor, sheriff, suspect, witness):
+        world.add_character(char)
+
+    petition = world.register_law_petition("theft", "Merchants seek tighter safeguards", "Guild", incident_count=4, severity=3)
+    law = world.draft_law_from_petition(petition["id"], mayor.name)
+    world.enact_law(law["id"], mayor.name)
+
+    crime = {
+        "id": "crime_case",
+        "type": "theft",
+        "suspect": suspect.name,
+        "description": "Lifted tools from workshop",
+    }
+
+    case = world.schedule_trial_for_crime(crime, sheriff.name, 0.3)
+    base_strength = case["evidence_strength"]
+
+    assignment = world.assign_investigative_interview(sheriff.name)
+    assert assignment is not None
+
+    world.record_interview_result(assignment["id"], sheriff.name, 0.8, "Witness corroborated the theft.")
+    updated = world.get_case_by_id(case["case_id"])
+
+    assert updated["evidence_strength"] > base_strength
+    assert updated["interview_statements"]

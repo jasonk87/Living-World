@@ -486,6 +486,15 @@ EXP_LEVEL_SCALING_FACTOR = 1.5
 MAYOR_RESOURCE_LOW_THRESHOLD = 20  # Mayor becomes concerned if key resources drop below this
 MAYOR_RESOURCE_HIGH_THRESHOLD = 150 # Mayor recognizes an abundance when stores exceed this
 
+# Governance & Law System
+LAW_PETITION_CRIME_WINDOW = 6  # Days of incident history the mayor reviews when weighing petitions
+LAW_PETITION_THRESHOLD = 3     # Minimum repeated incidents before citizens file a formal petition
+LAW_BASE_FINE_AMOUNT = 15      # Default fine the mayor levies when enacting civic laws
+LAW_SUPPORT_ESCALATION = 0.08  # Daily support drift for unattended petitions
+LAW_INTERVIEW_SUPPORT_THRESHOLD = 0.45  # Petitions over this support will demand witness interviews
+LAW_INTERVIEW_EVIDENCE_BONUS = 0.2      # Max evidence boost a strong interview can contribute
+LAW_CASE_PREP_BASELINE = 0.35           # Minimum evidence strength a drafted law starts with
+
 # Medical System Thresholds
 MEDICAL_SUPPLY_LOW_THRESHOLD = 5 # Chief Medical Officer acts when medical supplies fall below this
 

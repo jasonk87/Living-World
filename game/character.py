@@ -103,6 +103,9 @@ class Character:
         self._mc_item_check_idx: int = 0
         self.active_crime_assignment: Optional[str] = None
         self.crime_investigation_focus: Optional[Dict[str, Any]] = None
+        self.active_interview_assignment: Optional[Dict[str, Any]] = None
+        self.active_law_petition_id: Optional[str] = None
+        self.active_law_draft_id: Optional[str] = None
         self.last_estate_review_day: Optional[int] = None
         self.active_estate_orders: List[Dict[str, Any]] = []
         self.last_high_court_day: Optional[int] = None
@@ -2599,6 +2602,41 @@ class Character:
         if random.random() < 0.15: # Chance to log a more general thought
             self.add_memory(f"Mayor {self.name} spends time contemplating the settlement's long-term strategy and development.")
 
+        if hasattr(world, "get_pending_law_draft_for"):
+            pending_draft = world.get_pending_law_draft_for(self.name)
+        else:
+            pending_draft = None
+        if pending_draft and (self.current_goal.type == GoalType.OVERSEE_SETTLEMENT):
+            self.active_law_draft_id = pending_draft.get("id")
+            self.add_memory(f"Draft for {pending_draft.get('title')} awaits my seal.")
+            self.current_goal = Goal(
+                GoalType.ENACT_SETTLEMENT_LAW,
+                assignee_id=self.name,
+                originator_id=self.name,
+                parameters={"law_id": pending_draft.get("id")},
+                priority=3,
+            )
+            return
+
+        if hasattr(world, "peek_priority_law_petition"):
+            petition = world.peek_priority_law_petition()
+        else:
+            petition = None
+        if petition and petition.get("support", 0.0) >= 0.35 and self.current_goal.type == GoalType.OVERSEE_SETTLEMENT:
+            if petition.get("id") != self.active_law_petition_id:
+                self.add_memory(
+                    f"Citizens press for {petition.get('title')} (support {petition.get('support', 0.0):.0%})."
+                )
+            self.active_law_petition_id = petition.get("id")
+            self.current_goal = Goal(
+                GoalType.REVIEW_LAW_PETITIONS,
+                assignee_id=self.name,
+                originator_id=self.name,
+                parameters={"petition_id": petition.get("id")},
+                priority=3,
+            )
+            return
+
         # The Mayor's role is ongoing oversight. They don't typically "finish" this goal quickly.
         # They might stay in "Oversee Settlement" for many ticks, continuously monitoring.
         # Specific events or critical thresholds might trigger a change in their goal or actions later.
@@ -2745,6 +2783,114 @@ class Character:
                         self.add_memory(f"{current_holder.name}'s performance as {position_job_title} is deemed acceptable for now.")
         return
 
+    def _execute_review_law_petitions(self, world: 'World'):
+        if self.job != "Mayor":
+            self.current_goal = self.get_default_goal()
+            return
+
+        goal_params = self.current_goal.parameters if self.current_goal else {}
+        petition_id = goal_params.get("petition_id") or self.active_law_petition_id
+        petition = None
+        if petition_id and hasattr(world, "get_petition_by_id"):
+            petition = world.get_petition_by_id(petition_id)
+        if not petition and hasattr(world, "peek_priority_law_petition"):
+            petition = world.peek_priority_law_petition()
+
+        if not petition:
+            self.add_memory("No legal petitions require action today.")
+            self.active_law_petition_id = None
+            self.current_goal = self.get_default_goal()
+            return
+
+        support = petition.get("support", 0.0)
+        incident_count = petition.get("incident_count", 0)
+        self.active_law_petition_id = petition.get("id")
+        self.add_memory(
+            f"Reviewing '{petition.get('title')}' — support {support:.0%}, incidents {incident_count}."
+        )
+
+        should_draft = support >= max(0.4, config.LAW_INTERVIEW_SUPPORT_THRESHOLD) or incident_count >= config.LAW_PETITION_THRESHOLD + 1
+        if petition.get("status") == "drafting":
+            should_draft = True
+
+        if should_draft:
+            self.current_goal = Goal(
+                GoalType.DRAFT_SETTLEMENT_LAW,
+                assignee_id=self.name,
+                originator_id=self.name,
+                parameters={"petition_id": petition.get("id")},
+                priority=3,
+            )
+            return
+
+        if hasattr(world, "record_petition_review"):
+            world.record_petition_review(petition.get("id"), self.name, "defer")
+        self.add_memory(f"Defer action on {petition.get('title')} until more evidence arrives.")
+        self.active_law_petition_id = None
+        self.current_goal = self.get_default_goal()
+
+    def _execute_draft_settlement_law(self, world: 'World'):
+        if self.job != "Mayor":
+            self.current_goal = self.get_default_goal()
+            return
+
+        goal_params = self.current_goal.parameters if self.current_goal else {}
+        petition_id = goal_params.get("petition_id") or self.active_law_petition_id
+        if not petition_id or not hasattr(world, "draft_law_from_petition"):
+            self.current_goal = self.get_default_goal()
+            return
+
+        law_record = world.draft_law_from_petition(petition_id, self.name)
+        if not law_record:
+            self.add_memory("Struggled to turn the petition into a workable statute.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        self.active_law_draft_id = law_record.get("id")
+        penalty = law_record.get("penalty", {})
+        penalty_text = "fine" if penalty.get("type") == "fine" else penalty.get("type", "sanction")
+        amount = penalty.get("amount")
+        if amount:
+            penalty_text = f"{penalty_text} of {amount} coins"
+        self.add_memory(f"Drafted {law_record.get('title')} imposing {penalty_text}.")
+        self.current_goal = Goal(
+            GoalType.ENACT_SETTLEMENT_LAW,
+            assignee_id=self.name,
+            originator_id=self.name,
+            parameters={"law_id": law_record.get("id")},
+            priority=3,
+        )
+
+    def _execute_enact_settlement_law(self, world: 'World'):
+        if self.job != "Mayor":
+            self.current_goal = self.get_default_goal()
+            return
+
+        goal_params = self.current_goal.parameters if self.current_goal else {}
+        law_id = goal_params.get("law_id") or self.active_law_draft_id
+        if not law_id:
+            pending = world.get_pending_law_draft_for(self.name) if hasattr(world, "get_pending_law_draft_for") else None
+            if pending:
+                law_id = pending.get("id")
+        if not law_id or not hasattr(world, "enact_law"):
+            self.current_goal = self.get_default_goal()
+            return
+
+        law = world.enact_law(law_id, self.name)
+        if law:
+            penalty = law.get("penalty", {})
+            amount = penalty.get("amount")
+            if amount:
+                summary = f"penalty {amount} coins"
+            else:
+                summary = penalty.get("type", "sanctions")
+            self.add_memory(f"Enacted {law.get('title')} with {summary}.")
+        else:
+            self.add_memory("Attempted to enact a law but the draft could not be located.")
+        self.active_law_draft_id = None
+        self.active_law_petition_id = None
+        self.current_goal = self.get_default_goal()
+
     def _execute_maintain_peace(self, world: 'World'): # For Sheriff
         if self.job != "Sheriff":
             self.current_goal = self.get_default_goal()
@@ -2775,6 +2921,28 @@ class Character:
                     parameters={"crime_id": self.active_crime_assignment},
                 )
             return
+
+        if hasattr(world, "assign_investigative_interview"):
+            if self.active_interview_assignment and self.current_goal.type != GoalType.CONDUCT_WITNESS_INTERVIEW:
+                self.current_goal = Goal(
+                    GoalType.CONDUCT_WITNESS_INTERVIEW,
+                    assignee_id=self.name,
+                    originator_id=self.name,
+                    parameters={"assignment_id": self.active_interview_assignment.get("id")},
+                    priority=3,
+                )
+                return
+            assignment = world.assign_investigative_interview(self.name)
+            if assignment:
+                self.active_interview_assignment = assignment
+                self.current_goal = Goal(
+                    GoalType.CONDUCT_WITNESS_INTERVIEW,
+                    assignee_id=self.name,
+                    originator_id=self.name,
+                    parameters={"assignment_id": assignment.get("id")},
+                    priority=3,
+                )
+                return
 
         prep_case = world.get_case_to_prepare(self.name) if hasattr(world, "get_case_to_prepare") else None
         if prep_case and (
@@ -2834,6 +3002,28 @@ class Character:
                 )
             return
 
+        if hasattr(world, "assign_investigative_interview"):
+            if self.active_interview_assignment and self.current_goal.type != GoalType.CONDUCT_WITNESS_INTERVIEW:
+                self.current_goal = Goal(
+                    GoalType.CONDUCT_WITNESS_INTERVIEW,
+                    assignee_id=self.name,
+                    originator_id=self.name,
+                    parameters={"assignment_id": self.active_interview_assignment.get("id")},
+                    priority=4,
+                )
+                return
+            assignment = world.assign_investigative_interview(self.name)
+            if assignment:
+                self.active_interview_assignment = assignment
+                self.current_goal = Goal(
+                    GoalType.CONDUCT_WITNESS_INTERVIEW,
+                    assignee_id=self.name,
+                    originator_id=self.name,
+                    parameters={"assignment_id": assignment.get("id")},
+                    priority=4,
+                )
+                return
+
         incident = world.claim_next_crime(self.name) if hasattr(world, "claim_next_crime") else None
         if incident:
             self.active_crime_assignment = incident.get("id")
@@ -2866,6 +3056,48 @@ class Character:
         else:
             self.add_memory("Patrolling... observing the area.")
         return
+
+    def _execute_conduct_witness_interview(self, world: 'World'):
+        if self.job not in {"Sheriff", "Deputy"}:
+            self.current_goal = self.get_default_goal()
+            return
+
+        goal_params = self.current_goal.parameters if self.current_goal else {}
+        assignment_id = goal_params.get("assignment_id")
+        assignment = self.active_interview_assignment
+        if not assignment or assignment.get("id") != assignment_id:
+            assignment = world.get_interview_assignment_by_id(assignment_id) if hasattr(world, "get_interview_assignment_by_id") else None
+            if not assignment and hasattr(world, "assign_investigative_interview"):
+                assignment = world.assign_investigative_interview(self.name)
+            self.active_interview_assignment = assignment
+
+        if not assignment:
+            self.current_goal = self.get_default_goal()
+            return
+
+        witness_name = assignment.get("witness")
+        witness = world.get_character_by_name(witness_name) if hasattr(world, "get_character_by_name") else None
+        if witness and (self.x, self.y) != (witness.x, witness.y):
+            self.move_towards(witness.x, witness.y, world)
+            self.add_memory(f"Heading to interview {witness_name} regarding case {assignment.get('case_id')}.")
+            return
+
+        security_skill = self.skills.get("Security", {}).get("level", 0)
+        base_quality = 0.35 + 0.08 * security_skill
+        if witness:
+            relationship = self.get_relationship_score(witness.name)
+            base_quality += max(-0.1, min(0.1, relationship / 120))
+        base_quality += random.uniform(-0.1, 0.15)
+        quality = max(0.1, min(1.0, base_quality))
+        notes = f"Witness recounted events with {int(quality * 100)}% confidence."
+
+        if hasattr(world, "record_interview_result"):
+            world.record_interview_result(assignment.get("id"), self.name, quality, notes)
+
+        self.add_memory(f"Interviewed {witness_name or 'a bystander'} for case {assignment.get('case_id')}.")
+        self._grant_skill_experience("Security", 0.6, world)
+        self.active_interview_assignment = None
+        self.current_goal = self.get_default_goal()
 
     def _execute_investigate_disturbance(self, world: 'World'):
         goal_params = self.current_goal.parameters if self.current_goal else {}
@@ -3856,12 +4088,16 @@ class Character:
         elif self.current_goal.type == GoalType.MANAGE_SUBORDINATES: self._execute_manage_subordinates(world)
         elif self.current_goal.type == GoalType.MAINTAIN_LEDGER: self._execute_maintain_ledger(world)
         elif self.current_goal.type == GoalType.OVERSEE_SETTLEMENT: self._execute_oversee_settlement(world)
+        elif self.current_goal.type == GoalType.REVIEW_LAW_PETITIONS: self._execute_review_law_petitions(world)
+        elif self.current_goal.type == GoalType.DRAFT_SETTLEMENT_LAW: self._execute_draft_settlement_law(world)
+        elif self.current_goal.type == GoalType.ENACT_SETTLEMENT_LAW: self._execute_enact_settlement_law(world)
         elif self.current_goal.type == GoalType.OVERSEE_MEDICAL_OPERATIONS: self._execute_oversee_medical_operations(world)
         elif self.current_goal.type == GoalType.PROVIDE_MEDICAL_CARE: self._execute_provide_medical_care(world)
         elif self.current_goal.type == GoalType.MAINTAIN_PEACE_IN_SETTLEMENT: self._execute_maintain_peace(world)
         elif self.current_goal.type == GoalType.PATROL_AREA: self._execute_patrol_area(world)
         elif self.current_goal.type == GoalType.INVESTIGATE_DISTURBANCE: self._execute_investigate_disturbance(world)
         elif self.current_goal.type == GoalType.PREPARE_TRIAL_CASE: self._execute_prepare_trial_case(world)
+        elif self.current_goal.type == GoalType.CONDUCT_WITNESS_INTERVIEW: self._execute_conduct_witness_interview(world)
         elif self.current_goal.type == GoalType.ATTEND_TRIAL: self._execute_attend_trial(world)
         elif self.current_goal.type == GoalType.GIVE_SPEECH: self._execute_give_speech(world)
         elif self.current_goal.type == GoalType.CAMPAIGN_SPEECH: self._execute_campaign_speech(world)
