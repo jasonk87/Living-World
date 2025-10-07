@@ -1073,6 +1073,21 @@ document.addEventListener('DOMContentLoaded', () => {
             familySummary = `<p>${namesText}${remainder > 0 ? `, +${remainder} more` : ''}</p>`;
         }
 
+        const romanticPartners = Array.isArray(character.romantic_partners)
+            ? character.romantic_partners.filter(name => name && name !== character.name)
+            : [];
+        const courtingEntries = character.active_romances && typeof character.active_romances === 'object'
+            ? Object.entries(character.active_romances)
+            : [];
+        const courtingPreview = courtingEntries.slice(0, 3).map(([name, details]) => {
+            const compat = details && typeof details.compatibility === 'number'
+                ? `${Math.round(details.compatibility * 100)}%`
+                : '—';
+            return `${name} (${compat})`;
+        });
+        const partnerSummary = romanticPartners.length ? romanticPartners.join(', ') : 'None';
+        const courtingSummary = courtingPreview.length ? courtingPreview.join(', ') : 'None';
+
         const highlights = Array.isArray(character.life_highlights) ? character.life_highlights : [];
         const highlightSummary = highlights.length
             ? `<ul class="mini-list compact">${highlights.slice(-3).reverse().map(evt => {
@@ -1097,6 +1112,9 @@ document.addEventListener('DOMContentLoaded', () => {
             <hr>
             <p><strong>Family</strong></p>
             ${familySummary}
+            <p><strong>Relationships</strong></p>
+            <p>Partners: ${partnerSummary}</p>
+            <p>Courtships: ${courtingSummary}</p>
             <hr>
             <p><strong>Highlights</strong></p>
             ${highlightSummary}
@@ -1534,6 +1552,82 @@ document.addEventListener('DOMContentLoaded', () => {
             familySection.innerHTML += '<p>No registered family ties.</p>';
         }
 
+        const romanceSection = document.createElement('section');
+        romanceSection.innerHTML = '<h4>Romance & Partnerships</h4>';
+        const partners = Array.isArray(character.romantic_partners)
+            ? character.romantic_partners.filter(name => name && name !== character.name)
+            : [];
+        const courtships = character.active_romances && typeof character.active_romances === 'object'
+            ? Object.entries(character.active_romances)
+            : [];
+        const exPartners = Array.isArray(character.ex_partners)
+            ? character.ex_partners.filter(name => name && name !== character.name)
+            : [];
+        const children = Array.isArray(character.children)
+            ? character.children
+            : (Array.isArray(character.children_names) ? character.children_names : []);
+        const parents = Array.isArray(character.parents)
+            ? character.parents
+            : (Array.isArray(character.parent_names) ? character.parent_names : []);
+
+        const partnerPara = document.createElement('p');
+        partnerPara.innerHTML = `<strong>Partners:</strong> ${partners.length ? partners.join(', ') : 'None'}`;
+        romanceSection.appendChild(partnerPara);
+
+        const courtingList = document.createElement('div');
+        courtingList.classList.add('mini-note');
+        if (courtships.length) {
+            const list = document.createElement('ul');
+            list.classList.add('mini-list', 'compact');
+            courtships.forEach(([name, details]) => {
+                const li = document.createElement('li');
+                const compat = details && typeof details.compatibility === 'number'
+                    ? `${Math.round(details.compatibility * 100)}%`
+                    : '—';
+                const since = details && typeof details.since_day === 'number'
+                    ? ` • since Day ${details.since_day}`
+                    : '';
+                li.textContent = `${name} (${compat})${since}`;
+                list.appendChild(li);
+            });
+            courtingList.appendChild(list);
+        } else {
+            courtingList.textContent = 'No active courtships.';
+        }
+        romanceSection.appendChild(courtingList);
+
+        if (exPartners.length) {
+            const exPara = document.createElement('p');
+            exPara.innerHTML = `<strong>Former partners:</strong> ${exPartners.join(', ')}`;
+            romanceSection.appendChild(exPara);
+        }
+
+        if (character.marriage_history && character.marriage_history.length) {
+            const historyList = document.createElement('ul');
+            historyList.classList.add('mini-list', 'compact');
+            character.marriage_history.slice(-5).reverse().forEach(entry => {
+                const li = document.createElement('li');
+                const partnerName = entry.partner || 'Unknown';
+                const status = entry.status || 'history';
+                const dayText = typeof entry.day === 'number' ? `Day ${entry.day}` : 'Unknown day';
+                const endText = entry.ended_day !== undefined ? ` • ended Day ${entry.ended_day}` : '';
+                li.textContent = `${dayText}: ${partnerName} (${status})${endText}`;
+                historyList.appendChild(li);
+            });
+            romanceSection.appendChild(historyList);
+        }
+
+        if (children.length) {
+            const childrenPara = document.createElement('p');
+            childrenPara.innerHTML = `<strong>Children:</strong> ${children.join(', ')}`;
+            romanceSection.appendChild(childrenPara);
+        }
+        if (parents.length) {
+            const parentsPara = document.createElement('p');
+            parentsPara.innerHTML = `<strong>Parents:</strong> ${parents.join(', ')}`;
+            romanceSection.appendChild(parentsPara);
+        }
+
         const knownSection = document.createElement('section');
         knownSection.innerHTML = '<h4>Known Characters</h4>';
         if (character.known_characters && character.known_characters.length) {
@@ -1572,7 +1666,7 @@ document.addEventListener('DOMContentLoaded', () => {
         dialogueSection.innerHTML = '<h4>Recent Conversations</h4>';
         dialogueSection.appendChild(formatDialogueHistory(character.dialogue_history));
 
-        wrapper.append(familySection, knownSection, relationshipsSection, opinionsSection, dialogueSection);
+        wrapper.append(familySection, romanceSection, knownSection, relationshipsSection, opinionsSection, dialogueSection);
         return wrapper;
     }
 

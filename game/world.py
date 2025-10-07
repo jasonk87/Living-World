@@ -1035,18 +1035,93 @@ class World:
         if canonical_role == "parents":
             subject_entry["parents"].add(relative.name)
             relative_entry["children"].add(subject.name)
+            if hasattr(relative, "note_child_added"):
+                relative.note_child_added(self, subject.name)
         elif canonical_role == "children":
             subject_entry["children"].add(relative.name)
             relative_entry["parents"].add(subject.name)
+            if hasattr(subject, "note_child_added"):
+                subject.note_child_added(self, relative.name)
         elif canonical_role == "siblings":
             subject_entry["siblings"].add(relative.name)
             relative_entry["siblings"].add(subject.name)
         elif canonical_role == "partners":
             subject_entry["partners"].add(relative.name)
             relative_entry["partners"].add(subject.name)
+            if hasattr(subject, "handle_union_formed"):
+                subject.handle_union_formed(self, relative.name)
+            if hasattr(relative, "handle_union_formed"):
+                relative.handle_union_formed(self, subject.name)
         else:
             subject_entry.setdefault(canonical_role, set()).add(relative.name)
             relative_entry.setdefault(mirror_role, set()).add(subject.name)
+
+        if refresh_profiles:
+            self._rebuild_family_profiles()
+        else:
+            family_ids = {
+                self._family_lookup.get(subject.name),
+                self._family_lookup.get(relative.name),
+            }
+            for fam_id in family_ids:
+                if fam_id:
+                    self._refresh_family_lineage_for_family(fam_id)
+        return True
+
+    def deregister_family_link(
+        self,
+        subject_name: str,
+        relative_name: str,
+        relation_type: str,
+        *,
+        refresh_profiles: bool = True,
+    ) -> bool:
+        if not subject_name or not relative_name or not relation_type:
+            return False
+
+        subject = self.get_character_by_name(subject_name)
+        relative = self.get_character_by_name(relative_name)
+        if not subject or not relative:
+            return False
+
+        canonical_role = self._canonical_family_role(relation_type)
+        mirror_map = {
+            "parents": "children",
+            "children": "parents",
+            "siblings": "siblings",
+            "partners": "partners",
+            "kin": "kin",
+        }
+        mirror_role = mirror_map.get(canonical_role, canonical_role)
+
+        if relative_name in subject.family_members:
+            subject.family_members.remove(relative_name)
+        if subject.name in relative.family_members:
+            relative.family_members.remove(subject.name)
+
+        if hasattr(subject, "deregister_family_role"):
+            subject.deregister_family_role(canonical_role, relative.name)
+        if hasattr(relative, "deregister_family_role"):
+            relative.deregister_family_role(mirror_role, subject.name)
+
+        subject_entry = self._ensure_lineage_entry(subject.name)
+        relative_entry = self._ensure_lineage_entry(relative.name)
+
+        if canonical_role == "parents":
+            subject_entry["parents"].discard(relative.name)
+            relative_entry["children"].discard(subject.name)
+        elif canonical_role == "children":
+            subject_entry["children"].discard(relative.name)
+            relative_entry["parents"].discard(subject.name)
+        elif canonical_role == "siblings":
+            subject_entry["siblings"].discard(relative.name)
+            relative_entry["siblings"].discard(subject.name)
+        elif canonical_role == "partners":
+            subject_entry["partners"].discard(relative.name)
+            relative_entry["partners"].discard(subject.name)
+        else:
+            subject_entry.setdefault(canonical_role, set()).discard(relative.name)
+            relative_entry.setdefault(mirror_role, set()).discard(subject.name)
 
         if refresh_profiles:
             self._rebuild_family_profiles()
@@ -1298,7 +1373,40 @@ class World:
                     details={"partners": [partner_a.name, partner_b.name], "ceremony": ceremony_label},
                     dedupe_key=f"witnessed_union:{partner_a.name}:{partner_b.name}:{witness.name}",
                 )
+        if hasattr(partner_a, "handle_union_formed"):
+            partner_a.handle_union_formed(self, partner_b.name, ceremony=ceremony_label)
+        if hasattr(partner_b, "handle_union_formed"):
+            partner_b.handle_union_formed(self, partner_a.name, ceremony=ceremony_label)
 
+        return True
+
+    def dissolve_union(
+        self,
+        partner_one: str,
+        partner_two: str,
+        *,
+        reason: str = "grew apart",
+        divorce: bool = False,
+    ) -> bool:
+        partner_a = self.get_character_by_name(partner_one)
+        partner_b = self.get_character_by_name(partner_two)
+        if not partner_a or not partner_b:
+            return False
+
+        removed = self.deregister_family_link(partner_a.name, partner_b.name, "partner", refresh_profiles=False)
+        if not removed:
+            return False
+        self._rebuild_family_profiles()
+
+        if hasattr(partner_a, "note_romance_ended"):
+            partner_a.note_romance_ended(self, partner_b.name, reason, committed=True, divorce=divorce)
+        if hasattr(partner_b, "note_romance_ended"):
+            partner_b.note_romance_ended(self, partner_a.name, reason, committed=True, divorce=divorce)
+
+        descriptor = "divorced" if divorce else "separated"
+        self.add_event_log_message(
+            f"{partner_a.name} and {partner_b.name} {descriptor} ({reason})."
+        )
         return True
 
     def _rebuild_family_profiles(self) -> None:
@@ -5209,6 +5317,135 @@ class World:
     def get_training_snapshot(self) -> Dict[str, Any]:
         return deepcopy(self.latest_training_report)
 
+    def _initiate_romance(
+        self,
+        actor_name: str,
+        target_name: str,
+        compatibility: float,
+        impetus: str,
+    ) -> Optional[Dict[str, Any]]:
+        initiator = self.get_character_by_name(actor_name)
+        target = self.get_character_by_name(target_name)
+        if not initiator or not target:
+            return None
+        if not hasattr(initiator, "note_romance_started") or not hasattr(target, "note_romance_started"):
+            return None
+        if not initiator.is_single() or not target.is_single():
+            return None
+        initiator.note_romance_started(self, target.name, compatibility, impetus)
+        target.note_romance_started(self, initiator.name, compatibility, impetus)
+        summary = f"{initiator.name} and {target.name} began courting."
+        self.add_event_log_message(summary)
+        return {
+            "type": "romance_started",
+            "partners": [initiator.name, target.name],
+            "compatibility": round(compatibility, 3),
+            "impetus": impetus,
+            "day": self.game_time.current_day if self.game_time else None,
+        }
+
+    def _end_courtship(self, actor_name: str, partner_name: str, reason: str) -> Optional[Dict[str, Any]]:
+        actor = self.get_character_by_name(actor_name)
+        partner = self.get_character_by_name(partner_name)
+        if not actor or not partner:
+            return None
+        if partner_name not in getattr(actor, "active_romances", {}):
+            return None
+        if actor_name not in getattr(partner, "active_romances", {}):
+            return None
+        actor.note_romance_ended(self, partner_name, reason)
+        partner.note_romance_ended(self, actor_name, reason)
+        self.add_event_log_message(f"{actor.name} and {partner.name} ended their courtship ({reason}).")
+        return {
+            "type": "romance_ended",
+            "partners": [actor.name, partner.name],
+            "reason": reason,
+            "day": self.game_time.current_day if self.game_time else None,
+        }
+
+    def process_family_dynamics_daily(self) -> List[Dict[str, Any]]:
+        if not self.game_time:
+            return []
+
+        proposed_actions: List[Dict[str, Any]] = []
+        for character in self.characters:
+            if hasattr(character, "evaluate_family_daily"):
+                actions = character.evaluate_family_daily(self)
+                for action in actions or []:
+                    entry = dict(action)
+                    entry["actor"] = character.name
+                    proposed_actions.append(entry)
+
+        if not proposed_actions:
+            return []
+
+        handled: Set[Tuple[str, Tuple[str, ...]]] = set()
+        family_events: List[Dict[str, Any]] = []
+
+        for action in proposed_actions:
+            action_type = action.get("type")
+            actor = action.get("actor")
+            target = action.get("with")
+            if not action_type or not actor:
+                continue
+            if target:
+                pair_tuple = tuple(sorted((actor, target)))
+            else:
+                pair_tuple = (actor,)
+            dedupe_key = (action_type, pair_tuple)
+            if dedupe_key in handled:
+                continue
+            handled.add(dedupe_key)
+
+            if action_type == "start_romance" and target:
+                compatibility = action.get("compatibility", 0.3)
+                impetus = action.get("impetus", "chance")
+                event = self._initiate_romance(actor, target, compatibility, impetus)
+                if event:
+                    family_events.append(event)
+            elif action_type == "propose_union" and target:
+                if self.register_union(actor, target):
+                    self.add_event_log_message(f"{actor} and {target} pledged themselves together.")
+                    family_events.append(
+                        {
+                            "type": "union",
+                            "partners": [actor, target],
+                            "day": self.game_time.current_day,
+                        }
+                    )
+            elif action_type == "end_romance" and target:
+                reason = action.get("reason", "drifted apart")
+                event = self._end_courtship(actor, target, reason)
+                if event:
+                    family_events.append(event)
+            elif action_type == "dissolve_union" and target:
+                reason = action.get("reason", "grew apart")
+                divorce = bool(action.get("divorce", False))
+                success = self.dissolve_union(actor, target, reason=reason, divorce=divorce)
+                if success:
+                    family_events.append(
+                        {
+                            "type": "union_dissolved",
+                            "partners": [actor, target],
+                            "reason": reason,
+                            "divorce": divorce,
+                            "day": self.game_time.current_day,
+                        }
+                    )
+            elif action_type == "plan_child" and target:
+                child = self.record_birth(actor, other_parent=target)
+                if child:
+                    family_events.append(
+                        {
+                            "type": "new_child",
+                            "parents": [actor, target],
+                            "child": child.name,
+                            "day": self.game_time.current_day,
+                        }
+                    )
+
+        return family_events
+
     def process_workforce_daily(
         self, economy_report: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
@@ -5565,6 +5802,9 @@ class World:
         report["surplus_trades"] = list(self.today_surplus_sales)
         self.evaluate_population_dynamics(report, housing_snapshot)
         training_report = self.process_training_daily(report)
+        family_events = self.process_family_dynamics_daily()
+        if family_events:
+            report["family_events"] = family_events
 
         summary = (
             f"Economic summary — Treasury {self.treasury_coins}c "
@@ -5672,6 +5912,22 @@ class World:
                 self.add_event_log_message(
                     f"Jealousy simmers: {tension['character']} eyes {tension['target']}'s fortune (gap {tension['gap']}c)."
                 )
+        if family_events:
+            for event in family_events:
+                event_type = event.get("type")
+                if event_type == "union":
+                    partners = event.get("partners", [])
+                    if partners:
+                        self.add_event_log_message(
+                            f"Union celebrated: {' & '.join(partners)}."
+                        )
+                elif event_type == "new_child":
+                    parents = event.get("parents", [])
+                    child = event.get("child")
+                    if len(parents) == 2 and child:
+                        self.add_event_log_message(
+                            f"{parents[0]} and {parents[1]} welcome {child}."
+                        )
 
         self.last_daily_economic_report = report
         self.today_surplus_sales = []

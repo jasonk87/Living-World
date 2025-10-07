@@ -61,6 +61,18 @@ class Character:
 
         self.relationships = {} # Initialize relationships first
         self.family_roles: Dict[str, Set[str]] = {}
+        self.romantic_partners: Set[str] = set()
+        self.ex_partners: Set[str] = set()
+        self.children_names: Set[str] = set()
+        self.parent_names: Set[str] = set()
+        self.active_romances: Dict[str, Dict[str, Any]] = {}
+        self.marriage_history: List[Dict[str, Any]] = []
+        self._last_family_daily_day: Optional[int] = None
+        self._last_child_day: Optional[int] = None
+        self._romance_cooldowns: Dict[str, int] = {}
+        self._romance_attempt_window: Deque[Tuple[int, str]] = deque(maxlen=10)
+        self._last_romance_eval_day: Optional[int] = None
+        self._last_commitment_check: Optional[int] = None
         if self.family_members: # Then set family scores
             for member_name in self.family_members:
                 if member_name != self.name:
@@ -806,6 +818,16 @@ class Character:
         bucket = self.family_roles.setdefault(relation_type, set())
         bucket.add(other_name)
 
+        if relation_type == "partners":
+            self.romantic_partners.add(other_name)
+            self.ex_partners.discard(other_name)
+            if other_name in self.active_romances:
+                self.active_romances.pop(other_name, None)
+        elif relation_type == "children":
+            self.children_names.add(other_name)
+        elif relation_type == "parents":
+            self.parent_names.add(other_name)
+
         if relation_type != "kin" and "kin" in self.family_roles:
             kin_bucket = self.family_roles["kin"]
             if other_name in kin_bucket:
@@ -819,6 +841,28 @@ class Character:
             if members:
                 snapshot[role] = sorted(members)
         return snapshot
+
+    def deregister_family_role(self, relation_type: str, other_name: str) -> None:
+        bucket = self.family_roles.get(relation_type)
+        if bucket and other_name in bucket:
+            bucket.discard(other_name)
+            if not bucket:
+                self.family_roles.pop(relation_type, None)
+
+        if relation_type == "partners":
+            if other_name in self.romantic_partners:
+                self.romantic_partners.discard(other_name)
+            self.ex_partners.add(other_name)
+        elif relation_type == "children":
+            self.children_names.discard(other_name)
+        elif relation_type == "parents":
+            self.parent_names.discard(other_name)
+
+        if relation_type != "kin":
+            kin_bucket = self.family_roles.setdefault("kin", set())
+            if other_name in kin_bucket:
+                return
+            kin_bucket.add(other_name)
 
     def receive_family_event(
         self,
@@ -898,6 +942,450 @@ class Character:
         if limit is not None and limit > 0:
             history = history[-limit:]
         return history
+
+    def get_romantic_partners(self) -> List[str]:
+        return sorted(self.romantic_partners)
+
+    def get_children(self) -> List[str]:
+        return sorted(self.children_names)
+
+    def get_parents(self) -> List[str]:
+        return sorted(self.parent_names)
+
+    def get_active_romances_snapshot(self) -> Dict[str, Dict[str, Any]]:
+        return {name: deepcopy(data) for name, data in self.active_romances.items()}
+
+    def is_single(self) -> bool:
+        return not self.romantic_partners and not self.active_romances
+
+    def note_romance_started(
+        self,
+        world: Optional['World'],
+        partner_name: str,
+        compatibility: float,
+        impetus: str,
+    ) -> None:
+        record: Dict[str, Any] = {
+            "status": "courting",
+            "compatibility": round(max(0.0, min(1.0, compatibility)), 3),
+            "impetus": impetus,
+        }
+        day = None
+        if world and world.game_time:
+            day = world.game_time.current_day
+        if day is not None:
+            record["since_day"] = day
+        self.active_romances[partner_name] = record
+        self._romance_cooldowns.pop(partner_name, None)
+        if day is not None:
+            self._romance_attempt_window.append((day, partner_name))
+        if hasattr(self, "record_life_event"):
+            summary = f"Began courting {partner_name}."
+            self.record_life_event(
+                world,
+                "romance_started",
+                summary,
+                related=[partner_name],
+                tags=["family", "relationship"],
+                significance=2,
+                propagate_to_family=True,
+                details={"partner": partner_name, "compatibility": record["compatibility"], "impetus": impetus},
+                dedupe_key=f"romance_started:{self.name}:{partner_name}:{day}",
+            )
+
+    def note_romance_ended(
+        self,
+        world: Optional['World'],
+        partner_name: str,
+        reason: str,
+        *,
+        committed: bool = False,
+        divorce: bool = False,
+    ) -> None:
+        if partner_name in self.active_romances:
+            self.active_romances.pop(partner_name, None)
+        if committed:
+            self.handle_union_dissolved(partner_name, world, reason, divorce=divorce)
+            return
+
+        cooldown_days = random.randint(4, 8)
+        self._romance_cooldowns[partner_name] = cooldown_days
+        self.ex_partners.add(partner_name)
+        if hasattr(self, "record_life_event"):
+            summary = f"Romance with {partner_name} ended ({reason})."
+            self.record_life_event(
+                world,
+                "romance_ended",
+                summary,
+                related=[partner_name],
+                tags=["family", "relationship", "breakup"],
+                significance=2,
+                propagate_to_family=True,
+                details={"partner": partner_name, "reason": reason},
+                dedupe_key=f"romance_ended:{self.name}:{partner_name}:{reason}",
+            )
+
+    def handle_union_formed(
+        self,
+        world: Optional['World'],
+        partner_name: str,
+        *,
+        ceremony: Optional[str] = None,
+    ) -> None:
+        day = None
+        if world and world.game_time:
+            day = world.game_time.current_day
+        self.romantic_partners.add(partner_name)
+        self.ex_partners.discard(partner_name)
+        if partner_name in self.active_romances:
+            self.active_romances.pop(partner_name, None)
+        self._romance_cooldowns.pop(partner_name, None)
+        self._last_commitment_check = day
+        active_entry: Optional[Dict[str, Any]] = None
+        for entry in reversed(self.marriage_history):
+            if entry.get("partner") == partner_name and entry.get("status") == "active":
+                active_entry = entry
+                break
+        if active_entry:
+            if day is not None and "day" not in active_entry:
+                active_entry["day"] = day
+            if ceremony:
+                active_entry["ceremony"] = ceremony
+        else:
+            entry: Dict[str, Any] = {
+                "partner": partner_name,
+                "status": "active",
+            }
+            if day is not None:
+                entry["day"] = day
+            if ceremony:
+                entry["ceremony"] = ceremony
+            self.marriage_history.append(entry)
+        max_entries = getattr(config, "MARRIAGE_HISTORY_MAX", 24)
+        if len(self.marriage_history) > max_entries:
+            self.marriage_history = self.marriage_history[-max_entries:]
+
+    def handle_union_dissolved(
+        self,
+        partner_name: str,
+        world: Optional['World'],
+        reason: str,
+        *,
+        divorce: bool = False,
+    ) -> None:
+        if partner_name in self.romantic_partners:
+            self.romantic_partners.discard(partner_name)
+        self.ex_partners.add(partner_name)
+        cooldown_days = random.randint(9, 16)
+        self._romance_cooldowns[partner_name] = cooldown_days
+        day = None
+        if world and world.game_time:
+            day = world.game_time.current_day
+        for entry in reversed(self.marriage_history):
+            if entry.get("partner") == partner_name and entry.get("status") == "active":
+                entry["status"] = "ended"
+                if day is not None:
+                    entry["ended_day"] = day
+                entry["reason"] = reason
+                entry["divorce"] = divorce
+                break
+        if hasattr(self, "record_life_event"):
+            event_type = "divorce" if divorce else "union_ended"
+            summary = f"Divorced {partner_name} ({reason})." if divorce else f"Separated from {partner_name} ({reason})."
+            self.record_life_event(
+                world,
+                event_type,
+                summary,
+                related=[partner_name],
+                tags=["family", "relationship", "breakup"],
+                significance=4 if divorce else 3,
+                propagate_to_family=True,
+                details={"partner": partner_name, "reason": reason, "divorce": divorce},
+                dedupe_key=f"union_end:{self.name}:{partner_name}:{event_type}",
+            )
+
+    def note_child_added(self, world: Optional['World'], child_name: str) -> None:
+        self.children_names.add(child_name)
+        if world and world.game_time:
+            self._last_child_day = world.game_time.current_day
+
+    def _romance_interest_chance(self) -> float:
+        base = getattr(config, "ROMANCE_DAILY_BASE_CHANCE", 0.08)
+        modifier = 0.0
+        modifier += getattr(config, "ROMANCE_PERSONALITY_INCLINATIONS", {}).get(self.personality, 0.0)
+        for trait in self.traits:
+            modifier += getattr(config, "ROMANCE_TRAIT_INFLUENCES", {}).get(trait, 0.0)
+        belonging = self.needs.get("Belonging", 0)
+        if belonging < 35:
+            modifier += 0.12
+        elif belonging > 80:
+            modifier -= 0.05
+        mood_score = getattr(self, "mood_score", 0)
+        if mood_score < -20:
+            modifier -= 0.05
+        elif mood_score > 35:
+            modifier += 0.03
+        satisfaction = getattr(self, "job_satisfaction", 0.6)
+        if satisfaction >= 0.8:
+            modifier += 0.03
+        elif satisfaction < 0.35:
+            modifier -= 0.05
+        if self.active_romances:
+            modifier -= 0.08 * len(self.active_romances)
+        return max(0.0, min(0.85, base + modifier))
+
+    def _romantic_compatibility(self, other: Optional['Character']) -> float:
+        if not other:
+            return 0.0
+        relationship_score = self.get_relationship_score(other.name)
+        other_relationship = other.get_relationship_score(self.name)
+        normalized = (relationship_score + other_relationship) / (2 * max(1, config.RELATIONSHIP_SCORE_MAX))
+        normalized = max(-1.0, min(1.0, normalized))
+        compatibility = 0.3 + (normalized * 0.4)
+        if self.personality == other.personality:
+            compatibility += 0.1
+        personality_pair = {self.personality, other.personality}
+        if personality_pair == {"Romantic", "Dreamer"}:
+            compatibility += 0.08
+        elif personality_pair == {"Stoic", "Cheerful"}:
+            compatibility += 0.04
+        elif personality_pair == {"Stoic", "Stoic"}:
+            compatibility -= 0.05
+        shared_traits = set(self.traits) & set(other.traits)
+        compatibility += 0.05 * len(shared_traits & {"Affectionate", "Loyal", "Generous", "Patient"})
+        compatibility += 0.02 * len(shared_traits)
+        if "Jealous" in self.traits and "Charming" in other.traits:
+            compatibility -= 0.05
+        if "Cold" in self.traits or "Cold" in other.traits:
+            compatibility -= 0.08
+        wealth_gap = abs(getattr(self, "net_worth", 0) - getattr(other, "net_worth", 0))
+        if wealth_gap > 400:
+            compatibility -= 0.05
+        elif wealth_gap < 75:
+            compatibility += 0.03
+        compatibility = max(0.0, min(1.0, compatibility))
+        return compatibility
+
+    def _child_desire_score(self, partner: 'Character') -> float:
+        base = getattr(config, "FAMILY_CHILD_DESIRE_BASE", 0.12)
+        personality_bonus = getattr(config, "FAMILY_CHILD_PERSONALITY_BONUS", {})
+        trait_bonus = getattr(config, "FAMILY_CHILD_TRAIT_BONUS", {})
+        base += personality_bonus.get(self.personality, 0.0)
+        base += personality_bonus.get(getattr(partner, "personality", ""), 0.0)
+        for trait in self.traits:
+            base += trait_bonus.get(trait, 0.0)
+        for trait in getattr(partner, "traits", []):
+            base += trait_bonus.get(trait, 0.0)
+        belonging = min(self.needs.get("Belonging", 0), partner.needs.get("Belonging", 0))
+        threshold = getattr(config, "FAMILY_CHILD_MIN_BELONGING", 55)
+        if belonging < threshold:
+            base -= 0.3
+        wealth_total = getattr(self, "net_worth", 0) + getattr(partner, "net_worth", 0)
+        if wealth_total > 500:
+            base += 0.05
+        elif wealth_total < 60:
+            base -= 0.05
+        if getattr(self, "retired", False) or getattr(partner, "retired", False):
+            base -= 0.05
+        return max(0.0, min(0.9, base))
+
+    def _can_plan_child_with(self, partner: 'Character', world: 'World', day: int) -> bool:
+        min_age = getattr(config, "FAMILY_CHILD_MIN_AGE", 18)
+        max_age = getattr(config, "FAMILY_CHILD_MAX_AGE", 45)
+        my_age = getattr(self, "age_years", min_age)
+        partner_age = getattr(partner, "age_years", min_age)
+        if not (min_age <= my_age <= max_age):
+            return False
+        if not (min_age <= partner_age <= max_age):
+            return False
+        cooldown = getattr(config, "FAMILY_CHILD_COOLDOWN_DAYS", 18)
+        if self._last_child_day is not None and day - self._last_child_day < cooldown:
+            return False
+        if getattr(partner, "_last_child_day", None) is not None and day - partner._last_child_day < cooldown:
+            return False
+        if getattr(self, "is_sick", False) or getattr(self, "is_injured", False):
+            return False
+        if getattr(partner, "is_sick", False) or getattr(partner, "is_injured", False):
+            return False
+        housing_requirement = getattr(config, "FAMILY_CHILD_HOUSING_REQUIREMENT", 0)
+        if housing_requirement:
+            has_home = bool(self.home_location or partner.home_location)
+            if not has_home:
+                return False
+        if self.get_relationship_score(partner.name) < getattr(config, "ROMANCE_RELATIONSHIP_THRESHOLD_TO_COMMIT", 55) // 2:
+            return False
+        if partner.get_relationship_score(self.name) < getattr(config, "ROMANCE_RELATIONSHIP_THRESHOLD_TO_COMMIT", 55) // 2:
+            return False
+        return True
+
+    def _should_plan_child(self, world: 'World', partner: 'Character', day: int) -> bool:
+        if not self._can_plan_child_with(partner, world, day):
+            return False
+        desire = self._child_desire_score(partner)
+        return random.random() < desire
+
+    def _select_romance_candidate(self, world: 'World') -> Optional['Character']:
+        candidates: List['Character'] = []
+        threshold = getattr(config, "ROMANCE_RELATIONSHIP_THRESHOLD_TO_DATE", 25)
+        for other in world.characters:
+            if other is self:
+                continue
+            if other.name in self.romantic_partners or self.name in other.romantic_partners:
+                continue
+            if other.name in self.active_romances or self.name in other.active_romances:
+                continue
+            if other._romance_cooldowns.get(self.name):
+                continue
+            if self._romance_cooldowns.get(other.name):
+                continue
+            if other.romantic_partners:
+                continue
+            rel = self.get_relationship_score(other.name)
+            other_rel = other.get_relationship_score(self.name)
+            if rel < threshold or other_rel < threshold:
+                continue
+            candidates.append(other)
+        if not candidates:
+            return None
+        sample = random.sample(candidates, min(len(candidates), 5))
+        scored = sorted(sample, key=lambda candidate: self._romantic_compatibility(candidate), reverse=True)
+        for candidate in scored:
+            compatibility = self._romantic_compatibility(candidate)
+            if compatibility >= 0.2:
+                return candidate
+        return None
+
+    def evaluate_family_daily(self, world: 'World') -> List[Dict[str, Any]]:
+        if not world or not world.game_time:
+            return []
+        day = world.game_time.current_day
+        if self._last_family_daily_day == day:
+            return []
+        self._last_family_daily_day = day
+
+        for name in list(self._romance_cooldowns.keys()):
+            self._romance_cooldowns[name] -= 1
+            if self._romance_cooldowns[name] <= 0:
+                self._romance_cooldowns.pop(name, None)
+
+        actions: List[Dict[str, Any]] = []
+
+        for partner_name, romance in list(self.active_romances.items()):
+            if partner_name < self.name:
+                continue
+            other = world.get_character_by_name(partner_name)
+            if not other:
+                actions.append({
+                    "type": "end_romance",
+                    "with": partner_name,
+                    "reason": "lost contact",
+                })
+                continue
+            if self.name not in other.active_romances:
+                actions.append({
+                    "type": "end_romance",
+                    "with": partner_name,
+                    "reason": "fell out of touch",
+                })
+                continue
+            rel = self.get_relationship_score(partner_name)
+            other_rel = other.get_relationship_score(self.name)
+            if rel < getattr(config, "ROMANCE_BREAKUP_REL_THRESHOLD", -20) or other_rel < getattr(config, "ROMANCE_BREAKUP_REL_THRESHOLD", -20):
+                actions.append({
+                    "type": "end_romance",
+                    "with": partner_name,
+                    "reason": "growing distant",
+                })
+                continue
+            compatibility = romance.get("compatibility")
+            if compatibility is None:
+                compatibility = self._romantic_compatibility(other)
+            since_day = romance.get("since_day")
+            days_together = day - since_day if since_day is not None else 0
+            commit_threshold = getattr(config, "ROMANCE_RELATIONSHIP_THRESHOLD_TO_COMMIT", 55)
+            if (
+                rel >= commit_threshold
+                and other_rel >= commit_threshold
+                and days_together >= getattr(config, "ROMANCE_MIN_DAYS_BEFORE_UNION", 6)
+            ):
+                commit_chance = 0.15 + compatibility
+                commit_chance += getattr(config, "ROMANCE_COMMITMENT_PERSONALITY_MODIFIERS", {}).get(self.personality, 0.0)
+                commit_chance += getattr(config, "ROMANCE_COMMITMENT_PERSONALITY_MODIFIERS", {}).get(other.personality, 0.0)
+                commit_chance = max(0.05, min(0.85, commit_chance))
+                if random.random() < commit_chance:
+                    actions.append({
+                        "type": "propose_union",
+                        "with": partner_name,
+                        "compatibility": compatibility,
+                    })
+                    continue
+            if compatibility < 0.22 and random.random() < 0.05:
+                actions.append({
+                    "type": "end_romance",
+                    "with": partner_name,
+                    "reason": "low spark",
+                })
+
+        for partner_name in sorted(self.romantic_partners):
+            if partner_name < self.name:
+                continue
+            other = world.get_character_by_name(partner_name)
+            if not other:
+                actions.append({
+                    "type": "dissolve_union",
+                    "with": partner_name,
+                    "reason": "bereavement",
+                    "divorce": False,
+                })
+                continue
+            rel = self.get_relationship_score(partner_name)
+            other_rel = other.get_relationship_score(self.name)
+            if (
+                rel <= getattr(config, "ROMANCE_DIVORCE_REL_THRESHOLD", -45)
+                or other_rel <= getattr(config, "ROMANCE_DIVORCE_REL_THRESHOLD", -45)
+            ):
+                chance = getattr(config, "ROMANCE_DIVORCE_BASE_CHANCE", 0.06)
+                for trait in self.traits:
+                    chance += getattr(config, "ROMANCE_DIVORCE_TRAIT_BONUS", {}).get(trait, 0.0)
+                for trait in other.traits:
+                    chance += getattr(config, "ROMANCE_DIVORCE_TRAIT_BONUS", {}).get(trait, 0.0)
+                chance = max(0.02, min(0.9, chance))
+                if random.random() < chance:
+                    actions.append({
+                        "type": "dissolve_union",
+                        "with": partner_name,
+                        "reason": "irreconcilable differences",
+                        "divorce": True,
+                    })
+                    continue
+            if rel < getattr(config, "ROMANCE_BREAKUP_REL_THRESHOLD", -20) and random.random() < getattr(config, "ROMANCE_BREAKUP_BASE_CHANCE", 0.04):
+                actions.append({
+                    "type": "dissolve_union",
+                    "with": partner_name,
+                    "reason": "grew apart",
+                    "divorce": False,
+                })
+                continue
+            if self.name < partner_name and self._should_plan_child(world, other, day):
+                actions.append({
+                    "type": "plan_child",
+                    "with": partner_name,
+                })
+
+        if self.is_single():
+            interest = self._romance_interest_chance()
+            if random.random() < interest:
+                candidate = self._select_romance_candidate(world)
+                if candidate and self.name < candidate.name:
+                    compatibility = self._romantic_compatibility(candidate)
+                    actions.append({
+                        "type": "start_romance",
+                        "with": candidate.name,
+                        "compatibility": compatibility,
+                        "impetus": self.personality or "Chance",
+                    })
+
+        return actions
 
     def receive_cultural_event_boost(self, event_data: Dict[str, Any], world: 'World') -> None:
         """Apply morale and need adjustments when the settlement hosts a cultural event."""

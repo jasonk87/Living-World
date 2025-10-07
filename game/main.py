@@ -19,6 +19,7 @@ from game import config
 import random
 import curses # Keep for now, might be used by main_simulation_logic
 from typing import Optional, Dict, Any, List
+from copy import deepcopy
 
 import http.server
 import socketserver
@@ -407,6 +408,12 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                             "origin": getattr(char, 'origin', None),
                             "citizenship": getattr(char, 'citizenship_status', 'Resident'),
                             "family_members": list(getattr(char, 'family_members', [])),
+                            "romantic_partners": char.get_romantic_partners() if hasattr(char, 'get_romantic_partners') else list(getattr(char, 'romantic_partners', [])),
+                            "active_romances": char.get_active_romances_snapshot() if hasattr(char, 'get_active_romances_snapshot') else {},
+                            "ex_partners": sorted(list(getattr(char, 'ex_partners', []))),
+                            "children": char.get_children() if hasattr(char, 'get_children') else sorted(list(getattr(char, 'children_names', []))),
+                            "parents": char.get_parents() if hasattr(char, 'get_parents') else sorted(list(getattr(char, 'parent_names', []))),
+                            "marriage_history": deepcopy(getattr(char, 'marriage_history', [])),
                             "life_highlights": char.get_life_highlights(limit=3) if hasattr(char, 'get_life_highlights') else [],
                             "career_stage": getattr(char, 'career_stage', None),
                             "job_satisfaction": getattr(char, 'job_satisfaction', None),

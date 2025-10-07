@@ -731,6 +731,66 @@ RELATIONSHIP_SCORE_MAX = 100
 RELATIONSHIP_SCORE_NEUTRAL_START = 0
 RELATIONSHIP_SCORE_FAMILY_BASE = 50 # Family members start with a significant positive bias
 
+# Romance & Household Dynamics
+ROMANCE_DAILY_BASE_CHANCE = 0.08  # Base chance a single citizen seeks romance on a given day
+ROMANCE_PERSONALITY_INCLINATIONS = {
+    "Romantic": 0.35,
+    "Dreamer": 0.2,
+    "Stoic": -0.2,
+    "Pragmatic": -0.05,
+    "Cheerful": 0.1,
+    "Gloomy": -0.15,
+    "Ambitious": -0.05,
+}
+ROMANCE_TRAIT_INFLUENCES = {
+    "Affectionate": 0.25,
+    "Charming": 0.2,
+    "Jealous": -0.1,
+    "Cold": -0.25,
+    "Loyal": 0.1,
+    "Impulsive": 0.15,
+    "Brooding": -0.1,
+}
+ROMANCE_RELATIONSHIP_THRESHOLD_TO_DATE = 25
+ROMANCE_RELATIONSHIP_THRESHOLD_TO_COMMIT = 55
+ROMANCE_MIN_DAYS_BEFORE_UNION = 6
+ROMANCE_COMMITMENT_PERSONALITY_MODIFIERS = {
+    "Pragmatic": 0.1,
+    "Romantic": 0.2,
+    "Stoic": -0.2,
+    "Impulsive": 0.15,
+    "Loyal": 0.15,
+    "Ambitious": -0.05,
+}
+ROMANCE_BREAKUP_REL_THRESHOLD = -20
+ROMANCE_BREAKUP_BASE_CHANCE = 0.04
+ROMANCE_DIVORCE_REL_THRESHOLD = -45
+ROMANCE_DIVORCE_BASE_CHANCE = 0.06
+ROMANCE_DIVORCE_TRAIT_BONUS = {
+    "Jealous": 0.05,
+    "Impulsive": 0.04,
+    "Loyal": -0.05,
+    "Patient": -0.05,
+}
+FAMILY_CHILD_DESIRE_BASE = 0.12
+FAMILY_CHILD_PERSONALITY_BONUS = {
+    "Nurturing": 0.25,
+    "Cheerful": 0.1,
+    "Stoic": -0.1,
+    "Ambitious": -0.05,
+}
+FAMILY_CHILD_TRAIT_BONUS = {
+    "Family-Oriented": 0.3,
+    "Jealous": -0.05,
+    "Selfish": -0.1,
+    "Generous": 0.05,
+}
+FAMILY_CHILD_MIN_AGE = 18
+FAMILY_CHILD_MAX_AGE = 45
+FAMILY_CHILD_MIN_BELONGING = 55
+FAMILY_CHILD_COOLDOWN_DAYS = 18
+FAMILY_CHILD_HOUSING_REQUIREMENT = 1
+
 # Reputation System Configs (Basic)
 REPUTATION_SCORE_MIN = -100
 REPUTATION_SCORE_MAX = 100

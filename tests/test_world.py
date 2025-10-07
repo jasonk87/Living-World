@@ -845,3 +845,70 @@ def test_interview_result_boosts_case_evidence():
 
     assert updated["evidence_strength"] > base_strength
     assert updated["interview_statements"]
+
+
+def test_dissolve_union_tracks_ex_partners():
+    world, _ = _make_world()
+    alice = Character(
+        name="Alice",
+        personality="Romantic",
+        traits=["Affectionate"],
+        skills={},
+        job="Tailor",
+        needs=_standard_needs(),
+    )
+    borin = Character(
+        name="Borin",
+        personality="Stoic",
+        traits=["Loyal"],
+        skills={},
+        job="Smith",
+        needs=_standard_needs(),
+    )
+    world.add_character(alice)
+    world.add_character(borin)
+
+    assert world.register_union(alice.name, borin.name)
+    assert borin.name in alice.romantic_partners
+    assert alice.name in borin.romantic_partners
+
+    world.dissolve_union(alice.name, borin.name, reason="irreconcilable", divorce=True)
+
+    assert borin.name not in alice.get_romantic_partners()
+    assert alice.name not in borin.get_romantic_partners()
+    assert borin.name in alice.ex_partners
+    assert alice.name in borin.ex_partners
+    assert not alice.family_roles.get("partners")
+    assert not borin.family_roles.get("partners")
+
+
+def test_process_family_dynamics_starts_romance():
+    world, _ = _make_world()
+    aisling = Character(
+        name="Aisling",
+        personality="Romantic",
+        traits=["Charming"],
+        skills={},
+        job="Baker",
+        needs=_standard_needs(),
+    )
+    borin = Character(
+        name="Borin",
+        personality="Dreamer",
+        traits=["Loyal"],
+        skills={},
+        job="Farmer",
+        needs=_standard_needs(),
+    )
+    world.add_character(aisling)
+    world.add_character(borin)
+
+    aisling.relationships[borin.name] = 80
+    borin.relationships[aisling.name] = 78
+
+    with patch("random.random", return_value=0.0):
+        family_events = world.process_family_dynamics_daily()
+
+    assert any(event.get("type") == "romance_started" for event in family_events)
+    assert borin.name in aisling.active_romances
+    assert aisling.name in borin.active_romances
