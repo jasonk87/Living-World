@@ -162,6 +162,8 @@ def tick_simulation():
                 game_world.manage_campaigns()
             if hasattr(game_world, "manage_economy"):
                 game_world.manage_economy()
+            if hasattr(game_world, "process_governance_daily"):
+                game_world.process_governance_daily()
             if hasattr(game_world, "process_daily_economy"):
                 game_world.process_daily_economy()
 
@@ -176,6 +178,12 @@ def tick_simulation():
             # Daily rumor update
             if hasattr(game_world, 'update_rumors_daily'):
                 game_world.update_rumors_daily()
+
+            if hasattr(game_world, 'process_legal_system_daily'):
+                game_world.process_legal_system_daily()
+
+            if hasattr(game_world, 'process_healthcare_daily'):
+                game_world.process_healthcare_daily()
 
 
             # Daily needs update and goal reset for idle characters
@@ -395,6 +403,8 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                             "inventory": getattr(char, 'inventory', {}),
                             "age": getattr(char, 'age_years', None),
                             "citizenship": getattr(char, 'citizenship_status', 'Resident'),
+                            "life_highlights": char.get_life_highlights(limit=3) if hasattr(char, 'get_life_highlights') else [],
+                            "family_profile": game_world.get_family_profile_for_character(char.name) if hasattr(game_world, 'get_family_profile_for_character') else None,
                         })
 
                 event_log_repr = game_world.event_log[-20:] if game_world else []
@@ -447,6 +457,10 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "resource_pressures": game_world.identify_resource_pressures() if hasattr(game_world, 'identify_resource_pressures') else [],
                     "crime_reports": getattr(game_world, 'crime_reports', []),
                     "pending_crimes": getattr(game_world, 'pending_crimes', []),
+                    "legal_cases": game_world.get_public_trial_snapshot() if hasattr(game_world, 'get_public_trial_snapshot') else [],
+                    "medical_queue": game_world.get_medical_queue_snapshot() if hasattr(game_world, 'get_medical_queue_snapshot') else [],
+                    "clinic_supply_requests": game_world.get_clinic_supply_requests() if hasattr(game_world, 'get_clinic_supply_requests') else [],
+                    "healthcare_report": getattr(game_world, 'latest_healthcare_report', {}),
                     "campaign_promises": getattr(game_world, 'campaign_promises', {}),
                     "environment_effects": game_world.get_environment_snapshot() if hasattr(game_world, 'get_environment_snapshot') else {},
                     "rumors": game_world.get_rumor_digest() if hasattr(game_world, 'get_rumor_digest') else [],
@@ -456,6 +470,10 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "resource_nodes": game_world.get_resource_nodes_snapshot() if hasattr(game_world, 'get_resource_nodes_snapshot') else [],
                     "population": getattr(game_world, 'population_stats', {}),
                     "cultural": game_world.get_cultural_snapshot() if hasattr(game_world, 'get_cultural_snapshot') else {},
+                    "training": game_world.get_training_snapshot() if hasattr(game_world, 'get_training_snapshot') else {},
+                    "workforce": game_world.get_workforce_snapshot() if hasattr(game_world, 'get_workforce_snapshot') else {},
+                    "families": game_world.get_family_snapshot() if hasattr(game_world, 'get_family_snapshot') else {},
+                    "governance": game_world.get_governance_snapshot() if hasattr(game_world, 'get_governance_snapshot') else {},
                 }
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
@@ -566,7 +584,10 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "known_characters": getattr(character, 'known_characters', []),
                     "relationships": getattr(character, 'relationships', {}),
                     "opinions": getattr(character, 'opinions', {}), # Added opinions
-                    "dialogue_history": getattr(character, 'dialogue_history', [])[-10:] # Last 10 dialogue entries
+                    "dialogue_history": getattr(character, 'dialogue_history', [])[-10:], # Last 10 dialogue entries
+                    "life_history": character.export_life_history(limit=20) if hasattr(character, 'export_life_history') else [],
+                    "life_highlights": character.get_life_highlights(limit=6) if hasattr(character, 'get_life_highlights') else [],
+                    "family_profile": game_world.get_family_profile_for_character(character.name) if hasattr(game_world, 'get_family_profile_for_character') else None,
                 }
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
@@ -656,7 +677,9 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
             super().do_GET()
 
 # --- Main Execution ---
-if __name__ == "__main__":
+def run_server(port: int = PORT) -> None:
+    """Start the simulation loop and HTTP server on the requested port."""
+
     initialize_game_world()
 
     sim_thread = threading.Thread(target=simulation_thread_func, daemon=True)
@@ -664,20 +687,22 @@ if __name__ == "__main__":
 
     httpd = None
     ui_dir = os.path.join(project_root, "ui")
+
     class Handler(GameDataHandler):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, directory=ui_dir, **kwargs)
 
     try:
-        with socketserver.TCPServer(("", PORT), Handler) as httpd:
-            print(f"Serving HTTP on port {PORT} from '{ui_dir}'...")
-            print(f"Game simulation running in background. Access UI at http://localhost:{PORT}/")
+        with socketserver.TCPServer(("", port), Handler) as httpd:
+            print(f"Serving HTTP on port {port} from '{ui_dir}'...")
+            print(f"Game simulation running in background. Access UI at http://localhost:{port}/")
             print("Press Ctrl+C to stop server and simulation.")
-            trigger_initial_ui_fetch(PORT)
+            trigger_initial_ui_fetch(port)
             httpd.serve_forever()
     except KeyboardInterrupt:
         print("\nCtrl+C received. Shutting down server and simulation...")
     finally:
+        global simulation_running
         simulation_running = False # Signal simulation thread to stop
         if httpd:
             httpd.shutdown() # Stop the HTTP server
@@ -686,3 +711,7 @@ if __name__ == "__main__":
             sim_thread.join() # Wait for simulation thread to finish
 
     print("Exited gracefully.")
+
+
+if __name__ == "__main__":
+    run_server()

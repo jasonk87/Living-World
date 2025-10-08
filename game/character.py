@@ -1,6 +1,7 @@
 # game/character.py
 from collections import deque
-from typing import TYPE_CHECKING, Optional, Dict, List, Tuple, Any, Set, Deque
+from copy import deepcopy
+from typing import TYPE_CHECKING, Optional, Dict, List, Tuple, Any, Set, Deque, Union, Iterable
 import random
 from .llm_integration import generate_dialogue # Kept as it's used
 # from .stockpile import Stockpile # Not directly used by Character methods
@@ -50,10 +51,13 @@ class Character:
         self.job = job
 
         self.relationships = {} # Initialize relationships first
+        self.family_roles: Dict[str, Set[str]] = {}
         if self.family_members: # Then set family scores
             for member_name in self.family_members:
                 if member_name != self.name:
                     self.relationships[member_name] = config.RELATIONSHIP_SCORE_FAMILY_BASE
+                    kin_set = self.family_roles.setdefault("kin", set())
+                    kin_set.add(member_name)
 
         # Initialize current_goal with a Goal object
         if current_goal_obj:
@@ -99,6 +103,9 @@ class Character:
         self._mc_item_check_idx: int = 0
         self.active_crime_assignment: Optional[str] = None
         self.crime_investigation_focus: Optional[Dict[str, Any]] = None
+        self.active_interview_assignment: Optional[Dict[str, Any]] = None
+        self.active_law_petition_id: Optional[str] = None
+        self.active_law_draft_id: Optional[str] = None
         self.last_estate_review_day: Optional[int] = None
         self.active_estate_orders: List[Dict[str, Any]] = []
         self.last_high_court_day: Optional[int] = None
@@ -115,6 +122,8 @@ class Character:
         self.known_characters: List[str] = []
         self.opinions: Dict[str, Dict[str, int]] = {}
         self.dialogue_history: List[Dict[str, Any]] = []
+        self.life_history: List[Dict[str, Any]] = []
+        self._life_event_flags: Set[str] = set()
         self.known_events: List[str] = []
 
         self.age_years: int = age if age is not None else random.randint(18, 45)
@@ -260,6 +269,44 @@ class Character:
         # Add experience (consider learning rate modifiers later if re-adding status effects)
         self.skills[skill_name]["experience"] += amount
         self._check_skill_level_up(skill_name, world)
+
+    def participate_in_training(
+        self,
+        program_name: str,
+        skill_name: str,
+        experience_gain: float,
+        world: 'World',
+    ) -> Dict[str, Union[int, float]]:
+        """Apply structured training progress and return before/after metrics."""
+
+        skill_record = self.skills.get(skill_name)
+        before_level = skill_record["level"] if skill_record else 0
+        before_experience = skill_record["experience"] if skill_record else 0.0
+
+        self._grant_skill_experience(skill_name, experience_gain, world)
+
+        updated_record = self.skills.get(skill_name, {})
+        after_level = updated_record.get("level", before_level)
+        after_experience = updated_record.get("experience", before_experience)
+
+        esteem_default = getattr(config, "NEED_ESTEEM_DEFAULT", 50)
+        esteem_cap = getattr(config, "NEED_SCORE_MAX", 100)
+        esteem_boost = getattr(config, "TRAINING_ESTEEM_BOOST", 0)
+        if esteem_boost:
+            current_esteem = self.needs.get("Esteem", esteem_default)
+            self.needs["Esteem"] = min(esteem_cap, current_esteem + esteem_boost)
+
+        self.add_memory(
+            f"Attended {program_name} to hone {skill_name}. "
+            f"Level {before_level}→{after_level}."
+        )
+
+        return {
+            "level_before": before_level,
+            "level_after": after_level,
+            "experience_before": before_experience,
+            "experience_after": after_experience,
+        }
 
     def _check_skill_level_up(self, skill_name: str, world: 'World'):
         if skill_name not in self.skills:
@@ -636,6 +683,175 @@ class Character:
     def remove_subordinate(self, s: str): self.subordinates_names.remove(s) if s in self.subordinates_names else None
     def get_inventory_load(self) -> int: return sum(self.inventory.values())
     def add_memory(self, e: str): self.memory.append(e); self.memory=self.memory[-20:]
+
+    def record_life_event(
+        self,
+        world: Optional['World'],
+        event_type: str,
+        summary: str,
+        *,
+        related: Optional[Iterable[str]] = None,
+        tags: Optional[Iterable[str]] = None,
+        significance: int = 1,
+        propagate_to_family: bool = False,
+        details: Optional[Dict[str, Any]] = None,
+        dedupe_key: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Append a structured life event to the character's personal chronicle."""
+
+        related_list: List[str] = []
+        if related:
+            if isinstance(related, (list, tuple, set)):
+                related_list = [str(item) for item in related if item]
+            else:
+                related_list = [str(related)]
+
+        tags_list: List[str] = []
+        if tags:
+            if isinstance(tags, (list, tuple, set)):
+                tags_list = [str(tag) for tag in tags if tag]
+            else:
+                tags_list = [str(tags)]
+
+        day = None
+        if world and world.game_time:
+            day = world.game_time.current_day
+        elif self.arrival_day is not None:
+            day = self.arrival_day
+        else:
+            day = len(self.life_history)
+
+        significance = max(1, int(significance))
+
+        event: Dict[str, Any] = {
+            "day": day,
+            "type": event_type,
+            "summary": summary,
+            "related": related_list,
+            "tags": tags_list,
+            "significance": significance,
+            "source": self.name,
+        }
+        if details:
+            event["details"] = deepcopy(details)
+
+        if dedupe_key:
+            for existing in reversed(self.life_history):
+                if existing.get("dedupe_key") == dedupe_key:
+                    return deepcopy(existing)
+            event["dedupe_key"] = dedupe_key
+
+        self.life_history.append(event)
+        max_events = getattr(config, "LIFE_HISTORY_MAX_EVENTS", 120)
+        if len(self.life_history) > max_events:
+            self.life_history = self.life_history[-max_events:]
+
+        if propagate_to_family and world and hasattr(world, "share_family_event"):
+            world.share_family_event(self, event)
+
+        return deepcopy(event)
+
+    def _life_event_exists(self, candidate: Dict[str, Any]) -> bool:
+        signature = (
+            candidate.get("day"),
+            candidate.get("type"),
+            candidate.get("summary"),
+            candidate.get("source"),
+        )
+        for existing in self.life_history:
+            if existing.get("dedupe_key") and candidate.get("dedupe_key"):
+                if existing.get("dedupe_key") == candidate.get("dedupe_key"):
+                    return True
+            existing_signature = (
+                existing.get("day"),
+                existing.get("type"),
+                existing.get("summary"),
+                existing.get("source"),
+            )
+            if existing_signature == signature:
+                return True
+        return False
+
+    def register_family_role(self, relation_type: str, other_name: str) -> None:
+        if not relation_type or not other_name or other_name == self.name:
+            return
+
+        bucket = self.family_roles.setdefault(relation_type, set())
+        bucket.add(other_name)
+
+        if relation_type != "kin" and "kin" in self.family_roles:
+            kin_bucket = self.family_roles["kin"]
+            if other_name in kin_bucket:
+                kin_bucket.discard(other_name)
+                if not kin_bucket:
+                    self.family_roles.pop("kin")
+
+    def get_family_roles_snapshot(self) -> Dict[str, List[str]]:
+        snapshot: Dict[str, List[str]] = {}
+        for role, members in self.family_roles.items():
+            if members:
+                snapshot[role] = sorted(members)
+        return snapshot
+
+    def receive_family_event(
+        self,
+        world: Optional['World'],
+        source_name: str,
+        original_event: Dict[str, Any],
+    ) -> None:
+        """Record a family update echoed from another household member."""
+
+        if not original_event:
+            return
+
+        day = original_event.get("day")
+        if day is None and world and world.game_time:
+            day = world.game_time.current_day
+
+        base_summary = original_event.get("summary", "Family update.")
+        summary = f"{source_name}: {base_summary}" if source_name else base_summary
+
+        related = list(original_event.get("related", []) or [])
+        if source_name and source_name not in related:
+            related.append(source_name)
+
+        tags = list(original_event.get("tags", []) or [])
+        if "family_echo" not in tags:
+            tags.append("family_echo")
+
+        significance = max(1, int(original_event.get("significance", 1)))
+        echo_event = {
+            "day": day,
+            "type": f"family_{original_event.get('type', 'update')}",
+            "summary": summary,
+            "related": related,
+            "tags": tags,
+            "significance": max(1, significance // 2),
+            "source": source_name,
+            "is_family_echo": True,
+        }
+        if "details" in original_event:
+            echo_event["details"] = deepcopy(original_event["details"])
+
+        if self._life_event_exists(echo_event):
+            return
+
+        self.life_history.append(echo_event)
+        max_events = getattr(config, "LIFE_HISTORY_MAX_EVENTS", 120)
+        if len(self.life_history) > max_events:
+            self.life_history = self.life_history[-max_events:]
+
+    def get_life_highlights(self, limit: int = 5) -> List[Dict[str, Any]]:
+        threshold = getattr(config, "LIFE_HISTORY_HIGHLIGHT_THRESHOLD", 2)
+        highlights = [evt for evt in self.life_history if evt.get("significance", 1) >= threshold]
+        return [deepcopy(evt) for evt in highlights[-limit:]]
+
+    def export_life_history(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        if limit is None or limit >= len(self.life_history):
+            events = self.life_history
+        else:
+            events = self.life_history[-limit:]
+        return [deepcopy(evt) for evt in events]
 
     def receive_cultural_event_boost(self, event_data: Dict[str, Any], world: 'World') -> None:
         """Apply morale and need adjustments when the settlement hosts a cultural event."""
@@ -2099,6 +2315,22 @@ class Character:
         if not patient_found:
             self.add_memory("No patients currently require attention.")
 
+        if hasattr(world, "get_medical_queue_snapshot"):
+            queue_snapshot = world.get_medical_queue_snapshot()
+            if queue_snapshot:
+                top_case = queue_snapshot[0]
+                summary = (
+                    f"Triage review: {top_case.get('patient')} needs care for {top_case.get('condition')} "
+                    f"(severity {top_case.get('severity')})."
+                )
+                self.add_memory(summary)
+                if len(queue_snapshot) > 1:
+                    self.add_memory(
+                        f"{len(queue_snapshot) - 1} additional case(s) awaiting treatment."
+                    )
+            else:
+                self.add_memory("Medical triage queue is currently clear.")
+
         # Check medical supplies
         medical_supplies_to_check = ["Herbs", "Bandages"]
         if world.ledger:
@@ -2111,6 +2343,20 @@ class Character:
         else:
             self.add_memory(f"CMO {self.name} cannot check medical supplies: Ledger not available.")
 
+        if hasattr(world, "get_clinic_supply_requests"):
+            open_requests = [
+                req
+                for req in world.get_clinic_supply_requests()
+                if req.get("status") == "open"
+            ]
+            for request in open_requests[:2]:
+                self.add_memory(
+                    f"Clinic request logged: {request.get('resource')} at {request.get('current')}/"
+                    f"{request.get('threshold')} units."
+                )
+            if open_requests:
+                self.add_memory("Coordinating restock plans with gatherers and apothecaries.")
+
         # CMOs might also manage medic assignments, rest schedules for medical staff, etc.
         # For now, primarily observation and logging.
         if random.random() < 0.1:
@@ -2122,22 +2368,79 @@ class Character:
             self.current_goal = self.get_default_goal()
             return
 
-        # Find a patient - simplistic: first sick/injured person found
-        # Future: Could be assigned by CMO, or check a list of designated patients.
+        goal_params = self.current_goal.parameters
+        case: Optional[Dict[str, Any]] = None
+        case_id = goal_params.get("case_id")
+
+        if case_id and hasattr(world, "get_medical_case_by_id"):
+            case = world.get_medical_case_by_id(case_id)
+            if not case:
+                goal_params.pop("case_id", None)
+
+        if not case and hasattr(world, "claim_medical_case"):
+            claimed = world.claim_medical_case(self.name)
+            if claimed:
+                case = claimed
+                goal_params["case_id"] = case.get("case_id")
+
         target_patient: Optional['Character'] = None
-        for char in world.characters:
-            if char.name != self.name and (char.is_sick or char.is_injured):
-                # Prioritize more severe cases if logic allows, or just take first one
-                target_patient = char
-                break
+        condition_focus: Optional[str] = None
+
+        if case:
+            patient_name = case.get("patient")
+            target_patient = world.get_character_by_name(patient_name)
+            condition_focus = case.get("condition")
+            if not target_patient or (not target_patient.is_sick and not target_patient.is_injured):
+                if hasattr(world, "resolve_medical_case"):
+                    world.resolve_medical_case(
+                        case.get("case_id"),
+                        "cancelled",
+                        notes="Patient no longer requires treatment.",
+                    )
+                goal_params.pop("case_id", None)
+                target_patient = None
+                condition_focus = None
+
+        if not target_patient:
+            highest_need = -1.0
+            for char in world.characters:
+                if char.name == self.name:
+                    continue
+                if char.is_injured and char.injury_severity > highest_need:
+                    target_patient = char
+                    condition_focus = "injury"
+                    highest_need = char.injury_severity
+                if char.is_sick and char.sickness_severity > highest_need:
+                    target_patient = char
+                    condition_focus = "sickness"
+                    highest_need = char.sickness_severity
+
+            if target_patient and hasattr(world, "register_medical_case"):
+                severity_value = (
+                    target_patient.injury_severity
+                    if condition_focus == "injury"
+                    else target_patient.sickness_severity
+                )
+                case, _ = world.register_medical_case(
+                    target_patient.name,
+                    condition_focus or "sickness",
+                    severity_value,
+                    reporter=self.name,
+                    cause="Medic triage assignment",
+                    location=(target_patient.x, target_patient.y),
+                )
+                if case:
+                    goal_params["case_id"] = case.get("case_id")
+                    condition_focus = case.get("condition")
 
         if not target_patient:
             self.add_memory("No patients currently require medical care. Standing by.")
-            # Medic might return to a clinic, or just idle here.
-            self.current_goal = self.get_default_goal() # Reverts to job default next tick
+            self.current_goal = self.get_default_goal()
             return
 
-        self.add_memory(f"Medic {self.name} assigned to patient {target_patient.name} at ({target_patient.x},{target_patient.y}).")
+        self.add_memory(
+            f"Medic {self.name} assigned to patient {target_patient.name} at ({target_patient.x},{target_patient.y})."
+        )
 
         patient_loc = (target_patient.x, target_patient.y)
         if (self.x, self.y) != patient_loc:
@@ -2145,10 +2448,8 @@ class Character:
             self.add_memory(f"Moving towards patient {target_patient.name}.")
             return
 
-        # At the patient, perform treatment (conceptual for now)
         self.add_memory(f"Medic {self.name} is treating {target_patient.name}.")
 
-        # Attempt to use a bandage first, then herbs
         item_used_for_treatment = None
         if self.inventory.get("Bandages", 0) > 0:
             self.inventory["Bandages"] -= 1
@@ -2163,52 +2464,102 @@ class Character:
             item_used_for_treatment = "Herbs"
             self.add_memory(f"Used 1 Herb on {target_patient.name}.")
         else:
-            self.add_memory(f"No medical supplies (Bandages/Herbs) to treat {target_patient.name}. Need to restock.")
-            # Medic might change goal to "Gather Herbs" or request supplies.
-            # For now, they are stuck this tick if no supplies.
+            self.add_memory(
+                f"No medical supplies (Bandages/Herbs) to treat {target_patient.name}. Need to restock."
+            )
+            if case and hasattr(world, "record_medical_treatment"):
+                severity_after = (
+                    target_patient.injury_severity
+                    if condition_focus == "injury"
+                    else target_patient.sickness_severity
+                )
+                world.record_medical_treatment(
+                    case.get("case_id"),
+                    self.name,
+                    severity_after,
+                    notes="Unable to treat due to missing supplies",
+                    success=False,
+                )
+            self.current_goal = self.get_default_goal()
             return
 
-        # Apply treatment effect
         treatment_successful_this_tick = False
+        severity_after = None
+
         if item_used_for_treatment == "Bandages" and target_patient.is_injured:
-            reduction = random.randint(2, 3) # Bandages are quite effective for injuries
-            # Skill influence - e.g. higher skill more likely to get higher end of reduction or small bonus
-            if self.skills.get("Medicine", {}).get("level", 0) > 2: reduction += random.choice([0,1])
+            reduction = random.randint(2, 3)
+            if self.skills.get("Medicine", {}).get("level", 0) > 2:
+                reduction += random.choice([0, 1])
 
             target_patient.injury_severity -= reduction
-            self.add_memory(f"Applied Bandages to {target_patient.name}'s injuries, severity reduced by {reduction} to {max(0, target_patient.injury_severity)}.")
+            severity_after = max(0, target_patient.injury_severity)
+            self.add_memory(
+                f"Applied Bandages to {target_patient.name}'s injuries, severity reduced by {reduction} to {severity_after}."
+            )
             treatment_successful_this_tick = True
             if target_patient.injury_severity <= 0:
                 target_patient.is_injured = False
                 target_patient.injury_severity = 0
                 self.add_memory(f"{target_patient.name} has fully recovered from their injuries!")
-                world.add_event_log_message(f"{target_patient.name} recovered from injuries thanks to {self.name}.")
+                world.add_event_log_message(
+                    f"{target_patient.name} recovered from injuries thanks to {self.name}."
+                )
 
         elif item_used_for_treatment == "Herbs" and target_patient.is_sick:
-            reduction = random.randint(1, 2) # Herbs are moderately effective for sickness
-            if self.skills.get("Medicine", {}).get("level", 0) > 1: reduction += random.choice([0,1])
+            reduction = random.randint(1, 2)
+            if self.skills.get("Medicine", {}).get("level", 0) > 1:
+                reduction += random.choice([0, 1])
 
             target_patient.sickness_severity -= reduction
-            self.add_memory(f"Administered Herbs to {target_patient.name} for sickness, severity reduced by {reduction} to {max(0, target_patient.sickness_severity)}.")
+            severity_after = max(0, target_patient.sickness_severity)
+            self.add_memory(
+                f"Administered Herbs to {target_patient.name} for sickness, severity reduced by {reduction} to {severity_after}."
+            )
             treatment_successful_this_tick = True
             if target_patient.sickness_severity <= 0:
                 target_patient.is_sick = False
                 target_patient.sickness_severity = 0
                 self.add_memory(f"{target_patient.name} has fully recovered from their sickness!")
-                world.add_event_log_message(f"{target_patient.name} recovered from sickness thanks to {self.name}.")
+                world.add_event_log_message(
+                    f"{target_patient.name} recovered from sickness thanks to {self.name}."
+                )
 
-        elif item_used_for_treatment: # Used an item but it wasn't the right type for the condition
-            self.add_memory(f"Tried to use {item_used_for_treatment} on {target_patient.name}, but it wasn't effective for their current condition.")
+        elif item_used_for_treatment:
+            severity_after = (
+                target_patient.injury_severity
+                if target_patient.is_injured and condition_focus == "injury"
+                else target_patient.sickness_severity
+            )
+            self.add_memory(
+                f"Tried to use {item_used_for_treatment} on {target_patient.name}, but it wasn't effective for their current condition."
+            )
 
         if treatment_successful_this_tick:
-            self._grant_skill_experience("Medicine", 1.5, world) # More XP for successful application
-            self._receive_payment(JOB_SALARIES.get("Provide Medical Care", 8), f"treating {target_patient.name}", world)
+            self._grant_skill_experience("Medicine", 1.5, world)
+            self._receive_payment(
+                JOB_SALARIES.get("Provide Medical Care", 8),
+                f"treating {target_patient.name}",
+                world,
+            )
         else:
-            self._grant_skill_experience("Medicine", 0.2, world) # Minor XP for attempt
+            self._grant_skill_experience("Medicine", 0.2, world)
 
-        # After treatment, Medic might look for another patient or return to standby.
-        # For now, will re-evaluate from top next tick.
-        self.current_goal = self.get_default_goal() # Re-evaluate next patient or task
+        if case and hasattr(world, "record_medical_treatment"):
+            if severity_after is None:
+                severity_after = (
+                    target_patient.injury_severity
+                    if condition_focus == "injury"
+                    else target_patient.sickness_severity
+                )
+            world.record_medical_treatment(
+                case.get("case_id"),
+                self.name,
+                severity_after,
+                item_used=item_used_for_treatment,
+                success=treatment_successful_this_tick,
+            )
+
+        self.current_goal = self.get_default_goal()
         return
 
 
@@ -2250,6 +2601,41 @@ class Character:
         # Simulate Mayor's strategic thinking or planning
         if random.random() < 0.15: # Chance to log a more general thought
             self.add_memory(f"Mayor {self.name} spends time contemplating the settlement's long-term strategy and development.")
+
+        if hasattr(world, "get_pending_law_draft_for"):
+            pending_draft = world.get_pending_law_draft_for(self.name)
+        else:
+            pending_draft = None
+        if pending_draft and (self.current_goal.type == GoalType.OVERSEE_SETTLEMENT):
+            self.active_law_draft_id = pending_draft.get("id")
+            self.add_memory(f"Draft for {pending_draft.get('title')} awaits my seal.")
+            self.current_goal = Goal(
+                GoalType.ENACT_SETTLEMENT_LAW,
+                assignee_id=self.name,
+                originator_id=self.name,
+                parameters={"law_id": pending_draft.get("id")},
+                priority=3,
+            )
+            return
+
+        if hasattr(world, "peek_priority_law_petition"):
+            petition = world.peek_priority_law_petition()
+        else:
+            petition = None
+        if petition and petition.get("support", 0.0) >= 0.35 and self.current_goal.type == GoalType.OVERSEE_SETTLEMENT:
+            if petition.get("id") != self.active_law_petition_id:
+                self.add_memory(
+                    f"Citizens press for {petition.get('title')} (support {petition.get('support', 0.0):.0%})."
+                )
+            self.active_law_petition_id = petition.get("id")
+            self.current_goal = Goal(
+                GoalType.REVIEW_LAW_PETITIONS,
+                assignee_id=self.name,
+                originator_id=self.name,
+                parameters={"petition_id": petition.get("id")},
+                priority=3,
+            )
+            return
 
         # The Mayor's role is ongoing oversight. They don't typically "finish" this goal quickly.
         # They might stay in "Oversee Settlement" for many ticks, continuously monitoring.
@@ -2397,9 +2783,133 @@ class Character:
                         self.add_memory(f"{current_holder.name}'s performance as {position_job_title} is deemed acceptable for now.")
         return
 
+    def _execute_review_law_petitions(self, world: 'World'):
+        if self.job != "Mayor":
+            self.current_goal = self.get_default_goal()
+            return
+
+        goal_params = self.current_goal.parameters if self.current_goal else {}
+        petition_id = goal_params.get("petition_id") or self.active_law_petition_id
+        petition = None
+        if petition_id and hasattr(world, "get_petition_by_id"):
+            petition = world.get_petition_by_id(petition_id)
+        if not petition and hasattr(world, "peek_priority_law_petition"):
+            petition = world.peek_priority_law_petition()
+
+        if not petition:
+            self.add_memory("No legal petitions require action today.")
+            self.active_law_petition_id = None
+            self.current_goal = self.get_default_goal()
+            return
+
+        support = petition.get("support", 0.0)
+        incident_count = petition.get("incident_count", 0)
+        self.active_law_petition_id = petition.get("id")
+        self.add_memory(
+            f"Reviewing '{petition.get('title')}' — support {support:.0%}, incidents {incident_count}."
+        )
+
+        should_draft = support >= max(0.4, config.LAW_INTERVIEW_SUPPORT_THRESHOLD) or incident_count >= config.LAW_PETITION_THRESHOLD + 1
+        if petition.get("status") == "drafting":
+            should_draft = True
+
+        if should_draft:
+            self.current_goal = Goal(
+                GoalType.DRAFT_SETTLEMENT_LAW,
+                assignee_id=self.name,
+                originator_id=self.name,
+                parameters={"petition_id": petition.get("id")},
+                priority=3,
+            )
+            return
+
+        if hasattr(world, "record_petition_review"):
+            world.record_petition_review(petition.get("id"), self.name, "defer")
+        self.add_memory(f"Defer action on {petition.get('title')} until more evidence arrives.")
+        self.active_law_petition_id = None
+        self.current_goal = self.get_default_goal()
+
+    def _execute_draft_settlement_law(self, world: 'World'):
+        if self.job != "Mayor":
+            self.current_goal = self.get_default_goal()
+            return
+
+        goal_params = self.current_goal.parameters if self.current_goal else {}
+        petition_id = goal_params.get("petition_id") or self.active_law_petition_id
+        if not petition_id or not hasattr(world, "draft_law_from_petition"):
+            self.current_goal = self.get_default_goal()
+            return
+
+        law_record = world.draft_law_from_petition(petition_id, self.name)
+        if not law_record:
+            self.add_memory("Struggled to turn the petition into a workable statute.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        self.active_law_draft_id = law_record.get("id")
+        penalty = law_record.get("penalty", {})
+        penalty_text = "fine" if penalty.get("type") == "fine" else penalty.get("type", "sanction")
+        amount = penalty.get("amount")
+        if amount:
+            penalty_text = f"{penalty_text} of {amount} coins"
+        self.add_memory(f"Drafted {law_record.get('title')} imposing {penalty_text}.")
+        self.current_goal = Goal(
+            GoalType.ENACT_SETTLEMENT_LAW,
+            assignee_id=self.name,
+            originator_id=self.name,
+            parameters={"law_id": law_record.get("id")},
+            priority=3,
+        )
+
+    def _execute_enact_settlement_law(self, world: 'World'):
+        if self.job != "Mayor":
+            self.current_goal = self.get_default_goal()
+            return
+
+        goal_params = self.current_goal.parameters if self.current_goal else {}
+        law_id = goal_params.get("law_id") or self.active_law_draft_id
+        if not law_id:
+            pending = world.get_pending_law_draft_for(self.name) if hasattr(world, "get_pending_law_draft_for") else None
+            if pending:
+                law_id = pending.get("id")
+        if not law_id or not hasattr(world, "enact_law"):
+            self.current_goal = self.get_default_goal()
+            return
+
+        law = world.enact_law(law_id, self.name)
+        if law:
+            penalty = law.get("penalty", {})
+            amount = penalty.get("amount")
+            if amount:
+                summary = f"penalty {amount} coins"
+            else:
+                summary = penalty.get("type", "sanctions")
+            self.add_memory(f"Enacted {law.get('title')} with {summary}.")
+        else:
+            self.add_memory("Attempted to enact a law but the draft could not be located.")
+        self.active_law_draft_id = None
+        self.active_law_petition_id = None
+        self.current_goal = self.get_default_goal()
+
     def _execute_maintain_peace(self, world: 'World'): # For Sheriff
         if self.job != "Sheriff":
             self.current_goal = self.get_default_goal()
+            return
+
+        active_case = world.get_case_in_session_for(self.name) if hasattr(world, "get_case_in_session_for") else None
+        if active_case and (
+            self.current_goal.type != GoalType.ATTEND_TRIAL
+            or self.current_goal.parameters.get("case_id") != active_case.get("case_id")
+        ):
+            self.current_goal = Goal(
+                GoalType.ATTEND_TRIAL,
+                assignee_id=self.name,
+                originator_id="CourtSummons",
+                parameters={
+                    "case_id": active_case.get("case_id"),
+                    "location": getattr(world, "courthouse_location", world.market_location),
+                },
+            )
             return
 
         if self.active_crime_assignment:
@@ -2410,6 +2920,41 @@ class Character:
                     originator_id=self.name,
                     parameters={"crime_id": self.active_crime_assignment},
                 )
+            return
+
+        if hasattr(world, "assign_investigative_interview"):
+            if self.active_interview_assignment and self.current_goal.type != GoalType.CONDUCT_WITNESS_INTERVIEW:
+                self.current_goal = Goal(
+                    GoalType.CONDUCT_WITNESS_INTERVIEW,
+                    assignee_id=self.name,
+                    originator_id=self.name,
+                    parameters={"assignment_id": self.active_interview_assignment.get("id")},
+                    priority=3,
+                )
+                return
+            assignment = world.assign_investigative_interview(self.name)
+            if assignment:
+                self.active_interview_assignment = assignment
+                self.current_goal = Goal(
+                    GoalType.CONDUCT_WITNESS_INTERVIEW,
+                    assignee_id=self.name,
+                    originator_id=self.name,
+                    parameters={"assignment_id": assignment.get("id")},
+                    priority=3,
+                )
+                return
+
+        prep_case = world.get_case_to_prepare(self.name) if hasattr(world, "get_case_to_prepare") else None
+        if prep_case and (
+            self.current_goal.type != GoalType.PREPARE_TRIAL_CASE
+            or self.current_goal.parameters.get("case_id") != prep_case.get("case_id")
+        ):
+            self.current_goal = Goal(
+                GoalType.PREPARE_TRIAL_CASE,
+                assignee_id=self.name,
+                originator_id=self.name,
+                parameters={"case_id": prep_case.get("case_id")},
+            )
             return
 
         incident = world.claim_next_crime(self.name) if hasattr(world, "claim_next_crime") else None
@@ -2457,6 +3002,28 @@ class Character:
                 )
             return
 
+        if hasattr(world, "assign_investigative_interview"):
+            if self.active_interview_assignment and self.current_goal.type != GoalType.CONDUCT_WITNESS_INTERVIEW:
+                self.current_goal = Goal(
+                    GoalType.CONDUCT_WITNESS_INTERVIEW,
+                    assignee_id=self.name,
+                    originator_id=self.name,
+                    parameters={"assignment_id": self.active_interview_assignment.get("id")},
+                    priority=4,
+                )
+                return
+            assignment = world.assign_investigative_interview(self.name)
+            if assignment:
+                self.active_interview_assignment = assignment
+                self.current_goal = Goal(
+                    GoalType.CONDUCT_WITNESS_INTERVIEW,
+                    assignee_id=self.name,
+                    originator_id=self.name,
+                    parameters={"assignment_id": assignment.get("id")},
+                    priority=4,
+                )
+                return
+
         incident = world.claim_next_crime(self.name) if hasattr(world, "claim_next_crime") else None
         if incident:
             self.active_crime_assignment = incident.get("id")
@@ -2489,6 +3056,48 @@ class Character:
         else:
             self.add_memory("Patrolling... observing the area.")
         return
+
+    def _execute_conduct_witness_interview(self, world: 'World'):
+        if self.job not in {"Sheriff", "Deputy"}:
+            self.current_goal = self.get_default_goal()
+            return
+
+        goal_params = self.current_goal.parameters if self.current_goal else {}
+        assignment_id = goal_params.get("assignment_id")
+        assignment = self.active_interview_assignment
+        if not assignment or assignment.get("id") != assignment_id:
+            assignment = world.get_interview_assignment_by_id(assignment_id) if hasattr(world, "get_interview_assignment_by_id") else None
+            if not assignment and hasattr(world, "assign_investigative_interview"):
+                assignment = world.assign_investigative_interview(self.name)
+            self.active_interview_assignment = assignment
+
+        if not assignment:
+            self.current_goal = self.get_default_goal()
+            return
+
+        witness_name = assignment.get("witness")
+        witness = world.get_character_by_name(witness_name) if hasattr(world, "get_character_by_name") else None
+        if witness and (self.x, self.y) != (witness.x, witness.y):
+            self.move_towards(witness.x, witness.y, world)
+            self.add_memory(f"Heading to interview {witness_name} regarding case {assignment.get('case_id')}.")
+            return
+
+        security_skill = self.skills.get("Security", {}).get("level", 0)
+        base_quality = 0.35 + 0.08 * security_skill
+        if witness:
+            relationship = self.get_relationship_score(witness.name)
+            base_quality += max(-0.1, min(0.1, relationship / 120))
+        base_quality += random.uniform(-0.1, 0.15)
+        quality = max(0.1, min(1.0, base_quality))
+        notes = f"Witness recounted events with {int(quality * 100)}% confidence."
+
+        if hasattr(world, "record_interview_result"):
+            world.record_interview_result(assignment.get("id"), self.name, quality, notes)
+
+        self.add_memory(f"Interviewed {witness_name or 'a bystander'} for case {assignment.get('case_id')}.")
+        self._grant_skill_experience("Security", 0.6, world)
+        self.active_interview_assignment = None
+        self.current_goal = self.get_default_goal()
 
     def _execute_investigate_disturbance(self, world: 'World'):
         goal_params = self.current_goal.parameters if self.current_goal else {}
@@ -2568,6 +3177,10 @@ class Character:
                 if recovered_amount
                 else "Suspect detained"
             )
+            evidence_strength = 0.6 + 0.1 * min(4, security_skill)
+            if recovered_amount:
+                evidence_strength += 0.15
+            evidence_strength = min(1.0, evidence_strength)
             if hasattr(world, "resolve_crime_outcome"):
                 world.resolve_crime_outcome(
                     crime_id,
@@ -2575,6 +3188,7 @@ class Character:
                     self.name,
                     caught=True,
                     notes=notes,
+                    evidence_strength=evidence_strength,
                 )
         elif investigation_success:
             self.add_memory(f"Secured the scene of case {crime_id}; suspect not present.")
@@ -2586,6 +3200,7 @@ class Character:
                     caught=False,
                     notes="Scene secured",
                     requeue=False,
+                    evidence_strength=min(0.6, 0.35 + 0.05 * security_skill),
                 )
         else:
             self.add_memory(f"Lost the trail for case {crime_id}; will revisit once new leads appear.")
@@ -2597,14 +3212,111 @@ class Character:
                     caught=False,
                     notes="Lead went cold",
                     requeue=True,
+                    evidence_strength=0.1,
                 )
 
         self.active_crime_assignment = None
         self.crime_investigation_focus = None
         self.current_goal = self.get_default_goal()
 
+    def _execute_prepare_trial_case(self, world: 'World'):
+        goal_params = self.current_goal.parameters if self.current_goal else {}
+        case_id = goal_params.get("case_id")
+        if not case_id or not hasattr(world, "get_case_by_id"):
+            self.current_goal = self.get_default_goal()
+            return
+
+        case = world.get_case_by_id(case_id)
+        if not case:
+            self.current_goal = self.get_default_goal()
+            return
+
+        if case.get("status") in {"concluded", "cancelled"}:
+            self.add_memory(f"Case {case_id} is already resolved.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        if case.get("status") == "in_session":
+            self.current_goal = Goal(
+                GoalType.ATTEND_TRIAL,
+                assignee_id=self.name,
+                originator_id="CourtSummons",
+                parameters={
+                    "case_id": case_id,
+                    "location": getattr(world, "courthouse_location", world.market_location),
+                },
+            )
+            return
+
+        security_skill = self.skills.get("Security", {}).get("level", 0)
+        prep_effort = 0.15 + 0.05 * security_skill
+        updated_case = None
+        if hasattr(world, "progress_case_preparation"):
+            updated_case = world.progress_case_preparation(case_id, prep_effort, contributor=self.name)
+        else:
+            updated_case = case
+
+        if random.random() < 0.4:
+            self.add_memory(f"Reviewing testimony and evidence for case {case_id}.")
+
+        self._grant_skill_experience("Security", 0.4, world)
+
+        if updated_case and updated_case.get("preparedness", 0.0) >= 0.95:
+            self.add_memory(f"Prepared case {case_id} for trial.")
+            self.current_goal = self.get_default_goal()
+
+    def _execute_attend_trial(self, world: 'World'):
+        goal_params = self.current_goal.parameters if self.current_goal else {}
+        case_id = goal_params.get("case_id")
+        location = goal_params.get("location") or getattr(world, "courthouse_location", world.market_location)
+
+        if location:
+            target_x, target_y = location
+            if (self.x, self.y) != (target_x, target_y):
+                self.move_towards(target_x, target_y, world)
+                return
+
+        case = world.get_case_by_id(case_id) if case_id and hasattr(world, "get_case_by_id") else None
+        if not case:
+            self.add_memory("Attending civic hearing but no case was found.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        status = case.get("status")
+        if status == "concluded":
+            verdict = case.get("verdict", "resolved")
+            self.add_memory(f"Witnessed conclusion of case {case_id}: verdict {verdict}.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        if random.random() < 0.35:
+            self.add_memory(f"Listening to proceedings for case {case_id}.")
+
+        if status != "in_session":
+            self.current_goal = self.get_default_goal()
+
     def _execute_seek_medical_attention(self, world: 'World'):
         self.add_memory("Feeling unwell, seeking medical attention.")
+
+        if hasattr(world, "register_medical_case"):
+            if self.is_injured and self.injury_severity > 0:
+                world.register_medical_case(
+                    self.name,
+                    "injury",
+                    self.injury_severity,
+                    reporter=self.name,
+                    cause="Requested urgent help",
+                    location=(self.x, self.y),
+                )
+            if self.is_sick and self.sickness_severity > 0:
+                world.register_medical_case(
+                    self.name,
+                    "sickness",
+                    self.sickness_severity,
+                    reporter=self.name,
+                    cause="Requested urgent help",
+                    location=(self.x, self.y),
+                )
 
         # Find the nearest Medic or CMO
         # For simplicity, find any character with job "Medic" or "Chief Medical Officer"
@@ -3376,11 +4088,17 @@ class Character:
         elif self.current_goal.type == GoalType.MANAGE_SUBORDINATES: self._execute_manage_subordinates(world)
         elif self.current_goal.type == GoalType.MAINTAIN_LEDGER: self._execute_maintain_ledger(world)
         elif self.current_goal.type == GoalType.OVERSEE_SETTLEMENT: self._execute_oversee_settlement(world)
+        elif self.current_goal.type == GoalType.REVIEW_LAW_PETITIONS: self._execute_review_law_petitions(world)
+        elif self.current_goal.type == GoalType.DRAFT_SETTLEMENT_LAW: self._execute_draft_settlement_law(world)
+        elif self.current_goal.type == GoalType.ENACT_SETTLEMENT_LAW: self._execute_enact_settlement_law(world)
         elif self.current_goal.type == GoalType.OVERSEE_MEDICAL_OPERATIONS: self._execute_oversee_medical_operations(world)
         elif self.current_goal.type == GoalType.PROVIDE_MEDICAL_CARE: self._execute_provide_medical_care(world)
         elif self.current_goal.type == GoalType.MAINTAIN_PEACE_IN_SETTLEMENT: self._execute_maintain_peace(world)
         elif self.current_goal.type == GoalType.PATROL_AREA: self._execute_patrol_area(world)
         elif self.current_goal.type == GoalType.INVESTIGATE_DISTURBANCE: self._execute_investigate_disturbance(world)
+        elif self.current_goal.type == GoalType.PREPARE_TRIAL_CASE: self._execute_prepare_trial_case(world)
+        elif self.current_goal.type == GoalType.CONDUCT_WITNESS_INTERVIEW: self._execute_conduct_witness_interview(world)
+        elif self.current_goal.type == GoalType.ATTEND_TRIAL: self._execute_attend_trial(world)
         elif self.current_goal.type == GoalType.GIVE_SPEECH: self._execute_give_speech(world)
         elif self.current_goal.type == GoalType.CAMPAIGN_SPEECH: self._execute_campaign_speech(world)
         elif self.current_goal.type == GoalType.SEEK_MEDICAL_ATTENTION: self._execute_seek_medical_attention(world)
@@ -4253,6 +4971,7 @@ class Character:
         """Modifies the relationship score with the target character."""
         if self.name == target_char_name: return # Cannot have a relationship with oneself
 
+        previous_tier = self.get_relationship_tier(target_char_name)
         current_score = self.relationships.get(target_char_name, 0)
         new_score = current_score + value_change
 
@@ -4264,6 +4983,35 @@ class Character:
         if reason:
             self.add_memory(f"My relationship with {target_char_name} changed by {value_change} to {new_score}. Reason: {reason}")
             # print(f"DEBUG: {self.name}'s relationship with {target_char_name} changed by {value_change} to {new_score}. Reason: {reason}")
+
+        new_tier = self.get_relationship_tier(target_char_name)
+        if new_tier != previous_tier:
+            tier_direction = "deepened" if new_score >= current_score else "soured"
+            tier_summary = (
+                f"Bond with {target_char_name} {tier_direction} into {new_tier.lower()} territory."
+                if new_tier not in {config.RELATIONSHIP_TIER_FAMILY, config.RELATIONSHIP_TIER_STRANGER}
+                else f"Family ties with {target_char_name} shifted." if new_tier == config.RELATIONSHIP_TIER_FAMILY
+                else f"Grew closer to {target_char_name}."
+            )
+            highlight_tiers = {
+                "Soulmate": 3,
+                "Close Friend": 2,
+                "Friend": 2,
+                "Rival": 2,
+                "Archenemy": 3,
+            }
+            significance = highlight_tiers.get(new_tier, 1)
+            tag_slug = new_tier.lower().replace(" ", "_")
+            self.record_life_event(
+                world,
+                "relationship_tier_change",
+                tier_summary,
+                related=[target_char_name],
+                tags=["relationship", tag_slug],
+                significance=significance,
+                propagate_to_family=False,
+                details={"previous_tier": previous_tier, "new_tier": new_tier, "score": new_score},
+            )
 
         # Optionally, have the target character reciprocate or have their own view change (more complex social model)
         # For now, relationships are one-way perspectives.

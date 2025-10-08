@@ -37,6 +37,18 @@ document.addEventListener('DOMContentLoaded', () => {
     const resourceNodeList = document.getElementById('resource-node-list');
     const populationEventList = document.getElementById('population-event-list');
     const weatherEventNote = document.getElementById('environment-weather-event');
+    const workCrewNote = document.getElementById('work-crew-note');
+    const workCrewList = document.getElementById('work-crew-list');
+    const workShipmentList = document.getElementById('work-shipment-list');
+    const trainingNeedsNote = document.getElementById('training-needs-note');
+    const trainingSessionList = document.getElementById('training-session-list');
+    const trainingWaitlistList = document.getElementById('training-waitlist-list');
+    const familySpotlight = document.getElementById('family-spotlight');
+    const familyStoriesList = document.getElementById('family-stories-list');
+    const familyHouseholdList = document.getElementById('family-household-list');
+    const lawCodeList = document.getElementById('law-code-list');
+    const lawPetitionList = document.getElementById('law-petition-list');
+    const lawInvestigationList = document.getElementById('law-investigation-list');
     const characterSearchInput = document.getElementById('character-search');
     const infoPanel = document.getElementById('info-panel');
 
@@ -234,6 +246,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const environment = gameState.environment_effects || report.environment || {};
         const housingSnapshot = gameState.housing || report.housing || {};
         const populationSnapshot = gameState.population || report.population_snapshot || {};
+        const trainingReport = gameState.training || report.training || {};
+        const workforceReport = gameState.workforce || report.workforce || {};
+        const governance = gameState.governance || {};
 
         if (hudPopulationValue) {
             const totalPopulation = typeof populationSnapshot.population === 'number'
@@ -314,6 +329,59 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 const homelessText = homelessCount ? ` • Outside ${homelessCount}` : '';
                 hudHousingValue.textContent = `${claimed}/${totalBeds} occupied • ${availableBeds} open${homelessText}`;
+            }
+        }
+
+        if (lawCodeList) {
+            const laws = Array.isArray(governance.laws) ? governance.laws : [];
+            if (!laws.length) {
+                lawCodeList.innerHTML = '<li class="empty">No civic laws enacted.</li>';
+            } else {
+                lawCodeList.innerHTML = laws
+                    .map(law => {
+                        const penalty = law.penalty && typeof law.penalty.amount === 'number'
+                            ? `${law.penalty.amount}c`
+                            : (law.penalty && law.penalty.type) || '—';
+                        const status = law.status === 'draft' ? 'Draft' : 'Active';
+                        return `<li><strong>${law.title}</strong><small>${status} • ${law.offense || 'General'} • Penalty ${penalty}</small></li>`;
+                    })
+                    .join('');
+            }
+        }
+
+        if (lawPetitionList) {
+            const petitions = Array.isArray(governance.petitions) ? governance.petitions : [];
+            if (!petitions.length) {
+                lawPetitionList.innerHTML = '<li class="empty">No petitions awaiting review.</li>';
+            } else {
+                lawPetitionList.innerHTML = petitions
+                    .map(petition => {
+                        const support = typeof petition.support === 'number'
+                            ? `${Math.round(petition.support * 100)}%`
+                            : '—';
+                        const badge = petition.status === 'enacted'
+                            ? 'Enacted'
+                            : petition.status === 'drafting'
+                                ? 'Drafting'
+                                : 'Pending';
+                        return `<li><strong>${petition.title}</strong><small>${badge} • Support ${support} • Incidents ${petition.incident_count ?? 0}</small></li>`;
+                    })
+                    .join('');
+            }
+        }
+
+        if (lawInvestigationList) {
+            const interviews = Array.isArray(governance.interviews) ? governance.interviews : [];
+            if (!interviews.length) {
+                lawInvestigationList.innerHTML = '<li class="empty">No interviews assigned.</li>';
+            } else {
+                lawInvestigationList.innerHTML = interviews
+                    .map(interview => {
+                        const status = interview.status ? interview.status.replace(/_/g, ' ') : 'Pending';
+                        const assigned = interview.assigned_to ? ` • ${interview.assigned_to}` : '';
+                        return `<li><strong>${interview.witness || 'Witness'}</strong><small>Case ${interview.case_id} • ${status}${assigned}</small></li>`;
+                    })
+                    .join('');
             }
         }
 
@@ -410,6 +478,166 @@ document.addEventListener('DOMContentLoaded', () => {
                         return `<li><strong>${node.resource}</strong> @ (${loc}) • ${status}</li>`;
                     })
                     .join('');
+            }
+        }
+
+        if (workCrewNote) {
+            const gatheredTotal = typeof workforceReport.gathered_total === 'number' ? workforceReport.gathered_total : 0;
+            const deliveredTotal = typeof workforceReport.delivered_total === 'number' ? workforceReport.delivered_total : 0;
+            const backlogTotal = typeof workforceReport.backlog_total === 'number' ? workforceReport.backlog_total : 0;
+            const alerts = Array.isArray(workforceReport.alerts) ? workforceReport.alerts : [];
+
+            if (!gatheredTotal && !deliveredTotal && !backlogTotal && !alerts.length) {
+                workCrewNote.textContent = 'Crews waiting on orders.';
+                workCrewNote.classList.add('muted');
+            } else {
+                const fragments = [`Gathered ${gatheredTotal}`, `Delivered ${deliveredTotal}`];
+                if (backlogTotal) fragments.push(`Backlog ${backlogTotal}`);
+                if (alerts.length) fragments.push(`Alerts: ${alerts.join('; ')}`);
+                workCrewNote.textContent = fragments.join(' • ');
+                workCrewNote.classList.toggle('muted', false);
+            }
+        }
+
+        const workCrews = Array.isArray(workforceReport.crews) ? workforceReport.crews : [];
+
+        if (workCrewList) {
+            if (!workCrews.length) {
+                workCrewList.innerHTML = '<li class="empty">No crews reported.</li>';
+            } else {
+                const crewItems = workCrews.map((crew) => {
+                    const workerCount = Array.isArray(crew.workers) ? crew.workers.length : 0;
+                    const haulerCount = Array.isArray(crew.haulers) ? crew.haulers.length : 0;
+                    const resourceLabel = crew.resource ? ` ${crew.resource}` : '';
+                    const parts = [
+                        `${workerCount} worker${workerCount === 1 ? '' : 's'}`,
+                    ];
+                    if (haulerCount) {
+                        parts.push(`${haulerCount} hauler${haulerCount === 1 ? '' : 's'}`);
+                    }
+                    parts.push(`gathered ${crew.gathered}${resourceLabel}`);
+                    parts.push(`delivered ${crew.delivered}`);
+                    if (crew.backlog) {
+                        parts.push(`backlog ${crew.backlog}`);
+                    }
+                    const inputsConsumed = crew.inputs_consumed && typeof crew.inputs_consumed === 'object'
+                        ? Object.entries(crew.inputs_consumed).filter(([, qty]) => typeof qty === 'number' && qty > 0)
+                        : [];
+                    if (inputsConsumed.length) {
+                        const usedSummary = inputsConsumed
+                            .map(([inputName, qty]) => `${qty} ${inputName}`)
+                            .join(', ');
+                        parts.push(`used ${usedSummary}`);
+                    }
+                    const details = parts.join(' • ');
+                    const notes = Array.isArray(crew.notes) ? crew.notes.join(' • ') : '';
+                    const noteHtml = notes ? `<small class="muted">${notes}</small>` : '';
+                    return `<li><strong>${crew.title}</strong> — ${details}${noteHtml ? `<br>${noteHtml}` : ''}</li>`;
+                });
+                workCrewList.innerHTML = crewItems.join('');
+            }
+        }
+
+        if (workShipmentList) {
+            const shipments = Array.isArray(workforceReport.shipments) ? workforceReport.shipments : [];
+            const alerts = Array.isArray(workforceReport.alerts) ? workforceReport.alerts : [];
+            const entries = [];
+            if (shipments.length) {
+                shipments.forEach((shipment) => {
+                    const crew = workCrews.find((entry) => entry.key === shipment.sector);
+                    const label = crew ? crew.title : (shipment.sector || 'Crew');
+                    const resource = shipment.resource || 'goods';
+                    const delivered = typeof shipment.delivered === 'number' ? shipment.delivered : 0;
+                    const routes = Array.isArray(shipment.routes) ? shipment.routes : [];
+                    const routeSummary = routes.length
+                        ? routes.map((route) => `${route.quantity} → ${route.stockpile}`).join(', ')
+                        : 'No storage available';
+                    entries.push(`<li>${label}: ${delivered} ${resource} (${routeSummary})</li>`);
+                });
+            }
+            if (alerts.length) {
+                alerts.forEach((alert) => {
+                    entries.push(`<li class="alert">${alert}</li>`);
+                });
+            }
+            if (!entries.length) {
+                workShipmentList.innerHTML = '<li class="empty">No deliveries dispatched.</li>';
+            } else {
+                workShipmentList.innerHTML = entries.join('');
+            }
+        }
+
+        if (trainingSessionList) {
+            const activeSessions = Array.isArray(trainingReport.active_sessions)
+                ? trainingReport.active_sessions
+                : [];
+            if (!activeSessions.length) {
+                trainingSessionList.innerHTML = '<li class="empty">No active sessions.</li>';
+            } else {
+                trainingSessionList.innerHTML = activeSessions
+                    .slice(0, 4)
+                    .map(session => {
+                        const progressText = typeof session.progress === 'number' && typeof session.duration === 'number'
+                            ? `Day ${session.progress}/${session.duration}`
+                            : `Day ${session.progress ?? 0}`;
+                        const instructor = session.instructor ? `Led by ${session.instructor}` : 'No instructor';
+                        const trainees = Array.isArray(session.trainees) && session.trainees.length
+                            ? session.trainees.join(', ')
+                            : 'No trainees';
+                        return `
+                            <li>
+                                <strong>${session.program}</strong>
+                                <div class="meta">${progressText} • ${instructor} • ${trainees}</div>
+                            </li>
+                        `;
+                    })
+                    .join('');
+            }
+        }
+
+        if (trainingWaitlistList) {
+            const waitlists = Array.isArray(trainingReport.waitlists) ? trainingReport.waitlists : [];
+            const queued = waitlists.filter(entry => Array.isArray(entry.queued) && entry.queued.length);
+            if (!queued.length) {
+                trainingWaitlistList.innerHTML = '<li class="empty">No one queued.</li>';
+            } else {
+                trainingWaitlistList.innerHTML = queued
+                    .slice(0, 4)
+                    .map(entry => {
+                        const names = entry.queued.slice(0, 4).join(', ');
+                        const count = typeof entry.count === 'number' ? entry.count : entry.queued.length;
+                        return `
+                            <li>
+                                <strong>${entry.program}</strong>: ${count} waiting
+                                <div class="meta">${names}</div>
+                            </li>
+                        `;
+                    })
+                    .join('');
+            }
+        }
+
+        if (trainingNeedsNote) {
+            const needs = Array.isArray(trainingReport.assessed_needs) ? trainingReport.assessed_needs : [];
+            const flagged = needs
+                .filter(entry => (entry.under_target || 0) > 0)
+                .sort((a, b) => (b.under_target || 0) - (a.under_target || 0));
+            if (!flagged.length) {
+                trainingNeedsNote.textContent = 'No programs flagged.';
+                trainingNeedsNote.classList.add('muted');
+            } else {
+                const summary = flagged
+                    .slice(0, 3)
+                    .map(entry => {
+                        const avg = typeof entry.avg_level === 'number'
+                            ? entry.avg_level.toFixed(1)
+                            : '—';
+                        const waiting = entry.under_target || 0;
+                        return `${entry.program}: avg ${avg} • ${waiting} behind`;
+                    })
+                    .join(' | ');
+                trainingNeedsNote.textContent = summary;
+                trainingNeedsNote.classList.remove('muted');
             }
         }
 
@@ -629,6 +857,78 @@ document.addEventListener('DOMContentLoaded', () => {
                         </li>
                     `;
                 }).join('');
+            }
+        }
+    }
+
+    function updateFamilyIntel(gameState) {
+        if (!familySpotlight && !familyStoriesList && !familyHouseholdList) return;
+        const snapshot = (gameState && gameState.families) || {};
+        const families = Array.isArray(snapshot.families) ? snapshot.families : [];
+        const recentHistory = Array.isArray(snapshot.recent_history) ? snapshot.recent_history : [];
+        const familyById = new Map(families.map(family => [family.family_id, family]));
+
+        if (familyHouseholdList) {
+            if (!families.length) {
+                familyHouseholdList.innerHTML = '<li class="empty">No families registered.</li>';
+            } else {
+                familyHouseholdList.innerHTML = families.slice(0, 5).map(family => {
+                    const members = Array.isArray(family.members) && family.members.length
+                        ? family.members.join(', ')
+                        : 'No members listed.';
+                    const tagline = family.tagline || 'Household';
+                    const memberCount = Array.isArray(family.members) ? family.members.length : 0;
+                    const lineagePreview = Array.isArray(family.lineage_preview) && family.lineage_preview.length
+                        ? family.lineage_preview.join(' • ')
+                        : null;
+                    const metaParts = [`${memberCount} member${memberCount === 1 ? '' : 's'}`];
+                    if (lineagePreview) {
+                        metaParts.push(lineagePreview);
+                    }
+                    const meta = `<div class="meta">${metaParts.join(' • ')}</div>`;
+                    return `
+                        <li>
+                            <strong>${tagline}</strong>
+                            <div>${members}</div>
+                            ${meta}
+                        </li>
+                    `;
+                }).join('');
+            }
+        }
+
+        if (familyStoriesList) {
+            if (!recentHistory.length) {
+                familyStoriesList.innerHTML = '<li class="empty">No family events recorded.</li>';
+            } else {
+                familyStoriesList.innerHTML = recentHistory.slice(-6).reverse().map(event => {
+                    const dayLabel = typeof event.day === 'number' ? `Day ${event.day}` : 'Day —';
+                    const family = familyById.get(event.family_id);
+                    const familyLabel = family ? (family.tagline || (family.members || []).join(', ')) : (event.family_id || 'Household');
+                    const summary = event.summary || 'No details recorded.';
+                    const typeLabel = event.type ? event.type.replace(/_/g, ' ') : 'Event';
+                    const source = event.source ? `<div class="meta">${typeLabel} • ${event.source}</div>` : `<div class="meta">${typeLabel}</div>`;
+                    return `
+                        <li>
+                            <strong>${dayLabel}</strong> • ${familyLabel}
+                            <div>${summary}</div>
+                            ${source}
+                        </li>
+                    `;
+                }).join('');
+            }
+        }
+
+        if (familySpotlight) {
+            if (!recentHistory.length) {
+                familySpotlight.textContent = 'No family stories logged.';
+            } else {
+                const latest = recentHistory[recentHistory.length - 1];
+                const dayLabel = typeof latest.day === 'number' ? `Day ${latest.day}` : 'Day —';
+                const family = familyById.get(latest.family_id);
+                const familyLabel = family ? (family.tagline || (family.members || []).join(', ')) : (latest.family_id || 'Household');
+                const summary = latest.summary || 'No details recorded.';
+                familySpotlight.textContent = `${dayLabel}: ${summary} (${familyLabel})`;
             }
         }
     }
@@ -904,6 +1204,88 @@ document.addEventListener('DOMContentLoaded', () => {
         return container;
     }
 
+    function renderLifeEventList(events, limit = 10, emptyMessage = 'No events recorded.') {
+        const list = document.createElement('ul');
+        list.classList.add('mini-list');
+
+        if (!events || !events.length) {
+            const empty = document.createElement('li');
+            empty.classList.add('empty');
+            empty.textContent = emptyMessage;
+            list.appendChild(empty);
+            return list;
+        }
+
+        const slice = events.slice(-limit).reverse();
+        slice.forEach(event => {
+            const li = document.createElement('li');
+            const dayLabel = typeof event.day === 'number' ? `Day ${event.day}` : 'Day —';
+            const typeLabel = event.type ? event.type.replace(/_/g, ' ') : 'Event';
+            const summary = event.summary || 'No details recorded.';
+
+            const metaParts = [];
+            if (event.source) {
+                metaParts.push(`Source: ${event.source}`);
+            }
+            const related = Array.isArray(event.related) ? event.related.filter(name => name && name !== event.source) : [];
+            if (related.length) {
+                metaParts.push(`With ${related.join(', ')}`);
+            }
+            const metaHtml = metaParts.length ? `<div class="meta">${metaParts.join(' • ')}</div>` : '';
+
+            const tags = Array.isArray(event.tags) ? event.tags : [];
+            const tagHtml = tags.length
+                ? `<div class="event-tags">${tags.slice(0, 5).map(tag => `<span>${tag}</span>`).join('')}</div>`
+                : '';
+
+            li.innerHTML = `
+                <strong>${dayLabel}</strong> • ${typeLabel}
+                <div>${summary}</div>
+                ${metaHtml}
+                ${tagHtml}
+            `;
+            list.appendChild(li);
+        });
+
+        return list;
+    }
+
+    function renderLineageDetails(lineage) {
+        const panel = document.createElement('div');
+        panel.classList.add('lineage-panel');
+
+        const heading = document.createElement('h5');
+        heading.textContent = 'Lineage web';
+        panel.appendChild(heading);
+
+        const list = document.createElement('dl');
+        list.classList.add('lineage-grid');
+
+        Object.entries(lineage)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .forEach(([member, ties]) => {
+                const term = document.createElement('dt');
+                term.textContent = member;
+                list.appendChild(term);
+
+                const desc = document.createElement('dd');
+                if (ties && Object.keys(ties).length) {
+                    const fragments = Object.entries(ties).map(([role, names]) => {
+                        const label = role.replace(/_/g, ' ');
+                        const formatted = Array.isArray(names) ? names.join(', ') : String(names);
+                        return `<span><strong>${label}:</strong> ${formatted}</span>`;
+                    });
+                    desc.innerHTML = fragments.join(' • ');
+                } else {
+                    desc.textContent = 'No documented ties yet.';
+                }
+                list.appendChild(desc);
+            });
+
+        panel.appendChild(list);
+        return panel;
+    }
+
     function buildOverviewContent(character) {
         const wrapper = document.createElement('div');
         const needsSection = document.createElement('section');
@@ -940,6 +1322,35 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function buildSocialContent(character) {
         const wrapper = document.createElement('div');
+
+        const familySection = document.createElement('section');
+        familySection.innerHTML = '<h4>Family</h4>';
+        const familyProfile = character.family_profile;
+        if (familyProfile && Array.isArray(familyProfile.members) && familyProfile.members.length) {
+            if (familyProfile.tagline) {
+                const tagline = document.createElement('p');
+                tagline.classList.add('mini-note');
+                tagline.textContent = familyProfile.tagline;
+                familySection.appendChild(tagline);
+            }
+            const membersPara = document.createElement('p');
+            membersPara.innerHTML = `<strong>Members:</strong> ${familyProfile.members.join(', ')}`;
+            familySection.appendChild(membersPara);
+            if (familyProfile.role_snapshot && Object.keys(familyProfile.role_snapshot).length) {
+                const rolesBlock = document.createElement('div');
+                rolesBlock.classList.add('mini-note');
+                const roleParts = Object.entries(familyProfile.role_snapshot).map(([role, names]) => `${role}: ${names.join(', ')}`);
+                rolesBlock.innerHTML = `<strong>Roles:</strong> ${roleParts.join(' • ')}`;
+                familySection.appendChild(rolesBlock);
+            }
+            if (familyProfile.lineage && Object.keys(familyProfile.lineage).length) {
+                familySection.appendChild(renderLineageDetails(familyProfile.lineage));
+            }
+            const sharedMoments = renderLifeEventList(familyProfile.latest_events || [], 4, 'No shared moments logged.');
+            familySection.appendChild(sharedMoments);
+        } else {
+            familySection.innerHTML += '<p>No registered family ties.</p>';
+        }
 
         const knownSection = document.createElement('section');
         knownSection.innerHTML = '<h4>Known Characters</h4>';
@@ -979,7 +1390,7 @@ document.addEventListener('DOMContentLoaded', () => {
         dialogueSection.innerHTML = '<h4>Recent Conversations</h4>';
         dialogueSection.appendChild(formatDialogueHistory(character.dialogue_history));
 
-        wrapper.append(knownSection, relationshipsSection, opinionsSection, dialogueSection);
+        wrapper.append(familySection, knownSection, relationshipsSection, opinionsSection, dialogueSection);
         return wrapper;
     }
 
@@ -1016,7 +1427,15 @@ document.addEventListener('DOMContentLoaded', () => {
             historySection.innerHTML += '<p>No recent activity recorded.</p>';
         }
 
-        wrapper.append(goalSection, placementSection, historySection);
+        const highlightsSection = document.createElement('section');
+        highlightsSection.innerHTML = '<h4>Life Highlights</h4>';
+        highlightsSection.appendChild(renderLifeEventList(character.life_highlights || [], 6, 'No highlights logged.'));
+
+        const chronicleSection = document.createElement('section');
+        chronicleSection.innerHTML = '<h4>Life Chronicle</h4>';
+        chronicleSection.appendChild(renderLifeEventList(character.life_history || [], 12, 'No life events recorded.'));
+
+        wrapper.append(goalSection, placementSection, historySection, highlightsSection, chronicleSection);
         return wrapper;
     }
 
@@ -1509,6 +1928,7 @@ document.addEventListener('DOMContentLoaded', () => {
             updateEventFeed(gameState.event_log);
             updateWorldSummary(gameState);
             updateEconomyIntel(gameState);
+            updateFamilyIntel(gameState);
             renderCharacterList(gameState.characters);
             if (followedCharacterName) {
                 loadCharacterDetails(followedCharacterName, { worldPanel: false, characterPanel: true, showLoading: false });

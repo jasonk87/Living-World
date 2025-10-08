@@ -32,6 +32,9 @@ class GoalType(Enum):
     MANAGE_APPOINTMENTS = auto() # Mayor
     ISSUE_STRATEGIC_DIRECTIVE = auto() # Mayor, other leaders
     ENACT_POLICY = auto() # Mayor
+    REVIEW_LAW_PETITIONS = auto() # Mayor
+    DRAFT_SETTLEMENT_LAW = auto() # Mayor
+    ENACT_SETTLEMENT_LAW = auto() # Mayor
     APPROVE_MAJOR_PROJECT = auto() # Mayor
     HOST_EVENT = auto() # Mayor, Nobles (e.g. GiveSpeech, HoldMeeting)
     GIVE_SPEECH = auto() # Specific HOST_EVENT type
@@ -45,6 +48,9 @@ class GoalType(Enum):
     MAINTAIN_PEACE_IN_SETTLEMENT = auto() # Sheriff
     PATROL_AREA = auto() # Deputy, Militia Captain
     INVESTIGATE_DISTURBANCE = auto() # Sheriff
+    PREPARE_TRIAL_CASE = auto() # Sheriff legal prep
+    CONDUCT_WITNESS_INTERVIEW = auto() # Sheriff & Deputies
+    ATTEND_TRIAL = auto() # Court appearances
 
     # Medical
     OVERSEE_MEDICAL_OPERATIONS = auto() # CMO
@@ -103,6 +109,8 @@ class GoalType(Enum):
     PERFORM_FARMER_DUTIES = auto()
     PERFORM_HUNTER_DUTIES = auto()
     PERFORM_FLETCHER_DUTIES = auto()
+    PERFORM_SAWYER_DUTIES = auto()
+    PERFORM_CARPENTER_DUTIES = auto()
 
 
 class GoalStatus(Enum):
@@ -204,6 +212,8 @@ def create_goal_from_job(job_name: str, char_name: str) -> Goal:
                 "Perform Farmer Duties": GoalType.PERFORM_FARMER_DUTIES,
                 "Perform Hunter Duties": GoalType.PERFORM_HUNTER_DUTIES,
                 "Perform Fletcher Duties": GoalType.PERFORM_FLETCHER_DUTIES,
+                "Perform Sawyer Duties": GoalType.PERFORM_SAWYER_DUTIES,
+                "Perform Carpenter Duties": GoalType.PERFORM_CARPENTER_DUTIES,
                 "Assess Production Needs": GoalType.ASSESS_PRODUCTION_NEEDS,
                 "Manage Subordinates": GoalType.MANAGE_SUBORDINATES,
                 "Maintain Ledger": GoalType.MAINTAIN_LEDGER,

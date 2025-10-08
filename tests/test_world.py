@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Any, Dict, List
 from unittest.mock import patch
 
 import pytest
@@ -283,3 +283,565 @@ def test_cultural_event_boosts_characters_and_spirit():
 
     assert world.active_cultural_event is None
     assert not any(key for key in world.active_world_effects if str(key).startswith("cultural_event"))
+
+
+def test_training_sessions_launch_and_award_experience():
+    world, game_time = _make_world()
+
+    instructor = Character(
+        name="Maris Foreman",
+        personality="Pragmatic",
+        traits=["Diligent"],
+        skills={"Construction": 4},
+        job="Master Craftsman",
+        needs=_standard_needs(),
+    )
+    apprentice_one = Character(
+        name="Toma Mason",
+        personality="Studious",
+        traits=["Curious"],
+        skills={"Construction": 0},
+        job="Builder",
+        needs=_standard_needs(),
+    )
+    apprentice_two = Character(
+        name="Ren Brick",
+        personality="Steadfast",
+        traits=["Patient"],
+        skills={"Construction": 0},
+        job="Builder",
+        needs=_standard_needs(),
+    )
+
+    world.add_character(instructor)
+    world.add_character(apprentice_one)
+    world.add_character(apprentice_two)
+
+    economy_payload: Dict[str, Dict[str, object]] = {}
+    day_one_report = world.process_training_daily(economy_payload)
+
+    assert economy_payload.get("training") == day_one_report
+    assert len(world.active_training_sessions) == 1
+    session = world.active_training_sessions[0]
+    assert session["instructor"] == instructor.name
+    assert set(session["trainees"]) == {apprentice_one.name, apprentice_two.name}
+
+    apprentice_experience = apprentice_one.skills["Construction"]["experience"]
+    assert apprentice_experience > 0
+    expected_esteem = min(
+        config.NEED_SCORE_MAX,
+        config.NEED_ESTEEM_DEFAULT + config.TRAINING_ESTEEM_BOOST,
+    )
+    assert apprentice_one.needs["Esteem"] == expected_esteem
+
+    game_time.current_tick = game_time.ticks_per_day - 1
+    game_time.tick()
+
+    followup_payload: Dict[str, Dict[str, object]] = {}
+    day_two_report = world.process_training_daily(followup_payload)
+
+    assert len(world.active_training_sessions) == 0
+    assert day_two_report.get("concluded_sessions")
+    conclusion = day_two_report["concluded_sessions"][0]
+    assert conclusion["reason"] == "completed"
+    assert any(outcome["name"] == apprentice_one.name for outcome in conclusion["outcomes"])
+    assert apprentice_one.skills["Construction"]["experience"] >= apprentice_experience
+
+
+def test_workforce_crews_deliver_resources_and_queue_backlog():
+    world, _ = _make_world()
+
+    stockpile = Stockpile("Central Stockpile", 0, 0, 2, 2, allowed_resources=None, capacity_per_resource=8)
+    world.add_stockpile(stockpile)
+
+    woodcutter = Character(
+        name="Darin", 
+        personality="Stoic",
+        traits=[],
+        skills={"Woodcutting": 2},
+        job="Woodcutter",
+        needs=_standard_needs(),
+    )
+    hauler = Character(
+        name="Mira",
+        personality="Helpful",
+        traits=[],
+        skills={},
+        job="Builder",
+        needs=_standard_needs(),
+    )
+
+    world.add_character(woodcutter)
+    world.add_character(hauler)
+
+    world.work_shift_definitions = {
+        "logging": {
+            "title": "Logging Crews",
+            "jobs": ["Woodcutter"],
+            "task": "Chop Wood",
+            "resource": "Wood",
+            "skill": "Woodcutting",
+            "shift_ticks": 6,
+            "carry_capacity_per_worker": 3,
+            "hauler_jobs": ["Builder"],
+            "hauler_capacity": 4,
+            "skill_yield_bonus": 0.0,
+            "preferred_stockpiles": ["Central Stockpile"],
+        }
+    }
+    world.work_shift_backlog = {"logging": 0.0}
+
+    daily_report: Dict[str, Any] = {}
+    report_one = world.process_workforce_daily(daily_report)
+
+    assert daily_report.get("workforce") == report_one
+    assert report_one["gathered_total"] >= 1
+    assert report_one["delivered_total"] == stockpile.inventory.get("Wood", 0)
+
+    logging_entry = report_one["crews"][0]
+    assert logging_entry["key"] == "logging"
+    assert logging_entry["delivered"] == report_one["delivered_total"]
+    assert logging_entry["backlog"] >= 0
+
+    previous_backlog = logging_entry["backlog"]
+
+    # Saturate the stockpile so new deliveries cannot be stored.
+    current_wood = stockpile.inventory.get("Wood", 0)
+    stockpile.capacity_per_resource = current_wood
+    stockpile.total_capacity = current_wood
+
+    world.game_time.current_day += 1
+
+    follow_report = world.process_workforce_daily({})
+    follow_entry = follow_report["crews"][0]
+
+    assert follow_report["gathered_total"] >= report_one["gathered_total"]
+    assert follow_entry["backlog"] >= previous_backlog
+    assert follow_report["backlog_total"] >= follow_entry["backlog"]
+    assert follow_report["delivered_total"] <= stockpile.capacity_per_resource
+
+
+def test_manufacturing_crews_transform_inputs_into_outputs():
+    world, _ = _make_world()
+
+    stockpile = Stockpile(
+        "Central Stockpile",
+        0,
+        0,
+        2,
+        2,
+        allowed_resources=None,
+        capacity_per_resource=50,
+    )
+    world.add_stockpile(stockpile)
+    added = stockpile.add_item("Wood", 20)
+    assert added == (True, 20)
+
+    sawyer = Character(
+        name="Rhea",
+        personality="Focused",
+        traits=[],
+        skills={"Carpentry": 2},
+        job="Sawyer",
+        needs=_standard_needs(),
+    )
+    carpenter = Character(
+        name="Orrin",
+        personality="Patient",
+        traits=[],
+        skills={"Carpentry": 3},
+        job="Carpenter",
+        needs=_standard_needs(),
+    )
+    hauler = Character(
+        name="Jess",
+        personality="Helpful",
+        traits=[],
+        skills={},
+        job="Builder",
+        needs=_standard_needs(),
+    )
+
+    for character in (sawyer, carpenter, hauler):
+        world.add_character(character)
+
+    world.work_shift_definitions = {
+        "sawmill": {
+            "title": "Sawmill Crew",
+            "jobs": ["Sawyer"],
+            "task": "Saw Lumber",
+            "resource": "Lumber",
+            "skill": "Carpentry",
+            "shift_ticks": 6,
+            "carry_capacity_per_worker": 4,
+            "hauler_jobs": ["Builder"],
+            "hauler_capacity": 6,
+            "skill_yield_bonus": 0.1,
+            "inputs": {"Wood": 2},
+            "preferred_stockpiles": ["Central Stockpile"],
+            "discrete_output": True,
+        },
+        "carpentry": {
+            "title": "Carpenter's Shop",
+            "jobs": ["Carpenter"],
+            "task": "Assemble Furniture",
+            "resource": "Furniture",
+            "skill": "Carpentry",
+            "shift_ticks": 6,
+            "carry_capacity_per_worker": 3,
+            "hauler_jobs": ["Builder"],
+            "hauler_capacity": 6,
+            "skill_yield_bonus": 0.12,
+            "inputs": {"Lumber": 2},
+            "preferred_stockpiles": ["Central Stockpile"],
+            "discrete_output": True,
+        },
+    }
+    world.work_shift_backlog = {"sawmill": 0.0, "carpentry": 0.0}
+
+    daily_report: Dict[str, Any] = {}
+    report = world.process_workforce_daily(daily_report)
+
+    assert daily_report.get("workforce") == report
+    assert report["alerts"] and any("Carpenter's Shop" in alert for alert in report["alerts"])
+
+    sawmill_entry = next(entry for entry in report["crews"] if entry["key"] == "sawmill")
+    carpentry_entry = next(entry for entry in report["crews"] if entry["key"] == "carpentry")
+
+    assert sawmill_entry["delivered"] >= 1
+    sawmill_inputs = sawmill_entry.get("inputs_consumed", {})
+    assert sawmill_inputs.get("Wood", 0) == sawmill_entry["gathered"] * 2
+    lumber_used = carpentry_entry.get("inputs_consumed", {}).get("Lumber", 0)
+    if carpentry_entry["delivered"]:
+        assert lumber_used == carpentry_entry["delivered"] * 2
+
+    starting_wood = 20
+    remaining_wood = stockpile.inventory.get("Wood", 0)
+    assert remaining_wood == starting_wood - sawmill_inputs.get("Wood", 0)
+    assert stockpile.inventory.get("Furniture", 0) == carpentry_entry["delivered"]
+
+
+def test_manufacturing_crews_surface_shortages():
+    world, _ = _make_world()
+
+    stockpile = Stockpile(
+        "Central Stockpile",
+        0,
+        0,
+        2,
+        2,
+        allowed_resources=None,
+        capacity_per_resource=10,
+    )
+    world.add_stockpile(stockpile)
+
+    carpenter = Character(
+        name="Lysa",
+        personality="Stubborn",
+        traits=[],
+        skills={"Carpentry": 2},
+        job="Carpenter",
+        needs=_standard_needs(),
+    )
+    world.add_character(carpenter)
+
+    world.work_shift_definitions = {
+        "carpentry": {
+            "title": "Carpenter's Shop",
+            "jobs": ["Carpenter"],
+            "task": "Assemble Furniture",
+            "resource": "Furniture",
+            "skill": "Carpentry",
+            "shift_ticks": 6,
+            "carry_capacity_per_worker": 3,
+            "hauler_jobs": ["Builder"],
+            "hauler_capacity": 6,
+            "skill_yield_bonus": 0.12,
+            "inputs": {"Lumber": 2},
+            "preferred_stockpiles": ["Central Stockpile"],
+            "discrete_output": True,
+        }
+    }
+    world.work_shift_backlog = {"carpentry": 0.0}
+
+    report = world.process_workforce_daily({})
+
+    carpentry_entry = report["crews"][0]
+
+    assert carpentry_entry["gathered"] == 0
+    assert "notes" in carpentry_entry and any("Awaiting inputs" in note for note in carpentry_entry["notes"])
+    assert report["alerts"] and any("Lumber" in alert for alert in report["alerts"])
+    assert "inputs_consumed" not in carpentry_entry or not carpentry_entry["inputs_consumed"]
+
+def test_family_arrival_event_and_profile():
+    world, _ = _make_world()
+    alice = Character(
+        name="Alice",
+        personality="Brave",
+        traits=[],
+        skills={},
+        family_members=["Bryn"],
+    )
+    bryn = Character(
+        name="Bryn",
+        personality="Calm",
+        traits=[],
+        skills={},
+        family_members=["Alice"],
+    )
+
+    world.add_character(alice)
+    world.add_character(bryn)
+
+    profile = world.get_family_profile_for_character("Alice")
+    assert profile
+    assert sorted(profile["members"]) == ["Alice", "Bryn"]
+
+    arrival_event = next((evt for evt in alice.life_history if evt.get("type") == "arrival"), None)
+    assert arrival_event is not None
+    assert arrival_event.get("significance", 0) >= 3
+
+    echoed = next((evt for evt in bryn.life_history if evt.get("is_family_echo")), None)
+    assert echoed is not None
+    assert "Alice" in echoed.get("summary", "")
+
+
+def test_record_birth_creates_family_links_and_events():
+    world, _ = _make_world()
+
+    parent = Character(
+        name="Elena",
+        personality="Caring",
+        traits=["Compassionate"],
+        skills={},
+    )
+    partner = Character(
+        name="Garrin",
+        personality="Steadfast",
+        traits=["Diligent"],
+        skills={},
+    )
+
+    world.add_character(parent)
+    world.add_character(partner)
+
+    assert world.register_union("Elena", "Garrin", ceremony_name="Harvest vows") is True
+
+    child = world.record_birth("Elena", other_parent="Garrin")
+    assert child is not None
+
+    assert child.name in parent.family_members
+    assert child.name in partner.family_members
+    assert parent.name in child.family_members
+
+    parent_event = next((evt for evt in parent.life_history if evt.get("type") == "welcomed_child"), None)
+    assert parent_event is not None
+    assert child.name in parent_event.get("summary", "")
+
+    child_event = next((evt for evt in child.life_history if evt.get("type") == "birth"), None)
+    assert child_event is not None
+    assert "Elena" in child_event.get("summary", "")
+
+    profile = world.get_family_profile_for_character("Elena")
+    assert child.name in profile["lineage"].get("Elena", {}).get("children", [])
+    child_profile = world.get_family_profile_for_character(child.name)
+    assert "Elena" in child_profile["lineage"].get(child.name, {}).get("parents", [])
+
+
+def test_medical_events_populate_life_history():
+    world, _ = _make_world()
+    patient = Character(
+        name="Mae",
+        personality="Patient",
+        traits=[],
+        skills={},
+        family_members=["Nox"],
+    )
+    kin = Character(
+        name="Nox",
+        personality="Guarded",
+        traits=[],
+        skills={},
+        family_members=["Mae"],
+    )
+
+    world.add_character(patient)
+    world.add_character(kin)
+
+    case, created = world.register_medical_case("Mae", "injury", 4.5, reporter="Nox", cause="Logging accident")
+    assert created is True
+    case_id = case["case_id"]
+
+    open_event = next(
+        evt
+        for evt in patient.life_history
+        if evt.get("type") == "medical_case_opened" and evt.get("details", {}).get("case_id") == case_id
+    )
+    assert "injury" in open_event.get("summary", "")
+
+    kin_echo = next((evt for evt in kin.life_history if evt.get("is_family_echo") and "injury" in evt.get("summary", "")), None)
+    assert kin_echo is not None
+
+    world.resolve_medical_case(case_id, "recovered", notes="Nox stitched the wound.")
+
+    outcome_event = next(
+        evt
+        for evt in patient.life_history
+        if evt.get("type") == "medical_case_resolved" and evt.get("details", {}).get("case_id") == case_id
+    )
+    assert outcome_event.get("details", {}).get("outcome") == "recovered"
+
+
+def test_register_union_logs_history_and_lineage():
+    world, _ = _make_world()
+
+    rowan = Character(name="Rowan", personality="Curious", traits=[], skills={})
+    sera = Character(name="Sera", personality="Cheerful", traits=[], skills={})
+    witness = Character(name="Bryn", personality="Calm", traits=[], skills={})
+
+    world.add_character(rowan)
+    world.add_character(sera)
+    world.add_character(witness)
+
+    assert world.register_union("Rowan", "Sera", ceremony_name="Moonlit vows", witnesses=["Bryn"]) is True
+
+    marriage_event = next((evt for evt in rowan.life_history if evt.get("type") == "marriage"), None)
+    assert marriage_event is not None
+    assert "Sera" in marriage_event.get("summary", "")
+
+    witness_event = next((evt for evt in witness.life_history if evt.get("type") == "witnessed_union"), None)
+    assert witness_event is not None
+    assert "Rowan" in witness_event.get("summary", "")
+
+    profile = world.get_family_profile_for_character("Rowan")
+    assert profile["lineage"].get("Rowan", {}).get("partners") == ["Sera"]
+
+
+def test_relationship_tier_change_creates_life_event():
+    world, _ = _make_world()
+    iris = Character(name="Iris", personality="Bold", traits=[], skills={})
+    oren = Character(name="Oren", personality="Calm", traits=[], skills={})
+
+    world.add_character(iris)
+    world.add_character(oren)
+
+    iris.modify_relationship("Oren", 50, world, reason="Worked side by side")
+
+    tier_event = next((evt for evt in iris.life_history if evt.get("type") == "relationship_tier_change"), None)
+    assert tier_event is not None
+    assert "Oren" in tier_event.get("summary", "")
+    assert tier_event.get("details", {}).get("new_tier") in {"Friend", "Friendly Acquaintance", "Close Friend", "Soulmate"}
+
+
+def test_fatal_medical_case_creates_bereavement_events():
+    world, _ = _make_world()
+
+    patient = Character(name="Calla", personality="Stoic", traits=[], skills={}, family_members=["Ivor"])
+    kin = Character(name="Ivor", personality="Loyal", traits=[], skills={}, family_members=["Calla"])
+    medic = Character(name="Mae", personality="Patient", traits=[], skills={})
+
+    world.add_character(patient)
+    world.add_character(kin)
+    world.add_character(medic)
+
+    case, created = world.register_medical_case("Calla", "illness", 5.0, reporter="Ivor")
+    assert created is True
+
+    world.record_medical_treatment(case["case_id"], "Mae", severity_after=5.0, success=False)
+    world.resolve_medical_case(case["case_id"], "deceased", notes="Condition worsened overnight.")
+
+    kin_event = next((evt for evt in kin.life_history if evt.get("type") == "family_loss"), None)
+    assert kin_event is not None
+    assert "Calla" in kin_event.get("summary", "")
+
+    medic_event = next((evt for evt in medic.life_history if evt.get("type") == "witnessed_tragedy"), None)
+    assert medic_event is not None
+    assert "Calla" in medic_event.get("summary", "")
+
+
+def test_governance_generates_petitions_from_crime_history():
+    world, game_time = _make_world()
+    game_time.current_day = 6
+
+    for day in range(3):
+        incident = {
+            "id": f"crime_{day}",
+            "type": "theft",
+            "reported_day": game_time.current_day - day - 1,
+            "resolved_day": game_time.current_day - day - 1,
+            "status": "resolved",
+        }
+        world._record_crime_history(incident)
+
+    world.process_governance_daily()
+
+    petitions = [p for p in world.law_petitions if p.get("issue_type") == "theft"]
+    assert petitions
+    assert petitions[0]["incident_count"] >= 3
+
+
+def test_enacted_law_applies_to_case_and_queues_interviews():
+    world, _ = _make_world()
+
+    mayor = Character(name="Elena", personality="Resolute", traits=[], skills={"Leadership": 6}, job="Mayor")
+    sheriff = Character(name="Rogan", personality="Stoic", traits=[], skills={"Security": 5}, job="Sheriff")
+    suspect = Character(name="Vail", personality="Impulsive", traits=[], skills={}, job="Laborer")
+    witness = Character(name="Mira", personality="Calm", traits=[], skills={}, job="Farmer")
+
+    for char in (mayor, sheriff, suspect, witness):
+        world.add_character(char)
+
+    petition = world.register_law_petition("theft", "Merchants seek tighter safeguards", "Guild", incident_count=4, severity=3)
+    law = world.draft_law_from_petition(petition["id"], mayor.name)
+    assert law is not None
+    enacted = world.enact_law(law["id"], mayor.name)
+    assert enacted is not None
+
+    crime = {
+        "id": "crime_test",
+        "type": "theft",
+        "suspect": suspect.name,
+        "description": "Caught removing goods from stockpile",
+    }
+
+    case = world.schedule_trial_for_crime(crime, sheriff.name, 0.4)
+    assert case is not None
+    assert case["law_id"] == law["id"]
+    assert case["requires_interviews"] is True
+    assert case["interview_plan"]
+    assert world.pending_interviews
+
+
+def test_interview_result_boosts_case_evidence():
+    world, _ = _make_world()
+
+    mayor = Character(name="Elena", personality="Resolute", traits=[], skills={"Leadership": 6}, job="Mayor")
+    sheriff = Character(name="Rogan", personality="Stoic", traits=[], skills={"Security": 5}, job="Sheriff")
+    suspect = Character(name="Vail", personality="Impulsive", traits=[], skills={}, job="Laborer")
+    witness = Character(name="Mira", personality="Calm", traits=[], skills={}, job="Farmer")
+
+    for char in (mayor, sheriff, suspect, witness):
+        world.add_character(char)
+
+    petition = world.register_law_petition("theft", "Merchants seek tighter safeguards", "Guild", incident_count=4, severity=3)
+    law = world.draft_law_from_petition(petition["id"], mayor.name)
+    world.enact_law(law["id"], mayor.name)
+
+    crime = {
+        "id": "crime_case",
+        "type": "theft",
+        "suspect": suspect.name,
+        "description": "Lifted tools from workshop",
+    }
+
+    case = world.schedule_trial_for_crime(crime, sheriff.name, 0.3)
+    base_strength = case["evidence_strength"]
+
+    assignment = world.assign_investigative_interview(sheriff.name)
+    assert assignment is not None
+
+    world.record_interview_result(assignment["id"], sheriff.name, 0.8, "Witness corroborated the theft.")
+    updated = world.get_case_by_id(case["case_id"])
+
+    assert updated["evidence_strength"] > base_strength
+    assert updated["interview_statements"]

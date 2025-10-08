@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import random
+from collections import Counter
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Set, Tuple
 
@@ -14,6 +15,7 @@ from .data import (
     STRUCTURE_BLUEPRINTS,
     MARKET_PRICES,
     BLUEPRINTS,
+    JOB_TASK_DEFINITIONS,
     CITIZEN_NAME_POOL,
     CITIZEN_PERSONALITY_POOL,
     CITIZEN_TRAIT_POOL,
@@ -59,6 +61,9 @@ class World:
         self.resource_yield_multipliers: Dict[str, float] = {
             "Wood": 1.0,
             "Stone": 1.0,
+            "Iron Ore": 1.0,
+            "Lumber": 1.0,
+            "Furniture": 1.0,
             "Herbs": 1.0,
             "Food": 1.0,
             "Water": 1.0,
@@ -83,6 +88,17 @@ class World:
         self.pending_crimes: List[Dict[str, Any]] = []
         self.active_crimes: Dict[str, Dict[str, Any]] = {}
         self._crime_incident_counter: int = 0
+        self.legal_cases: Dict[str, Dict[str, Any]] = {}
+        self.trial_queue: List[str] = []
+        self.trial_history: List[Dict[str, Any]] = []
+        self.medical_cases: Dict[str, Dict[str, Any]] = {}
+        self.medical_triage_queue: List[str] = []
+        self.medical_history: List[Dict[str, Any]] = []
+        self.clinic_supply_requests: List[Dict[str, Any]] = []
+        self.latest_healthcare_report: Dict[str, Any] = {}
+        self._medical_case_counter: int = 0
+        courthouse_y = max(0, self.market_location[1] - 1)
+        self.courthouse_location: Tuple[int, int] = (self.market_location[0], courthouse_y)
         self.today_surplus_sales: List[Dict[str, Any]] = []
         self._residential_assignments: Dict[str, Tuple[int, int]] = {}
         self.last_housing_evaluation_day: Optional[int] = None
@@ -114,6 +130,37 @@ class World:
         self.community_spirit: float = getattr(config, "CULTURAL_SPIRIT_BASELINE", 0.4)
         self.cultural_history: List[Dict[str, Any]] = []
         self._last_cultural_update_day: Optional[int] = None
+        self.training_program_definitions: Dict[str, Dict[str, Any]] = deepcopy(
+            getattr(config, "TRAINING_PROGRAM_DEFINITIONS", {})
+        )
+        self.training_waitlists: Dict[str, List[str]] = {
+            key: [] for key in self.training_program_definitions
+        }
+        self.active_training_sessions: List[Dict[str, Any]] = []
+        self.training_history: List[Dict[str, Any]] = []
+        self.latest_training_report: Dict[str, Any] = {}
+        self._last_training_update_day: Optional[int] = None
+        self.work_shift_definitions: Dict[str, Dict[str, Any]] = deepcopy(
+            getattr(config, "WORK_SHIFT_DEFINITIONS", {})
+        )
+        self.work_shift_backlog: Dict[str, float] = {
+            key: 0.0 for key in self.work_shift_definitions
+        }
+        self.latest_workforce_report: Dict[str, Any] = {}
+        self._last_workforce_update_day: Optional[int] = None
+        self.work_logistics_history: List[Dict[str, Any]] = []
+        self.law_petitions: List[Dict[str, Any]] = []
+        self.active_laws: Dict[str, Dict[str, Any]] = {}
+        self.law_history: List[Dict[str, Any]] = []
+        self.pending_interviews: List[Dict[str, Any]] = []
+        self.interview_history: Dict[str, List[Dict[str, Any]]] = {}
+        self._law_counter: int = 0
+        self._law_petition_counter: int = 0
+        self._interview_counter: int = 0
+        self.family_profiles: Dict[str, Dict[str, Any]] = {}
+        self._family_lookup: Dict[str, str] = {}
+        self.family_history: List[Dict[str, Any]] = []
+        self._character_lineage: Dict[str, Dict[str, Set[str]]] = {}
 
     def update_rumors_daily(self):
         """Decays strength of all rumors and removes very weak ones."""
@@ -727,7 +774,13 @@ class World:
         }
         return profile
 
-    def _spawn_new_citizen(self, profile: Dict[str, Any], *, arrival_reason: str) -> Optional['Character']:
+    def _spawn_new_citizen(
+        self,
+        profile: Dict[str, Any],
+        *,
+        arrival_reason: str,
+        suppress_arrival_event: bool = False,
+    ) -> Optional['Character']:
         from .character import Character
 
         needs = profile.get("needs")
@@ -756,6 +809,8 @@ class World:
             citizenship=profile.get("citizenship", "Resident"),
             arrival_day=self.game_time.current_day if self.game_time else None,
         )
+        if suppress_arrival_event and hasattr(character, "_life_event_flags"):
+            character._life_event_flags.add("arrival")
         self.add_character(character)
         self.add_event_log_message(arrival_reason)
         return character
@@ -777,8 +832,33 @@ class World:
         self.clear_reservations_for_character(character.name)
         if hasattr(character, "arrival_day") and character.arrival_day is None and self.game_time:
             character.arrival_day = self.game_time.current_day
+        lineage_entry = self._ensure_lineage_entry(character.name)
+        for kin_name in character.family_members:
+            if not kin_name or kin_name == character.name:
+                continue
+            lineage_entry.setdefault("kin", set()).add(kin_name)
+            other_entry = self._ensure_lineage_entry(kin_name)
+            other_entry.setdefault("kin", set()).add(character.name)
         self._register_character_demographics(character)
         self._update_population_stats(delta=1)
+        self._rebuild_family_profiles()
+        if hasattr(character, "life_history"):
+            self._seed_family_history_for_character(character)
+        if hasattr(character, "record_life_event") and "arrival" not in getattr(character, "_life_event_flags", set()):
+            role_text = character.job or "traveller"
+            origin_text = character.origin or "unknown lands"
+            summary = f"Arrived in the settlement as a {role_text}, hailing from {origin_text}."
+            character.record_life_event(
+                self,
+                "arrival",
+                summary,
+                related=[origin_text],
+                tags=["arrival", "milestone"],
+                significance=3,
+                propagate_to_family=True,
+                details={"origin": origin_text, "job": character.job},
+            )
+            character._life_event_flags.add("arrival")
 
     def remove_character(self, character: 'Character'):
         if character not in self.characters:
@@ -787,7 +867,9 @@ class World:
         self.clear_reservations_for_character(character.name)
         if character.name in self._resident_registry:
             del self._resident_registry[character.name]
+        self._purge_lineage_links(character.name)
         self._update_population_stats(delta=-1)
+        self._rebuild_family_profiles()
 
     def _register_character_demographics(self, character: 'Character') -> None:
         record = {
@@ -803,6 +885,622 @@ class World:
         if self.game_time:
             self.population_stats["last_updated_day"] = self.game_time.current_day
 
+    def _ensure_lineage_entry(self, name: str) -> Dict[str, Set[str]]:
+        entry = self._character_lineage.get(name)
+        if entry is None:
+            entry = {
+                "parents": set(),
+                "children": set(),
+                "siblings": set(),
+                "partners": set(),
+                "kin": set(),
+            }
+            self._character_lineage[name] = entry
+        else:
+            for key in ("parents", "children", "siblings", "partners", "kin"):
+                entry.setdefault(key, set())
+        return entry
+
+    def _purge_lineage_links(self, name: str) -> None:
+        if name in self._character_lineage:
+            self._character_lineage.pop(name, None)
+        for entry in self._character_lineage.values():
+            for relatives in entry.values():
+                if isinstance(relatives, set):
+                    relatives.discard(name)
+
+    @staticmethod
+    def _canonical_family_role(role: str) -> str:
+        mapping = {
+            "parent": "parents",
+            "parents": "parents",
+            "mother": "parents",
+            "father": "parents",
+            "child": "children",
+            "children": "children",
+            "son": "children",
+            "daughter": "children",
+            "sibling": "siblings",
+            "brother": "siblings",
+            "sister": "siblings",
+            "partner": "partners",
+            "partners": "partners",
+            "spouse": "partners",
+            "husband": "partners",
+            "wife": "partners",
+            "kin": "kin",
+        }
+        lowered = role.lower()
+        return mapping.get(lowered, lowered)
+
+    def _export_lineage_for_members(self, members: Iterable[str]) -> Dict[str, Dict[str, List[str]]]:
+        snapshot: Dict[str, Dict[str, List[str]]] = {}
+        for name in members:
+            if not name:
+                continue
+            entry = self._ensure_lineage_entry(name)
+            member_snapshot: Dict[str, List[str]] = {}
+            for role, relatives in entry.items():
+                if not isinstance(relatives, set) or not relatives:
+                    continue
+                member_snapshot[role] = sorted(relatives)
+            if member_snapshot:
+                snapshot[name] = member_snapshot
+        return snapshot
+
+    def _refresh_family_lineage_for_family(self, family_id: str) -> None:
+        profile = self.family_profiles.get(family_id)
+        if not profile:
+            return
+        members = profile.get("members", [])
+        profile["lineage"] = self._export_lineage_for_members(members)
+
+    def register_family_link(
+        self,
+        subject_name: str,
+        relative_name: str,
+        relation_type: str,
+        *,
+        refresh_profiles: bool = True,
+    ) -> bool:
+        if not subject_name or not relative_name or not relation_type:
+            return False
+
+        subject = self.get_character_by_name(subject_name)
+        relative = self.get_character_by_name(relative_name)
+        if not subject or not relative:
+            return False
+
+        canonical_role = self._canonical_family_role(relation_type)
+        mirror_map = {
+            "parents": "children",
+            "children": "parents",
+            "siblings": "siblings",
+            "partners": "partners",
+            "kin": "kin",
+        }
+        mirror_role = mirror_map.get(canonical_role, canonical_role)
+
+        if relative_name not in subject.family_members:
+            subject.family_members.append(relative_name)
+        if subject.name not in relative.family_members:
+            relative.family_members.append(subject.name)
+
+        subject.register_family_role(canonical_role, relative.name)
+        relative.register_family_role(mirror_role, subject.name)
+
+        subject_entry = self._ensure_lineage_entry(subject.name)
+        relative_entry = self._ensure_lineage_entry(relative.name)
+
+        if canonical_role == "parents":
+            subject_entry["parents"].add(relative.name)
+            relative_entry["children"].add(subject.name)
+        elif canonical_role == "children":
+            subject_entry["children"].add(relative.name)
+            relative_entry["parents"].add(subject.name)
+        elif canonical_role == "siblings":
+            subject_entry["siblings"].add(relative.name)
+            relative_entry["siblings"].add(subject.name)
+        elif canonical_role == "partners":
+            subject_entry["partners"].add(relative.name)
+            relative_entry["partners"].add(subject.name)
+        else:
+            subject_entry.setdefault(canonical_role, set()).add(relative.name)
+            relative_entry.setdefault(mirror_role, set()).add(subject.name)
+
+        if refresh_profiles:
+            self._rebuild_family_profiles()
+        else:
+            family_ids = {
+                self._family_lookup.get(subject.name),
+                self._family_lookup.get(relative.name),
+            }
+            for fam_id in family_ids:
+                if fam_id:
+                    self._refresh_family_lineage_for_family(fam_id)
+        return True
+
+    def _summarize_lineage(self, members: Iterable[str]) -> List[str]:
+        lineage = self._export_lineage_for_members(members)
+        preview: List[str] = []
+        ordered_names = sorted(lineage.keys())
+        for name in ordered_names:
+            entry = lineage[name]
+            fragments: List[str] = []
+            for key in ("partners", "children", "parents", "siblings"):
+                related = entry.get(key)
+                if related:
+                    label = key[:-1] if key.endswith("s") else key
+                    fragments.append(f"{label.capitalize()}: {', '.join(related)}")
+            if not fragments:
+                continue
+            preview.append(f"{name}: {'; '.join(fragments)}")
+            if len(preview) >= 4:
+                break
+        return preview
+
+    def record_birth(
+        self,
+        parent_name: str,
+        *,
+        other_parent: Optional[str] = None,
+        child_profile: Optional[Dict[str, Any]] = None,
+        announcement: Optional[str] = None,
+    ) -> Optional['Character']:
+        parent = self.get_character_by_name(parent_name)
+        if not parent:
+            return None
+
+        if child_profile is None:
+            child_profile = self._generate_citizen_profile(
+                job="Child",
+                age=0,
+                needs=dict(config.DEFAULT_CHILD_NEEDS),
+                traits=["Innocent"],
+                personality="Curious",
+                origin=f"Born to {parent.name}",
+            )
+        else:
+            child_profile = deepcopy(child_profile)
+
+        child_profile["job"] = child_profile.get("job", "Child")
+        child_profile["age"] = 0
+        child_profile.setdefault("needs", dict(config.DEFAULT_CHILD_NEEDS))
+        child_profile["x"], child_profile["y"] = parent.x, parent.y
+
+        announcement_text = announcement or f"A new child, {child_profile['name']}, is born into {parent.name}'s household."
+        child = self._spawn_new_citizen(
+            child_profile,
+            arrival_reason=announcement_text,
+            suppress_arrival_event=True,
+        )
+        if not child:
+            return None
+
+        other_parent_char = self.get_character_by_name(other_parent) if other_parent else None
+
+        detail_parents = [parent.name]
+        if other_parent_char:
+            detail_parents.append(other_parent_char.name)
+
+        if hasattr(child, "record_life_event"):
+            child.record_life_event(
+                self,
+                "birth",
+                f"Born to {' and '.join(detail_parents)}.",
+                related=detail_parents,
+                tags=["family", "birth", "milestone"],
+                significance=4,
+                propagate_to_family=False,
+                details={"parents": detail_parents},
+                dedupe_key=f"birth:{child.name}",
+            )
+
+        summary_parent = f"Welcomed a child named {child.name}."
+        if other_parent_char:
+            summary_parent = f"Welcomed {child.name} with {other_parent_char.name}."
+
+        if hasattr(parent, "record_life_event"):
+            parent.record_life_event(
+                self,
+                "welcomed_child",
+                summary_parent,
+                related=[child.name] + ([other_parent_char.name] if other_parent_char else []),
+                tags=["family", "birth"],
+                significance=4,
+                propagate_to_family=True,
+                details={"child": child.name, "co_parent": other_parent_char.name if other_parent_char else None},
+                dedupe_key=f"welcomed_child:{child.name}:{parent.name}",
+            )
+
+        if other_parent_char and hasattr(other_parent_char, "record_life_event"):
+            other_parent_char.record_life_event(
+                self,
+                "welcomed_child",
+                f"Welcomed {child.name} with {parent.name}.",
+                related=[child.name, parent.name],
+                tags=["family", "birth"],
+                significance=4,
+                propagate_to_family=True,
+                details={"child": child.name, "co_parent": parent.name},
+                dedupe_key=f"welcomed_child:{child.name}:{other_parent_char.name}",
+            )
+
+        self.register_family_link(parent.name, child.name, "child", refresh_profiles=False)
+        if other_parent_char:
+            self.register_family_link(other_parent_char.name, child.name, "child", refresh_profiles=False)
+            self.register_family_link(parent.name, other_parent_char.name, "partner", refresh_profiles=False)
+
+        self._rebuild_family_profiles()
+
+        return child
+
+    def _record_bereavement_events(
+        self,
+        patient: Optional['Character'],
+        outcome: str,
+        witnesses: Optional[Iterable[str]] = None,
+    ) -> None:
+        if not patient or outcome not in {"deceased", "fatal"}:
+            return
+
+        cause_label = outcome.replace("_", " ")
+        unique_witnesses: List[str] = []
+        if witnesses:
+            for name in witnesses:
+                if not name or name == "System":
+                    continue
+                if name not in unique_witnesses:
+                    unique_witnesses.append(name)
+
+        for witness_name in unique_witnesses:
+            witness = self.get_character_by_name(witness_name)
+            if not witness or witness.name == patient.name:
+                continue
+            if hasattr(witness, "record_life_event"):
+                witness.record_life_event(
+                    self,
+                    "witnessed_tragedy",
+                    f"Witnessed {patient.name} {cause_label}.",
+                    related=[patient.name],
+                    tags=["loss", "witness", "grief"],
+                    significance=3,
+                    propagate_to_family=True,
+                    details={"subject": patient.name, "outcome": outcome},
+                    dedupe_key=f"witnessed_loss:{patient.name}:{outcome}:{witness.name}",
+                )
+
+        family_id = self._family_lookup.get(patient.name)
+        grief_event = {
+            "type": "loss",
+            "summary": f"{patient.name} {cause_label}.",
+            "focus": patient.name,
+            "source": patient.name,
+            "details": {"outcome": outcome},
+        }
+        if family_id:
+            self.record_family_event(family_id, grief_event)
+
+        for kin_name in getattr(patient, "family_members", []) or []:
+            if kin_name == patient.name:
+                continue
+            kin = self.get_character_by_name(kin_name)
+            if not kin or not hasattr(kin, "record_life_event"):
+                continue
+            kin.record_life_event(
+                self,
+                "family_loss",
+                f"Mourned the loss of {patient.name}.",
+                related=[patient.name],
+                tags=["family", "loss", "bereavement"],
+                significance=4,
+                propagate_to_family=False,
+                details={"relative": patient.name, "outcome": outcome},
+                dedupe_key=f"family_loss:{patient.name}:{kin.name}",
+            )
+
+    def register_union(
+        self,
+        partner_one: str,
+        partner_two: str,
+        *,
+        ceremony_name: Optional[str] = None,
+        witnesses: Optional[Iterable[str]] = None,
+    ) -> bool:
+        partner_a = self.get_character_by_name(partner_one)
+        partner_b = self.get_character_by_name(partner_two)
+        if not partner_a or not partner_b:
+            return False
+
+        self.register_family_link(partner_a.name, partner_b.name, "partner", refresh_profiles=False)
+        self._rebuild_family_profiles()
+
+        ceremony_label = ceremony_name or "a union ceremony"
+        if hasattr(partner_a, "record_life_event"):
+            partner_a.record_life_event(
+                self,
+                "marriage",
+                f"Joined with {partner_b.name} during {ceremony_label}.",
+                related=[partner_b.name],
+                tags=["family", "marriage", "milestone"],
+                significance=4,
+                propagate_to_family=True,
+                details={"partner": partner_b.name, "ceremony": ceremony_label},
+                dedupe_key=f"marriage:{partner_a.name}:{partner_b.name}",
+            )
+
+        if hasattr(partner_b, "record_life_event"):
+            partner_b.record_life_event(
+                self,
+                "marriage",
+                f"Joined with {partner_a.name} during {ceremony_label}.",
+                related=[partner_a.name],
+                tags=["family", "marriage", "milestone"],
+                significance=4,
+                propagate_to_family=True,
+                details={"partner": partner_a.name, "ceremony": ceremony_label},
+                dedupe_key=f"marriage:{partner_b.name}:{partner_a.name}",
+            )
+
+        if witnesses:
+            for name in witnesses:
+                witness = self.get_character_by_name(name)
+                if not witness or not hasattr(witness, "record_life_event"):
+                    continue
+                witness.record_life_event(
+                    self,
+                    "witnessed_union",
+                    f"Witnessed the union of {partner_a.name} and {partner_b.name} during {ceremony_label}.",
+                    related=[partner_a.name, partner_b.name],
+                    tags=["family", "celebration"],
+                    significance=2,
+                    propagate_to_family=False,
+                    details={"partners": [partner_a.name, partner_b.name], "ceremony": ceremony_label},
+                    dedupe_key=f"witnessed_union:{partner_a.name}:{partner_b.name}:{witness.name}",
+                )
+
+        return True
+
+    def _rebuild_family_profiles(self) -> None:
+        if not self.characters:
+            self.family_profiles = {}
+            self._family_lookup = {}
+            return
+
+        adjacency: Dict[str, Set[str]] = {}
+        for char in self.characters:
+            related = set(char.family_members or [])
+            related.add(char.name)
+            adjacency[char.name] = related
+            for relative in related:
+                adjacency.setdefault(relative, set()).add(char.name)
+
+        visited: Set[str] = set()
+        components: List[Set[str]] = []
+        for name in adjacency:
+            if name in visited:
+                continue
+            stack = [name]
+            component: Set[str] = set()
+            while stack:
+                current = stack.pop()
+                if current in visited:
+                    continue
+                visited.add(current)
+                component.add(current)
+                for neighbor in adjacency.get(current, set()):
+                    if neighbor not in visited:
+                        stack.append(neighbor)
+            if component:
+                components.append(component)
+
+        for char in self.characters:
+            if char.name not in adjacency:
+                components.append({char.name})
+
+        old_profiles = self.family_profiles
+        old_lookup = self._family_lookup
+        new_profiles: Dict[str, Dict[str, Any]] = {}
+        new_lookup: Dict[str, str] = {}
+
+        for component in components:
+            members = sorted(component)
+            family_id = "|".join(members)
+            matched_profile: Optional[Dict[str, Any]] = None
+            for member in members:
+                previous_id = old_lookup.get(member)
+                if not previous_id:
+                    continue
+                previous_profile = old_profiles.get(previous_id)
+                if previous_profile and set(previous_profile.get("members", [])) == component:
+                    matched_profile = deepcopy(previous_profile)
+                    break
+
+            if matched_profile is None:
+                matched_profile = {
+                    "family_id": family_id,
+                    "members": members,
+                    "events": [],
+                    "tagline": "",
+                    "last_updated_day": self.game_time.current_day if self.game_time else 0,
+                }
+
+            matched_profile["family_id"] = family_id
+            matched_profile["members"] = members
+            matched_profile["tagline"] = self._generate_family_tagline(component)
+            matched_profile["lineage"] = self._export_lineage_for_members(members)
+            new_profiles[family_id] = matched_profile
+            for member in members:
+                new_lookup[member] = family_id
+
+        self.family_profiles = new_profiles
+        self._family_lookup = new_lookup
+        for family_id in self.family_profiles:
+            self._refresh_family_lineage_for_family(family_id)
+
+    def _generate_family_tagline(self, member_names: Iterable[str]) -> str:
+        members = list(member_names)
+        if not members:
+            return "Household"
+
+        jobs: List[str] = []
+        ages: List[int] = []
+        for name in members:
+            char = self.get_character_by_name(name)
+            if not char:
+                continue
+            if getattr(char, "job", None):
+                jobs.append(char.job)
+            age_val = getattr(char, "age_years", None)
+            if isinstance(age_val, (int, float)):
+                ages.append(int(age_val))
+
+        if ages:
+            average_age = sum(ages) / len(ages)
+            if average_age < 20:
+                age_band = "Young"
+            elif average_age < 45:
+                age_band = "Working"
+            else:
+                age_band = "Seasoned"
+        else:
+            age_band = "Rooted"
+
+        if jobs:
+            job_counts = Counter(jobs)
+            top_job, top_count = job_counts.most_common(1)[0]
+            job_phrase = f"{top_job} household" if top_count == len(members) else f"{top_job}-led household"
+        else:
+            job_phrase = "Generalist household"
+
+        return f"{age_band} {job_phrase}"
+
+    def record_family_event(self, family_id: str, event: Dict[str, Any]) -> None:
+        if not family_id:
+            return
+
+        profile = self.family_profiles.get(family_id)
+        if not profile:
+            self._rebuild_family_profiles()
+            profile = self.family_profiles.get(family_id)
+            if not profile:
+                return
+
+        event_copy = deepcopy(event)
+        if "day" not in event_copy or event_copy.get("day") is None:
+            event_copy["day"] = self.game_time.current_day if self.game_time else 0
+        event_copy.setdefault("source", event_copy.get("source") or event_copy.get("focus"))
+
+        profile.setdefault("events", []).append(event_copy)
+        max_events = getattr(config, "FAMILY_HISTORY_MAX_EVENTS", 80)
+        profile["events"] = profile["events"][-max_events:]
+        profile["last_updated_day"] = event_copy["day"]
+
+        self.family_history.append(
+            {
+                "family_id": family_id,
+                "summary": event_copy.get("summary"),
+                "day": event_copy.get("day"),
+                "type": event_copy.get("type"),
+                "source": event_copy.get("source"),
+            }
+        )
+        self.family_history = self.family_history[-max_events:]
+
+    def share_family_event(self, source_char: 'Character', event: Dict[str, Any]) -> None:
+        if not source_char:
+            return
+
+        family_id = self._family_lookup.get(source_char.name)
+        if not family_id:
+            self._rebuild_family_profiles()
+            family_id = self._family_lookup.get(source_char.name)
+        if not family_id:
+            return
+
+        event_payload = deepcopy(event)
+        event_payload["source"] = source_char.name
+        self.record_family_event(family_id, event_payload)
+
+        profile = self.family_profiles.get(family_id)
+        if not profile:
+            return
+
+        for member_name in profile.get("members", []):
+            if member_name == source_char.name:
+                continue
+            relative = self.get_character_by_name(member_name)
+            if relative and hasattr(relative, "receive_family_event"):
+                relative.receive_family_event(self, source_char.name, event_payload)
+
+    def _seed_family_history_for_character(self, character: 'Character') -> None:
+        profile = self.get_family_profile_for_character(character.name)
+        if not profile:
+            return
+
+        existing_signatures = {
+            (evt.get("day"), evt.get("summary"), evt.get("source"))
+            for evt in character.life_history
+            if evt.get("is_family_echo")
+        }
+
+        for event in profile.get("latest_events", []):
+            source = event.get("source")
+            if not source or source == character.name:
+                continue
+            signature = (event.get("day"), event.get("summary"), source)
+            if signature in existing_signatures:
+                continue
+            character.receive_family_event(self, source, event)
+
+    def get_family_profile_for_character(self, char_name: str) -> Optional[Dict[str, Any]]:
+        if not char_name:
+            return None
+
+        family_id = self._family_lookup.get(char_name)
+        if not family_id:
+            self._rebuild_family_profiles()
+            family_id = self._family_lookup.get(char_name)
+            if not family_id:
+                return None
+
+        profile = self.family_profiles.get(family_id)
+        if not profile:
+            return None
+
+        character = self.get_character_by_name(char_name)
+        role_snapshot: Dict[str, List[str]] = {}
+        if character and hasattr(character, "get_family_roles_snapshot"):
+            role_snapshot = character.get_family_roles_snapshot()
+
+        return {
+            "family_id": family_id,
+            "tagline": profile.get("tagline"),
+            "members": list(profile.get("members", [])),
+            "latest_events": [deepcopy(evt) for evt in profile.get("events", [])[-5:]],
+            "lineage": deepcopy(profile.get("lineage", {})),
+            "role_snapshot": role_snapshot,
+        }
+
+    def get_family_snapshot(self) -> Dict[str, Any]:
+        families: List[Dict[str, Any]] = []
+        for profile in self.family_profiles.values():
+            families.append(
+                {
+                    "family_id": profile.get("family_id"),
+                    "tagline": profile.get("tagline"),
+                    "members": list(profile.get("members", [])),
+                    "latest_events": [deepcopy(evt) for evt in profile.get("events", [])[-3:]],
+                    "lineage_preview": self._summarize_lineage(profile.get("members", [])),
+                }
+            )
+
+        families.sort(key=lambda fam: (-len(fam.get("members", [])), fam.get("family_id", "")))
+
+        return {
+            "families": families[:8],
+            "recent_history": [deepcopy(evt) for evt in self.family_history[-10:]],
+        }
     def get_characters_at_location(self, x: int, y: int) -> List['Character']:
         return [char for char in self.characters if char.x == x and char.y == y]
 
@@ -902,6 +1600,18 @@ class World:
         self._crime_incident_counter += 1
         return f"crime_{self._crime_incident_counter}"
 
+    def _next_law_id(self) -> str:
+        self._law_counter += 1
+        return f"law_{self._law_counter:03d}"
+
+    def _next_petition_id(self) -> str:
+        self._law_petition_counter += 1
+        return f"petition_{self._law_petition_counter:03d}"
+
+    def _next_interview_id(self) -> str:
+        self._interview_counter += 1
+        return f"interview_{self._interview_counter:04d}"
+
     def _record_crime_history(self, incident: Dict[str, Any]):
         """Store or update a snapshot of an incident for HUD/history purposes."""
         summary = {
@@ -924,6 +1634,369 @@ class World:
         else:
             self.crime_reports.append(summary)
         self.crime_reports = self.crime_reports[-20:]
+
+    # --- Governance & Civic Law Management ---
+
+    def get_law_by_id(self, law_id: str) -> Optional[Dict[str, Any]]:
+        if law_id in self.active_laws:
+            return self.active_laws[law_id]
+        for record in reversed(self.law_history):
+            if record.get("id") == law_id:
+                return record
+        return None
+
+    def has_law_for_offense(self, offense_type: Optional[str]) -> bool:
+        if not offense_type:
+            return False
+        for law in self.active_laws.values():
+            if law.get("status") == "active" and law.get("offense_type") == offense_type:
+                return True
+        return False
+
+    def register_law_petition(
+        self,
+        issue_type: str,
+        summary: str,
+        requested_by: str,
+        *,
+        incident_count: int = 0,
+        severity: int = 1,
+        support: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        petition_id = self._next_petition_id()
+        today = self.game_time.current_day if self.game_time else 0
+        severity = max(1, min(5, severity))
+        if support is None:
+            base_support = 0.28 + 0.09 * max(0, incident_count - 1)
+            support = max(0.2, min(0.9, base_support))
+        title = f"{issue_type.title()} Ordinance"
+        petition = {
+            "id": petition_id,
+            "issue_type": issue_type,
+            "title": title,
+            "summary": summary,
+            "requested_by": requested_by,
+            "status": "pending",
+            "support": round(support, 3),
+            "incident_count": incident_count,
+            "created_day": today,
+            "severity": severity,
+            "last_reviewed_day": None,
+            "last_reviewed_by": None,
+        }
+        self.law_petitions.append(petition)
+        self.add_event_log_message(
+            f"Citizens submit {title}: {summary} (support {petition['support']:.0%})."
+        )
+        self.add_notable_event(
+            "LawPetition",
+            {
+                "petition_id": petition_id,
+                "title": title,
+                "support": petition["support"],
+                "issue_type": issue_type,
+            },
+        )
+        return petition
+
+    def get_petition_by_id(self, petition_id: str) -> Optional[Dict[str, Any]]:
+        for petition in self.law_petitions:
+            if petition.get("id") == petition_id:
+                return petition
+        return None
+
+    def peek_priority_law_petition(self) -> Optional[Dict[str, Any]]:
+        pending = [p for p in self.law_petitions if p.get("status") == "pending"]
+        if not pending:
+            return None
+        pending.sort(
+            key=lambda entry: (
+                entry.get("support", 0.0),
+                entry.get("severity", 0),
+                -(entry.get("created_day", 0) or 0),
+            ),
+            reverse=True,
+        )
+        return pending[0]
+
+    def record_petition_review(
+        self,
+        petition_id: str,
+        reviewer: str,
+        decision: str,
+    ) -> Optional[Dict[str, Any]]:
+        petition = self.get_petition_by_id(petition_id)
+        if not petition:
+            return None
+        today = self.game_time.current_day if self.game_time else 0
+        petition["last_reviewed_day"] = today
+        petition["last_reviewed_by"] = reviewer
+        if decision == "draft":
+            petition["status"] = "drafting"
+            self.add_event_log_message(
+                f"Mayor {reviewer} orders legal drafts for {petition.get('title')}."
+            )
+        elif decision == "defer":
+            petition["status"] = "pending"
+            petition["support"] = max(0.15, petition.get("support", 0.0) - 0.05)
+            self.add_event_log_message(
+                f"Mayor {reviewer} delays action on {petition.get('title')} to gather more input."
+            )
+        return petition
+
+    def draft_law_from_petition(
+        self,
+        petition_id: str,
+        sponsor: str,
+    ) -> Optional[Dict[str, Any]]:
+        petition = self.get_petition_by_id(petition_id)
+        if not petition:
+            return None
+        if petition.get("status") == "enacted":
+            return self.get_law_by_id(petition.get("draft_law_id", ""))
+
+        today = self.game_time.current_day if self.game_time else 0
+        self.record_petition_review(petition_id, sponsor, "draft")
+
+        law_id = petition.get("draft_law_id") or self._next_law_id()
+        fine_amount = config.LAW_BASE_FINE_AMOUNT + 5 * max(0, petition.get("severity", 1) - 1)
+        requires_interviews = petition.get("support", 0.0) >= config.LAW_INTERVIEW_SUPPORT_THRESHOLD
+        baseline_evidence = max(
+            config.LAW_CASE_PREP_BASELINE,
+            min(1.0, 0.25 + 0.1 * petition.get("incident_count", 0)),
+        )
+        law_record = {
+            "id": law_id,
+            "title": petition.get("title"),
+            "description": petition.get("summary"),
+            "offense_type": petition.get("issue_type"),
+            "penalty": {"type": "fine", "amount": fine_amount},
+            "requires_trial": True,
+            "requires_interviews": requires_interviews,
+            "status": "draft",
+            "drafted_day": today,
+            "sponsor": sponsor,
+            "petition_id": petition_id,
+            "support": petition.get("support", 0.0),
+            "severity": petition.get("severity", 1),
+            "evidence_strength": baseline_evidence,
+        }
+        petition["draft_law_id"] = law_id
+        self.law_history.append(law_record)
+        self.add_event_log_message(
+            f"{sponsor} drafts {law_record['title']} targeting {law_record['offense_type']}."
+        )
+        return law_record
+
+    def get_pending_law_draft_for(self, sponsor: str) -> Optional[Dict[str, Any]]:
+        for record in reversed(self.law_history):
+            if (
+                record.get("status") == "draft"
+                and record.get("sponsor") == sponsor
+                and record.get("id") not in self.active_laws
+            ):
+                return record
+        return None
+
+    def enact_law(self, law_id: str, enacted_by: str) -> Optional[Dict[str, Any]]:
+        law = self.get_law_by_id(law_id)
+        if not law:
+            return None
+        if law.get("status") == "active":
+            return law
+        today = self.game_time.current_day if self.game_time else 0
+        law["status"] = "active"
+        law["enacted_day"] = today
+        law["enacted_by"] = enacted_by
+        law.setdefault("enforcement_history", [])
+        self.active_laws[law_id] = law
+        petition_id = law.get("petition_id")
+        if petition_id:
+            petition = self.get_petition_by_id(petition_id)
+            if petition:
+                petition["status"] = "enacted"
+                petition["enacted_day"] = today
+        self.add_event_log_message(
+            f"Mayor {enacted_by} enacts {law.get('title')} (penalty {law.get('penalty', {}).get('amount', 0)}c)."
+        )
+        self.add_notable_event(
+            "LawEnacted",
+            {
+                "law_id": law_id,
+                "title": law.get("title"),
+                "offense": law.get("offense_type"),
+                "penalty": law.get("penalty"),
+            },
+        )
+        return law
+
+    def repeal_law(self, law_id: str, repealed_by: str) -> Optional[Dict[str, Any]]:
+        law = self.get_law_by_id(law_id)
+        if not law:
+            return None
+        if law.get("status") != "active":
+            return law
+        today = self.game_time.current_day if self.game_time else 0
+        law["status"] = "repealed"
+        law["repealed_day"] = today
+        law["repealed_by"] = repealed_by
+        self.active_laws.pop(law_id, None)
+        self.add_event_log_message(f"{repealed_by} repeals {law.get('title')}.")
+        return law
+
+    def identify_applicable_law(self, crime: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        offense = crime.get("type")
+        if not offense:
+            return None
+        candidates: List[Tuple[int, int, Dict[str, Any]]] = []
+        for law in self.active_laws.values():
+            if law.get("status") != "active":
+                continue
+            if law.get("offense_type") != offense:
+                continue
+            enacted_day = law.get("enacted_day", 0) or 0
+            severity = law.get("severity", 1)
+            candidates.append((severity, enacted_day, law))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda entry: (entry[0], entry[1]), reverse=True)
+        return candidates[0][2]
+
+    def _select_witnesses_for_case(self, case: Dict[str, Any], count: int = 2) -> List[str]:
+        excluded = {name for name in [case.get("defendant"), case.get("prosecutor"), case.get("presiding_officer")] if name}
+        available = [char.name for char in self.characters if char.name not in excluded]
+        random.shuffle(available)
+        return available[:count]
+
+    def plan_case_interviews(self, case: Dict[str, Any], law: Optional[Dict[str, Any]] = None) -> None:
+        if not law or not law.get("requires_interviews"):
+            return
+        case.setdefault("interview_plan", [])
+        case.setdefault("interview_statements", [])
+        planned: List[str] = []
+        for witness in self._select_witnesses_for_case(case, count=2):
+            assignment_id = self._next_interview_id()
+            assignment = {
+                "id": assignment_id,
+                "case_id": case.get("case_id"),
+                "law_id": law.get("id"),
+                "witness": witness,
+                "status": "queued",
+                "requested_day": self.game_time.current_day if self.game_time else 0,
+                "topic": law.get("title"),
+            }
+            self.pending_interviews.append(assignment)
+            case["interview_plan"].append(assignment_id)
+            planned.append(witness)
+        if planned:
+            self.add_event_log_message(
+                f"Witness interviews queued for case {case.get('case_id')}: {', '.join(planned)}."
+            )
+
+    def assign_investigative_interview(self, officer_name: str) -> Optional[Dict[str, Any]]:
+        today = self.game_time.current_day if self.game_time else 0
+        for assignment in self.pending_interviews:
+            if assignment.get("status") == "assigned" and assignment.get("assigned_to") == officer_name:
+                return assignment
+        for assignment in self.pending_interviews:
+            if assignment.get("status") != "queued":
+                continue
+            assignment["status"] = "assigned"
+            assignment["assigned_to"] = officer_name
+            assignment["assigned_day"] = today
+            self.add_event_log_message(
+                f"{officer_name} assigned to interview {assignment.get('witness')} for case {assignment.get('case_id')}"
+            )
+            return assignment
+        return None
+
+    def get_interview_assignment_by_id(self, assignment_id: Optional[str]) -> Optional[Dict[str, Any]]:
+        if not assignment_id:
+            return None
+        for assignment in self.pending_interviews:
+            if assignment.get("id") == assignment_id:
+                return assignment
+        return None
+
+    def record_interview_result(
+        self,
+        assignment_id: str,
+        officer_name: str,
+        quality: float,
+        notes: str,
+    ) -> Optional[Dict[str, Any]]:
+        assignment = self.get_interview_assignment_by_id(assignment_id)
+        if not assignment:
+            return None
+        today = self.game_time.current_day if self.game_time else 0
+        assignment["status"] = "completed"
+        assignment["completed_day"] = today
+        assignment["assigned_to"] = assignment.get("assigned_to") or officer_name
+        assignment["quality"] = max(0.0, min(1.0, quality))
+        assignment["notes"] = notes
+
+        case = self.get_case_by_id(assignment.get("case_id"))
+        if case:
+            case.setdefault("interview_statements", [])
+            statement = {
+                "witness": assignment.get("witness"),
+                "officer": officer_name,
+                "quality": assignment["quality"],
+                "notes": notes,
+                "day": today,
+            }
+            case["interview_statements"].append(statement)
+            bonus = config.LAW_INTERVIEW_EVIDENCE_BONUS * assignment["quality"]
+            case["evidence_strength"] = min(1.0, case.get("evidence_strength", 0.0) + bonus)
+            case["preparedness"] = min(1.0, case.get("preparedness", 0.0) + 0.12 * assignment["quality"])
+            self.interview_history.setdefault(case.get("case_id"), []).append(statement)
+            self.add_event_log_message(
+                f"{officer_name} records testimony from {assignment.get('witness')} for case {case.get('case_id')} (quality {assignment['quality']:.0%})."
+            )
+        return assignment
+
+    def get_governance_snapshot(self) -> Dict[str, Any]:
+        laws_snapshot = [
+            {
+                "id": law.get("id"),
+                "title": law.get("title"),
+                "offense": law.get("offense_type"),
+                "penalty": law.get("penalty"),
+                "status": law.get("status"),
+                "enacted_day": law.get("enacted_day"),
+                "support": law.get("support"),
+            }
+            for law in self.law_history
+            if law.get("status") in {"draft", "active"}
+        ]
+        petitions_snapshot = [
+            {
+                "id": petition.get("id"),
+                "title": petition.get("title"),
+                "support": petition.get("support"),
+                "status": petition.get("status"),
+                "created_day": petition.get("created_day"),
+                "incident_count": petition.get("incident_count"),
+            }
+            for petition in self.law_petitions
+        ]
+        interviews_snapshot = [
+            {
+                "id": assignment.get("id"),
+                "case_id": assignment.get("case_id"),
+                "witness": assignment.get("witness"),
+                "status": assignment.get("status"),
+                "assigned_to": assignment.get("assigned_to"),
+                "topic": assignment.get("topic"),
+            }
+            for assignment in self.pending_interviews
+            if assignment.get("status") in {"queued", "assigned"}
+        ]
+        return {
+            "laws": laws_snapshot,
+            "petitions": petitions_snapshot,
+            "interviews": interviews_snapshot,
+        }
 
     def get_crime_by_id(self, crime_id: str) -> Optional[Dict[str, Any]]:
         if crime_id in self.active_crimes:
@@ -966,6 +2039,7 @@ class World:
         caught: bool,
         notes: Optional[str] = None,
         requeue: bool = False,
+        evidence_strength: Optional[float] = None,
     ) -> Optional[Dict[str, Any]]:
         crime = self.get_crime_by_id(crime_id)
         if not crime:
@@ -979,6 +2053,8 @@ class World:
                 crime["next_review_day"] = self.game_time.current_day + 1
             if notes:
                 crime["description"] = f"{crime.get('description', 'Disturbance')} (lead cold: {notes})"
+            if evidence_strength is not None:
+                crime["evidence_strength"] = evidence_strength
             self._record_crime_history(crime)
             return crime
 
@@ -987,6 +2063,8 @@ class World:
         crime["resolved_by"] = responder_name
         crime["result"] = result
         crime["caught"] = caught
+        if evidence_strength is not None:
+            crime["evidence_strength"] = evidence_strength
         if notes:
             crime["resolution_notes"] = notes
             crime["description"] = f"{crime.get('description', 'Disturbance resolved')} ({notes})"
@@ -997,7 +2075,882 @@ class World:
         if crime_id in self.active_crimes:
             del self.active_crimes[crime_id]
         self._record_crime_history(crime)
+
+        if caught and crime.get("suspect"):
+            baseline_strength = evidence_strength if evidence_strength is not None else 0.5
+            self.schedule_trial_for_crime(crime, responder_name, baseline_strength)
         return crime
+
+    def get_case_by_id(self, case_id: str) -> Optional[Dict[str, Any]]:
+        return self.legal_cases.get(case_id)
+
+    def schedule_trial_for_crime(
+        self,
+        crime: Dict[str, Any],
+        prosecutor_name: str,
+        evidence_strength: float,
+    ) -> Optional[Dict[str, Any]]:
+        suspect = crime.get("suspect")
+        if not suspect:
+            return None
+
+        case_id = crime.get("trial_case_id")
+        if case_id:
+            existing_case = self.legal_cases.get(case_id)
+            if existing_case and existing_case.get("status") not in {"concluded", "cancelled"}:
+                existing_case["evidence_strength"] = max(
+                    existing_case.get("evidence_strength", 0.0), evidence_strength
+                )
+                crime["evidence_strength"] = existing_case["evidence_strength"]
+                return existing_case
+
+        case_id = f"{crime.get('id', self._next_crime_id())}_trial"
+        if case_id in self.legal_cases and self.legal_cases[case_id].get("status") not in {"concluded", "cancelled"}:
+            return self.legal_cases[case_id]
+
+        current_day = self.game_time.current_day if self.game_time else 0
+        base_delay = getattr(config, "TRIAL_SCHEDULING_DELAY", 2)
+        variance = getattr(config, "TRIAL_SCHEDULING_VARIANCE", 1)
+        scheduled_day = current_day + base_delay + random.randint(0, max(0, variance))
+        if scheduled_day <= current_day:
+            scheduled_day = current_day + 1
+
+        presiding = self._select_presiding_officer()
+        severity = crime.get("amount") or 1
+        try:
+            severity_value = int(severity)
+        except (TypeError, ValueError):
+            severity_value = 1
+        severity_value = max(1, min(5, severity_value))
+
+        case = {
+            "case_id": case_id,
+            "crime_id": crime.get("id"),
+            "defendant": suspect,
+            "charge": crime.get("type", "crime"),
+            "prosecutor": prosecutor_name,
+            "presiding_officer": presiding,
+            "status": "scheduled",
+            "scheduled_day": scheduled_day,
+            "evidence_strength": max(0.0, min(1.0, evidence_strength)),
+            "preparedness": 0.0,
+            "crime_summary": crime.get("description") or crime.get("summary"),
+            "severity": severity_value,
+            "preparation_notes": [],
+            "law_id": None,
+            "penalty": None,
+            "requires_interviews": False,
+            "interview_plan": [],
+            "interview_statements": [],
+        }
+
+        applicable_law = self.identify_applicable_law(crime)
+        if applicable_law:
+            case["law_id"] = applicable_law.get("id")
+            case["charge"] = applicable_law.get("title", case["charge"])
+            case["penalty"] = deepcopy(applicable_law.get("penalty"))
+            case["requires_interviews"] = bool(applicable_law.get("requires_interviews"))
+            case["evidence_strength"] = max(
+                case["evidence_strength"], applicable_law.get("evidence_strength", config.LAW_CASE_PREP_BASELINE)
+            )
+
+        self.legal_cases[case_id] = case
+        crime["trial_case_id"] = case_id
+        self.trial_queue.append(case_id)
+        self.trial_queue = sorted(
+            {cid for cid in self.trial_queue if cid in self.legal_cases},
+            key=lambda cid: self.legal_cases[cid].get("scheduled_day", float("inf")),
+        )
+        self.add_event_log_message(
+            f"Trial scheduled: {suspect} will face charges of {case['charge']} on Day {scheduled_day}."
+        )
+
+        if applicable_law:
+            self.plan_case_interviews(case, applicable_law)
+
+        prosecutor = self.get_character_by_name(prosecutor_name)
+        if prosecutor:
+            prosecutor.add_memory(
+                f"Scheduled trial {case_id} for {suspect} on Day {scheduled_day}."
+            )
+        defendant = self.get_character_by_name(suspect)
+        if defendant:
+            defendant.add_memory(
+                f"Summoned to stand trial ({case['charge']}) on Day {scheduled_day}."
+            )
+            defendant.update_mood_score(-6, "Awaiting trial")
+        if presiding:
+            presiding_char = self.get_character_by_name(presiding)
+            if presiding_char:
+                presiding_char.add_memory(
+                    f"Assigned to preside over trial {case_id} on Day {scheduled_day}."
+                )
+        return case
+
+    def progress_case_preparation(
+        self,
+        case_id: str,
+        effort: float,
+        *,
+        contributor: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        case = self.legal_cases.get(case_id)
+        if not case:
+            return None
+        if case.get("status") in {"concluded", "cancelled"}:
+            return case
+
+        case.setdefault("preparedness", 0.0)
+        case["preparedness"] = min(1.0, case.get("preparedness", 0.0) + max(0.0, effort))
+        case.setdefault("evidence_strength", 0.5)
+        case["evidence_strength"] = min(1.0, case["evidence_strength"] + max(0.0, effort) * 0.1)
+
+        if contributor:
+            day = self.game_time.current_day if self.game_time else None
+            last_day = case.get("last_prepared_day")
+            if day is None or day != last_day:
+                note = f"{contributor} reviewed evidence on Day {day if day is not None else '?'}"
+                case["preparation_notes"].append(note)
+                case["preparation_notes"] = case["preparation_notes"][-10:]
+                case["last_prepared_day"] = day
+
+        if case.get("preparedness", 0.0) >= 0.95:
+            if case.get("status") != "ready":
+                case["status"] = "ready"
+                self.add_event_log_message(
+                    f"Case {case_id} is fully prepared for trial."
+                )
+        else:
+            if case.get("status") in {"scheduled", "ready"}:
+                case["status"] = "preparing"
+
+        return case
+
+    def get_case_to_prepare(self, prosecutor_name: str) -> Optional[Dict[str, Any]]:
+        if not prosecutor_name:
+            return None
+        today = self.game_time.current_day if self.game_time else 0
+        prep_window = getattr(config, "TRIAL_PREPARATION_WINDOW", 2)
+        candidates: List[Tuple[int, Dict[str, Any]]] = []
+        for case in self.legal_cases.values():
+            if case.get("prosecutor") != prosecutor_name:
+                continue
+            if case.get("status") in {"concluded", "cancelled", "in_session"}:
+                continue
+            scheduled_day = case.get("scheduled_day")
+            if scheduled_day is None:
+                continue
+            days_until = scheduled_day - today
+            if case.get("preparedness", 0.0) >= 0.95 and days_until > 0:
+                continue
+            if days_until <= prep_window:
+                candidates.append((max(days_until, 0), case))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda entry: (entry[0], entry[1].get("preparedness", 0.0)))
+        return candidates[0][1]
+
+    def get_case_in_session_for(self, participant_name: str) -> Optional[Dict[str, Any]]:
+        if not participant_name:
+            return None
+        for case in self.legal_cases.values():
+            if case.get("status") != "in_session":
+                continue
+            if participant_name in {
+                case.get("prosecutor"),
+                case.get("defendant"),
+                case.get("presiding_officer"),
+            }:
+                return case
+        return None
+
+    def process_legal_system_daily(self) -> None:
+        if not self.legal_cases:
+            return
+        today = self.game_time.current_day if self.game_time else 0
+        prep_window = getattr(config, "TRIAL_PREPARATION_WINDOW", 2)
+        for case_id in list(self.trial_queue):
+            case = self.legal_cases.get(case_id)
+            if not case:
+                self.trial_queue.remove(case_id)
+                continue
+            status = case.get("status")
+            if status in {"concluded", "cancelled"}:
+                self.trial_queue.remove(case_id)
+                continue
+            scheduled_day = case.get("scheduled_day")
+            if scheduled_day is None:
+                continue
+            if status == "scheduled" and scheduled_day - today <= prep_window:
+                case["status"] = "preparing"
+                self.add_event_log_message(
+                    f"Case {case_id} enters preparation ahead of its trial."
+                )
+            if today >= scheduled_day:
+                case["status"] = "in_session"
+                self.add_event_log_message(
+                    f"Trial begins for case {case_id}: {case.get('defendant')} faces {case.get('charge', 'charges')}.")
+                self._summon_trial_attendees(case)
+                outcome = self._conduct_trial(case)
+                self.trial_history.append(outcome)
+                if case_id in self.trial_queue:
+                    self.trial_queue.remove(case_id)
+
+    def _conduct_trial(self, case: Dict[str, Any]) -> Dict[str, Any]:
+        evidence = case.get("evidence_strength", 0.5)
+        preparedness = case.get("preparedness", 0.0)
+        base_probability = 0.35 + 0.4 * evidence + 0.1 * preparedness
+        defendant = self.get_character_by_name(case.get("defendant", ""))
+        if defendant:
+            rep_modifier = max(-0.1, min(0.1, -defendant.reputation_score / 200.0))
+            base_probability += rep_modifier
+        base_probability = max(0.05, min(0.95, base_probability))
+        verdict = "guilty" if random.random() < base_probability else "not_guilty"
+
+        case["verdict"] = verdict
+        case["verdict_day"] = self.game_time.current_day if self.game_time else None
+        case["status"] = "concluded"
+
+        prosecutor = self.get_character_by_name(case.get("prosecutor", ""))
+        presiding = self.get_character_by_name(case.get("presiding_officer", ""))
+        severity = case.get("severity", 1)
+
+        crime_record = self.get_crime_by_id(case.get("crime_id", ""))
+        if crime_record:
+            crime_record["verdict"] = verdict
+
+        if verdict == "guilty":
+            fine_amount = max(3, int(round(4 * severity + evidence * 6)))
+            fine_paid = 0
+            if defendant:
+                fine_paid = min(defendant.money, fine_amount)
+                if fine_paid:
+                    defendant.money -= fine_paid
+                    self.treasury_coins += fine_paid
+                defendant.update_mood_score(-15, f"Found guilty of {case.get('charge', 'a crime')}")
+                defendant.update_reputation(-8, f"Convicted of {case.get('charge', 'a crime')}", self)
+                defendant.add_memory(
+                    f"Found guilty in trial {case.get('case_id')} and fined {fine_amount} coins."
+                )
+                esteem = defendant.needs.get("Esteem", config.NEED_ESTEEM_DEFAULT)
+                defendant.needs["Esteem"] = max(config.NEED_SCORE_MIN, esteem - 10)
+                if hasattr(defendant, "record_life_event"):
+                    defendant.record_life_event(
+                        self,
+                        "trial_verdict",
+                        f"Found guilty of {case.get('charge', 'charges')} in case {case.get('case_id')} (fine {fine_amount}).",
+                        related=[name for name in [case.get("prosecutor"), case.get("presiding_officer")] if name],
+                        tags=["justice", "trial", "verdict"],
+                        significance=3,
+                        propagate_to_family=True,
+                        details={"case_id": case.get("case_id"), "verdict": verdict, "sentence": "fine"},
+                    )
+            if prosecutor:
+                prosecutor.update_mood_score(6, "Secured conviction at trial")
+                prosecutor.add_memory(
+                    f"Verdict: {case.get('defendant')} found guilty in case {case.get('case_id')}."
+                )
+                if hasattr(prosecutor, "record_life_event"):
+                    prosecutor.record_life_event(
+                        self,
+                        "trial_verdict",
+                        f"Secured guilty verdict against {case.get('defendant')} in case {case.get('case_id')}.",
+                        related=[case.get("defendant")],
+                        tags=["justice", "trial"],
+                        significance=2,
+                        propagate_to_family=False,
+                        details={"case_id": case.get("case_id"), "verdict": verdict},
+                    )
+            if presiding:
+                presiding.add_memory(
+                    f"Presided over guilty verdict for case {case.get('case_id')}."
+                )
+                if hasattr(presiding, "record_life_event"):
+                    presiding.record_life_event(
+                        self,
+                        "trial_verdict",
+                        f"Oversaw guilty verdict in case {case.get('case_id')} against {case.get('defendant')}.",
+                        related=[case.get("defendant"), case.get("prosecutor")],
+                        tags=["justice", "trial"],
+                        significance=2,
+                        propagate_to_family=False,
+                        details={"case_id": case.get("case_id"), "verdict": verdict},
+                    )
+            case["sentence"] = {"type": "fine", "amount": fine_amount, "paid": fine_paid}
+            self.add_event_log_message(
+                f"Verdict reached: {case.get('defendant')} found guilty of {case.get('charge', 'charges')} (fine {fine_amount} coins)."
+            )
+        else:
+            if defendant:
+                defendant.update_mood_score(8, "Acquitted at trial")
+                defendant.update_reputation(3, f"Cleared of {case.get('charge', 'charges')}", self)
+                defendant.add_memory(
+                    f"Acquitted in trial {case.get('case_id')} and cleared of charges."
+                )
+                belonging = defendant.needs.get("Belonging", config.NEED_BELONGING_DEFAULT)
+                defendant.needs["Belonging"] = min(config.NEED_SCORE_MAX, belonging + 5)
+                if hasattr(defendant, "record_life_event"):
+                    defendant.record_life_event(
+                        self,
+                        "trial_verdict",
+                        f"Acquitted of {case.get('charge', 'charges')} in case {case.get('case_id')}.",
+                        related=[name for name in [case.get("prosecutor"), case.get("presiding_officer")] if name],
+                        tags=["justice", "trial", "verdict"],
+                        significance=3,
+                        propagate_to_family=True,
+                        details={"case_id": case.get("case_id"), "verdict": verdict},
+                    )
+            if prosecutor:
+                prosecutor.update_mood_score(-4, "Case dismissed at trial")
+                prosecutor.add_memory(
+                    f"Verdict: {case.get('defendant')} acquitted in case {case.get('case_id')}."
+                )
+                if hasattr(prosecutor, "record_life_event"):
+                    prosecutor.record_life_event(
+                        self,
+                        "trial_verdict",
+                        f"Saw {case.get('defendant')} acquitted in case {case.get('case_id')}.",
+                        related=[case.get("defendant")],
+                        tags=["justice", "trial"],
+                        significance=1,
+                        propagate_to_family=False,
+                        details={"case_id": case.get("case_id"), "verdict": verdict},
+                    )
+            if presiding:
+                presiding.add_memory(
+                    f"Presided over acquittal for case {case.get('case_id')}."
+                )
+                if hasattr(presiding, "record_life_event"):
+                    presiding.record_life_event(
+                        self,
+                        "trial_verdict",
+                        f"Oversaw acquittal for {case.get('defendant')} in case {case.get('case_id')}.",
+                        related=[case.get("defendant"), case.get("prosecutor")],
+                        tags=["justice", "trial"],
+                        significance=2,
+                        propagate_to_family=False,
+                        details={"case_id": case.get("case_id"), "verdict": verdict},
+                    )
+            case["sentence"] = {"type": "acquittal"}
+            self.add_event_log_message(
+                f"Verdict reached: {case.get('defendant')} acquitted of {case.get('charge', 'charges')}."
+            )
+
+        return case
+
+    def _summon_trial_attendees(self, case: Dict[str, Any]) -> None:
+        for role_key in ("prosecutor", "defendant", "presiding_officer"):
+            name = case.get(role_key)
+            if not name:
+                continue
+            character = self.get_character_by_name(name)
+            if not character:
+                continue
+            character.current_goal = Goal(
+                GoalType.ATTEND_TRIAL,
+                assignee_id=character.name,
+                originator_id="CourtSummons",
+                parameters={
+                    "case_id": case.get("case_id"),
+                    "location": self.courthouse_location,
+                },
+            )
+            character.add_memory(
+                f"Summoned to attend trial {case.get('case_id')} at the courthouse."
+            )
+            if hasattr(character, "record_life_event"):
+                character.record_life_event(
+                    self,
+                    "trial_summons",
+                    f"Summoned to attend trial {case.get('case_id')} at the courthouse.",
+                    related=[name for name in [case.get("defendant"), case.get("prosecutor"), case.get("presiding_officer")] if name and name != character.name],
+                    tags=["justice", "trial", "duty"],
+                    significance=2,
+                    propagate_to_family=False,
+                    details={"case_id": case.get("case_id"), "role": role_key},
+                )
+
+    def _select_presiding_officer(self) -> Optional[str]:
+        mayor = next((char for char in self.characters if char.job == "Mayor"), None)
+        if mayor:
+            return mayor.name
+        best_candidate: Optional['Character'] = None
+        best_score = -1
+        for char in self.characters:
+            leadership = char.skills.get("Leadership", {}).get("level", 0)
+            if leadership > best_score:
+                best_score = leadership
+                best_candidate = char
+        return best_candidate.name if best_candidate else None
+
+    def get_public_trial_snapshot(self) -> List[Dict[str, Any]]:
+        if not self.legal_cases:
+            return []
+        ordered_cases = sorted(
+            self.legal_cases.values(),
+            key=lambda case: (
+                case.get("status") not in {"scheduled", "preparing", "ready"},
+                case.get("scheduled_day", float("inf")),
+            ),
+        )
+        snapshot: List[Dict[str, Any]] = []
+        for case in ordered_cases[:10]:
+            snapshot.append(
+                {
+                    "case_id": case.get("case_id"),
+                    "defendant": case.get("defendant"),
+                    "charge": case.get("charge"),
+                    "status": case.get("status"),
+                    "scheduled_day": case.get("scheduled_day"),
+                    "verdict": case.get("verdict"),
+                }
+            )
+        return snapshot
+
+    # --- Healthcare & Medical Coordination -------------------------------------------------
+
+    def _next_medical_case_id(self) -> str:
+        self._medical_case_counter += 1
+        return f"med_{self._medical_case_counter}"
+
+    def _prioritize_medical_queue(self) -> None:
+        if not self.medical_cases:
+            self.medical_triage_queue = []
+            return
+        unique_ids = []
+        seen: Set[str] = set()
+        for cid in self.medical_triage_queue:
+            if cid in seen:
+                continue
+            if cid not in self.medical_cases:
+                continue
+            if self.medical_cases[cid].get("status") == "resolved":
+                continue
+            seen.add(cid)
+            unique_ids.append(cid)
+        unique_ids.sort(
+            key=lambda case_id: (
+                -self.medical_cases[case_id].get("severity", 0),
+                self.medical_cases[case_id].get("reported_day", float("inf")),
+                self.medical_cases[case_id].get("last_report_day", float("inf")),
+            )
+        )
+        self.medical_triage_queue = unique_ids
+
+    def register_medical_case(
+        self,
+        patient_name: str,
+        condition: str,
+        severity: float,
+        *,
+        reporter: Optional[str] = None,
+        cause: Optional[str] = None,
+        location: Optional[Tuple[int, int]] = None,
+    ) -> Tuple[Optional[Dict[str, Any]], bool]:
+        patient = self.get_character_by_name(patient_name)
+        if not patient:
+            return None, False
+
+        severity = max(0.0, float(severity))
+        existing_id: Optional[str] = None
+        for cid, case in self.medical_cases.items():
+            if (
+                case.get("patient") == patient_name
+                and case.get("condition") == condition
+                and case.get("status") != "resolved"
+            ):
+                existing_id = cid
+                break
+
+        day = self.game_time.current_day if self.game_time else 0
+        note = {
+            "day": day,
+            "reporter": reporter or patient_name,
+            "summary": cause or "Condition update",
+        }
+
+        if existing_id:
+            case = self.medical_cases[existing_id]
+            previous_severity = case.get("severity", 0.0)
+            if severity > previous_severity:
+                case["severity"] = severity
+                case.setdefault("alerts", []).append(
+                    {
+                        "day": day,
+                        "message": f"Severity increased to {severity:.1f}",
+                    }
+                )
+                self.add_event_log_message(
+                    f"Medical update: {patient_name}'s {condition} escalated to severity {severity:.1f}."
+                )
+            case.setdefault("reports", []).append(note)
+            case["last_report_day"] = day
+            if case.get("status") == "waiting" and existing_id not in self.medical_triage_queue:
+                self.medical_triage_queue.append(existing_id)
+            self._prioritize_medical_queue()
+            return case, False
+
+        case_id = self._next_medical_case_id()
+        case = {
+            "case_id": case_id,
+            "patient": patient_name,
+            "condition": condition,
+            "severity": severity,
+            "reported_day": day,
+            "last_report_day": day,
+            "status": "waiting",
+            "assigned_to": None,
+            "location": location or (patient.x, patient.y),
+            "reports": [note],
+            "alerts": [],
+        }
+        self.medical_cases[case_id] = case
+        self.medical_triage_queue.append(case_id)
+        self._prioritize_medical_queue()
+
+        patient.add_memory(
+            f"Medical case opened for {condition} (severity {severity:.1f})."
+        )
+        self.add_event_log_message(
+            f"Medical case {case_id} opened for {patient_name} ({condition}, severity {severity:.1f})."
+        )
+        if hasattr(patient, "record_life_event"):
+            patient.record_life_event(
+                self,
+                "medical_case_opened",
+                f"Diagnosed with {condition} (severity {severity:.1f}).",
+                related=[reporter] if reporter else None,
+                tags=["health", "medical"],
+                significance=2 if severity >= 4 else 1,
+                propagate_to_family=True,
+                details={"case_id": case_id, "condition": condition, "severity": severity},
+            )
+        return case, True
+
+    def get_medical_case_by_id(self, case_id: str) -> Optional[Dict[str, Any]]:
+        return self.medical_cases.get(case_id)
+
+    def claim_medical_case(self, medic_name: str) -> Optional[Dict[str, Any]]:
+        if not self.medical_cases:
+            return None
+        for case_id in list(self.medical_triage_queue):
+            case = self.medical_cases.get(case_id)
+            if not case:
+                self.medical_triage_queue.remove(case_id)
+                continue
+            if case.get("status") == "resolved":
+                self.medical_triage_queue.remove(case_id)
+                continue
+            if case.get("assigned_to") and case.get("assigned_to") != medic_name:
+                continue
+            patient = self.get_character_by_name(case.get("patient", ""))
+            if not patient:
+                self.resolve_medical_case(
+                    case_id,
+                    "cancelled",
+                    notes=f"Patient {case.get('patient')} no longer in settlement.",
+                )
+                self.medical_triage_queue.remove(case_id)
+                continue
+            case["status"] = "assigned"
+            case["assigned_to"] = medic_name
+            case["last_assignment_day"] = self.game_time.current_day if self.game_time else 0
+            case.setdefault("reports", []).append(
+                {
+                    "day": self.game_time.current_day if self.game_time else 0,
+                    "reporter": medic_name,
+                    "summary": "Case claimed for treatment",
+                }
+            )
+            self.medical_triage_queue.remove(case_id)
+            return case
+        return None
+
+    def record_medical_treatment(
+        self,
+        case_id: str,
+        caregiver: str,
+        severity_after: float,
+        *,
+        item_used: Optional[str] = None,
+        notes: Optional[str] = None,
+        success: bool = False,
+    ) -> bool:
+        case = self.medical_cases.get(case_id)
+        if not case:
+            return False
+
+        day = self.game_time.current_day if self.game_time else 0
+        case["severity"] = max(0.0, severity_after)
+        case["last_treated_day"] = day
+        case["assigned_to"] = None
+        summary = notes or ("Treatment succeeded" if success else "Treatment attempted")
+        if item_used:
+            summary = f"{summary} using {item_used}"
+        case.setdefault("reports", []).append(
+            {
+                "day": day,
+                "reporter": caregiver,
+                "summary": summary,
+            }
+        )
+        if success:
+            case.setdefault("alerts", []).append(
+                {
+                    "day": day,
+                    "message": f"Improvement noted by {caregiver}",
+                }
+            )
+
+        caregiver_char = self.get_character_by_name(caregiver)
+        if caregiver_char and hasattr(caregiver_char, "record_life_event"):
+            treatment_summary = (
+                f"Tended to {case.get('patient')} for {case.get('condition')} (severity now {case['severity']:.1f})."
+            )
+            caregiver_char.record_life_event(
+                self,
+                "medical_treatment",
+                treatment_summary,
+                related=[case.get("patient")],
+                tags=["health", "medical", "care"],
+                significance=2 if success else 1,
+                propagate_to_family=False,
+                details={"case_id": case_id, "success": success, "severity": case["severity"]},
+            )
+
+        if case["severity"] <= 0:
+            self.resolve_medical_case(
+                case_id,
+                "recovered",
+                notes=f"{caregiver} resolved the case.",
+            )
+            return True
+
+        case["status"] = "waiting"
+        if case_id not in self.medical_triage_queue:
+            self.medical_triage_queue.append(case_id)
+        self._prioritize_medical_queue()
+        return False
+
+    def resolve_medical_case(
+        self,
+        case_id: str,
+        outcome: str,
+        *,
+        notes: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        case = self.medical_cases.get(case_id)
+        if not case:
+            return None
+        day = self.game_time.current_day if self.game_time else 0
+        case["status"] = "resolved"
+        case["resolved_day"] = day
+        case["outcome"] = outcome
+        if notes:
+            case.setdefault("reports", []).append(
+                {
+                    "day": day,
+                    "reporter": "System",
+                    "summary": notes,
+                }
+            )
+        history_entry = deepcopy(case)
+        self.medical_history.append(history_entry)
+        self.medical_cases.pop(case_id, None)
+        if case_id in self.medical_triage_queue:
+            self.medical_triage_queue.remove(case_id)
+        self.add_event_log_message(
+            f"Medical case {case_id} closed ({outcome})."
+        )
+        patient = self.get_character_by_name(case.get("patient", ""))
+        if patient and hasattr(patient, "record_life_event"):
+            outcome_label = outcome.replace("_", " ")
+            summary = f"Medical case {case_id} {outcome_label}."
+            if notes:
+                summary += f" {notes}"
+            significance = 3 if outcome in {"deceased", "fatal"} else 2 if outcome in {"recovered", "stabilized"} else 1
+            patient.record_life_event(
+                self,
+                "medical_case_resolved",
+                summary,
+                tags=["health", "medical", "outcome"],
+                significance=significance,
+                propagate_to_family=True,
+                details={"case_id": case_id, "outcome": outcome},
+            )
+            witness_list = [
+                note.get("reporter")
+                for note in case.get("reports", [])
+                if isinstance(note, dict) and note.get("reporter")
+            ]
+            self._record_bereavement_events(patient, outcome, witness_list)
+        return history_entry
+
+    def _get_open_supply_request(self, resource: str) -> Optional[Dict[str, Any]]:
+        for request in self.clinic_supply_requests:
+            if request.get("resource") == resource and request.get("status") == "open":
+                return request
+        return None
+
+    def get_clinic_supply_requests(self) -> List[Dict[str, Any]]:
+        return [deepcopy(req) for req in self.clinic_supply_requests]
+
+    def get_medical_queue_snapshot(self) -> List[Dict[str, Any]]:
+        if not self.medical_cases:
+            return []
+        active_cases = [
+            case
+            for case in self.medical_cases.values()
+            if case.get("status") != "resolved"
+        ]
+        active_cases.sort(
+            key=lambda case: (
+                -case.get("severity", 0),
+                case.get("reported_day", float("inf")),
+                case.get("patient", ""),
+            )
+        )
+        snapshot: List[Dict[str, Any]] = []
+        for case in active_cases[:15]:
+            snapshot.append(
+                {
+                    "case_id": case.get("case_id"),
+                    "patient": case.get("patient"),
+                    "condition": case.get("condition"),
+                    "severity": case.get("severity"),
+                    "status": case.get("status"),
+                    "assigned_to": case.get("assigned_to"),
+                    "reported_day": case.get("reported_day"),
+                }
+            )
+        return snapshot
+
+    def process_healthcare_daily(self) -> None:
+        if not self.game_time:
+            return
+
+        day = self.game_time.current_day
+        new_cases: List[str] = []
+        worsened_cases: List[str] = []
+
+        for char in self.characters:
+            if char.is_sick and char.sickness_severity > 0:
+                case, created = self.register_medical_case(
+                    char.name,
+                    "sickness",
+                    char.sickness_severity,
+                    reporter=char.name,
+                    cause="Daily health check-in",
+                    location=(char.x, char.y),
+                )
+                if created and case:
+                    new_cases.append(case.get("case_id"))
+            if char.is_injured and char.injury_severity > 0:
+                case, created = self.register_medical_case(
+                    char.name,
+                    "injury",
+                    char.injury_severity,
+                    reporter=char.name,
+                    cause="Daily injury assessment",
+                    location=(char.x, char.y),
+                )
+                if created and case:
+                    new_cases.append(case.get("case_id"))
+
+        for case_id, case in list(self.medical_cases.items()):
+            if case.get("status") == "resolved":
+                continue
+            last_treatment_day = case.get("last_treated_day", case.get("reported_day", day))
+            waiting_days = max(0, day - last_treatment_day)
+            if waiting_days > 0:
+                severity_before = case.get("severity", 0.0)
+                escalation_chance = 0.2 + 0.05 * waiting_days + 0.03 * severity_before
+                if random.random() < min(0.9, escalation_chance):
+                    case["severity"] = min(10.0, severity_before + random.choice([0.5, 1.0]))
+                    patient = self.get_character_by_name(case.get("patient", ""))
+                    if patient:
+                        if case.get("condition") == "injury":
+                            patient.is_injured = True
+                            patient.injury_severity = max(patient.injury_severity, case["severity"])
+                        else:
+                            patient.is_sick = True
+                            patient.sickness_severity = max(patient.sickness_severity, case["severity"])
+                        patient.update_mood_score(
+                            -3,
+                            "Health worsened while awaiting treatment",
+                        )
+                        patient.add_memory(
+                            f"Condition worsened to severity {case['severity']:.1f} while waiting for care."
+                        )
+                    case.setdefault("alerts", []).append(
+                        {
+                            "day": day,
+                            "message": "Condition worsened while unattended.",
+                        }
+                    )
+                    case.setdefault("reports", []).append(
+                        {
+                            "day": day,
+                            "reporter": "System",
+                            "summary": "Severity escalated due to treatment delay",
+                        }
+                    )
+                    self.add_event_log_message(
+                        f"Medical case {case_id} for {case.get('patient')} worsened to severity {case['severity']:.1f}."
+                    )
+                    worsened_cases.append(case_id)
+            if case.get("status") == "waiting" and case_id not in self.medical_triage_queue:
+                self.medical_triage_queue.append(case_id)
+
+        self._prioritize_medical_queue()
+
+        supply_alerts: List[Dict[str, Any]] = []
+        if self.ledger:
+            thresholds = getattr(
+                config,
+                "CLINIC_SUPPLY_THRESHOLDS",
+                {"Bandages": 5, "Herbs": 8},
+            )
+            for resource, threshold in thresholds.items():
+                quantity = self.ledger.get_total_resource_count(resource)
+                open_request = self._get_open_supply_request(resource)
+                if quantity < threshold:
+                    if not open_request:
+                        request = {
+                            "resource": resource,
+                            "threshold": threshold,
+                            "current": quantity,
+                            "status": "open",
+                            "requested_day": day,
+                        }
+                        self.clinic_supply_requests.append(request)
+                        self.add_event_log_message(
+                            f"Clinic flagged low {resource} levels ({quantity}/{threshold})."
+                        )
+                    else:
+                        open_request["current"] = quantity
+                    supply_alerts.append(
+                        {
+                            "resource": resource,
+                            "current": quantity,
+                            "threshold": threshold,
+                        }
+                    )
+                elif open_request:
+                    open_request["status"] = "fulfilled"
+                    open_request["fulfilled_day"] = day
+                    open_request["current"] = quantity
+                    self.add_event_log_message(
+                        f"Clinic restocked {resource} (now {quantity})."
+                    )
+
+        self.latest_healthcare_report = {
+            "day": day,
+            "new_cases": new_cases,
+            "worsened_cases": worsened_cases,
+            "active_cases": len(self.medical_cases),
+            "supply_alerts": supply_alerts,
+        }
 
     # Event related methods (can be kept minimal if EventManager is not fully used)
     def _event_attr(self, event_instance: Any, key: str, default: Any = None) -> Any:
@@ -1577,6 +3530,9 @@ class World:
             total += character.inventory.get(resource_name, 0)
         return total
 
+    def _get_stockpile_quantity(self, resource_name: str) -> int:
+        return sum(stockpile.inventory.get(resource_name, 0) for stockpile in self.stockpiles)
+
     def _withdraw_from_stockpiles(self, resource_name: str, quantity: int) -> int:
         if quantity <= 0:
             return 0
@@ -1606,6 +3562,70 @@ class World:
     def withdraw_resource(self, resource_name: str, quantity: int) -> int:
         return self._withdraw_from_stockpiles(resource_name, quantity)
 
+    def _deposit_work_output(
+        self,
+        resource_name: str,
+        quantity: int,
+        preferred_stockpiles: Optional[Iterable[str]] = None,
+    ) -> Dict[str, Any]:
+        result: Dict[str, Any] = {
+            "delivered": 0,
+            "overflow": max(0, quantity),
+            "routes": [],
+        }
+        if quantity <= 0:
+            return result
+
+        stockpiles = list(self.get_stockpiles_for_resource(resource_name))
+        if not stockpiles:
+            return result
+
+        ordered: List[Stockpile] = []
+        preferred_lookup: Set[str] = set(preferred_stockpiles or [])
+        if preferred_lookup:
+            for name in preferred_stockpiles or []:
+                stockpile = self.get_stockpile_by_name(name)
+                if stockpile and stockpile in stockpiles and stockpile not in ordered:
+                    ordered.append(stockpile)
+        for stockpile in stockpiles:
+            if stockpile not in ordered:
+                ordered.append(stockpile)
+
+        remaining = quantity
+        routes: List[Dict[str, Any]] = []
+        for stockpile in ordered:
+            if remaining <= 0:
+                break
+            success, added = stockpile.add_item(resource_name, remaining)
+            if not success or added <= 0:
+                continue
+            routes.append({"stockpile": stockpile.name, "quantity": added})
+            remaining -= added
+            if self.game_time:
+                self.ledger.update_stockpile_record(
+                    stockpile.name,
+                    stockpile.inventory,
+                    self.game_time.current_day,
+                )
+
+        delivered = quantity - remaining
+        result["delivered"] = delivered
+        result["overflow"] = max(0, remaining)
+        result["routes"] = routes
+
+        if delivered > 0:
+            for route in routes:
+                history_entry = {
+                    "day": self.game_time.current_day if self.game_time else -1,
+                    "resource": resource_name,
+                    "stockpile": route["stockpile"],
+                    "quantity": route["quantity"],
+                }
+                self.work_logistics_history.append(history_entry)
+            self.work_logistics_history = self.work_logistics_history[-25:]
+
+        return result
+
     def _consume_resource_for_character(self, character: 'Character', resource_name: str, quantity: int) -> int:
         if quantity <= 0:
             return 0
@@ -1626,7 +3646,16 @@ class World:
     def identify_resource_pressures(self) -> List[Dict[str, Any]]:
         """Returns resource pressure descriptors sorted by severity."""
         pressures: List[Dict[str, Any]] = []
-        resources_to_check = ["Wood", "Stone", "Herbs", "Food", "Water"]
+        resources_to_check = [
+            "Wood",
+            "Stone",
+            "Iron Ore",
+            "Lumber",
+            "Furniture",
+            "Herbs",
+            "Food",
+            "Water",
+        ]
         for resource in resources_to_check:
             quantity = self.get_total_resource_quantity(resource)
             low_threshold = getattr(config, "MAYOR_RESOURCE_LOW_THRESHOLD", 20)
@@ -2347,6 +4376,717 @@ class World:
             )
         return paid, owed
 
+    # --- Training & Apprenticeships ---
+
+    def _assess_training_needs(self) -> Dict[str, Dict[str, Any]]:
+        metrics: Dict[str, Dict[str, Any]] = {}
+        if not self.training_program_definitions:
+            return metrics
+
+        for program_key, definition in self.training_program_definitions.items():
+            skill_name = definition.get("skill")
+            if not skill_name:
+                continue
+            focus_jobs = definition.get("focus_jobs", [])
+            relevant_chars = [
+                char
+                for char in self.characters
+                if not focus_jobs or char.job in focus_jobs
+            ]
+            levels: List[int] = []
+            under_target: List[str] = []
+            target_level = definition.get("target_level", 1)
+            for char in relevant_chars:
+                skill_data = char.skills.get(skill_name)
+                level = skill_data.get("level", 0) if skill_data else 0
+                levels.append(level)
+                if level < target_level:
+                    under_target.append(char.name)
+            avg_level = sum(levels) / len(levels) if levels else 0.0
+            metrics[program_key] = {
+                "definition": definition,
+                "skill": skill_name,
+                "focus_jobs": focus_jobs,
+                "avg_level": avg_level,
+                "under_target": under_target,
+                "total_characters": len(relevant_chars),
+            }
+        return metrics
+
+    def _refresh_training_waitlists(
+        self, metrics: Dict[str, Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        snapshot: List[Dict[str, Any]] = []
+        active_names = {
+            name
+            for session in self.active_training_sessions
+            for name in session.get("trainees", [])
+        }
+        valid_programs = set(metrics.keys())
+        for stale_key in set(self.training_waitlists.keys()) - valid_programs:
+            self.training_waitlists.pop(stale_key, None)
+
+        for program_key, data in metrics.items():
+            definition = data["definition"]
+            skill_name = data["skill"]
+            target_level = definition.get("target_level", 1)
+            min_level = definition.get("min_level", 0)
+            focus_jobs = data.get("focus_jobs", [])
+            waitlist = self.training_waitlists.setdefault(program_key, [])
+            filtered_queue: List[str] = []
+            for name in waitlist:
+                char = self.get_character_by_name(name)
+                if not char:
+                    continue
+                if focus_jobs and char.job not in focus_jobs:
+                    continue
+                skill_level = char.skills.get(skill_name, {}).get("level", 0)
+                if skill_level >= target_level:
+                    continue
+                filtered_queue.append(name)
+
+            new_entries: List[str] = []
+            for name in data.get("under_target", []):
+                if name in filtered_queue or name in active_names:
+                    continue
+                char = self.get_character_by_name(name)
+                if not char:
+                    continue
+                skill_level = char.skills.get(skill_name, {}).get("level", 0)
+                if skill_level < target_level and skill_level >= min_level:
+                    filtered_queue.append(name)
+                    new_entries.append(name)
+
+            self.training_waitlists[program_key] = filtered_queue
+            if new_entries:
+                cohort = ", ".join(new_entries)
+                title = definition.get("title", program_key)
+                self.add_event_log_message(
+                    f"Training queue: {title} adds {cohort}."
+                )
+
+            snapshot.append(
+                {
+                    "program": definition.get("title", program_key),
+                    "program_key": program_key,
+                    "skill": skill_name,
+                    "queued": list(filtered_queue),
+                    "count": len(filtered_queue),
+                }
+            )
+
+        return snapshot
+
+    def _select_training_instructor(
+        self, definition: Dict[str, Any], busy_instructors: Set[str]
+    ) -> Optional['Character']:
+        instructor_roles = definition.get("instructor_roles", [])
+        if not instructor_roles:
+            return None
+        skill_name = definition.get("skill")
+        best_candidate: Optional['Character'] = None
+        best_score = -1
+        for char in self.characters:
+            if char.name in busy_instructors:
+                continue
+            if char.job not in instructor_roles:
+                continue
+            skill_level = char.skills.get(skill_name, {}).get("level", 0)
+            if skill_level > best_score:
+                best_candidate = char
+                best_score = skill_level
+        return best_candidate
+
+    def _start_training_sessions(
+        self,
+        metrics: Dict[str, Dict[str, Any]],
+        current_day: int,
+    ) -> List[Dict[str, Any]]:
+        started: List[Dict[str, Any]] = []
+        busy_instructors: Set[str] = {
+            session.get("instructor", "")
+            for session in self.active_training_sessions
+        }
+
+        for program_key, data in metrics.items():
+            waitlist = self.training_waitlists.get(program_key, [])
+            if not waitlist:
+                continue
+            allow_parallel = data["definition"].get("parallel_sessions", False)
+            if not allow_parallel and any(
+                session.get("program_key") == program_key
+                for session in self.active_training_sessions
+            ):
+                continue
+
+            instructor = self._select_training_instructor(
+                data["definition"], busy_instructors
+            )
+            if not instructor:
+                continue
+
+            capacity = max(1, int(data["definition"].get("capacity", 1)))
+            trainees = waitlist[:capacity]
+            if not trainees:
+                continue
+            self.training_waitlists[program_key] = waitlist[capacity:]
+
+            session = {
+                "program_key": program_key,
+                "program_title": data["definition"].get("title", program_key),
+                "skill": data["skill"],
+                "instructor": instructor.name,
+                "trainees": list(trainees),
+                "original_trainees": list(trainees),
+                "start_day": current_day,
+                "duration": max(1, int(data["definition"].get("duration_days", 1))),
+                "daily_exp": float(data["definition"].get("daily_exp_gain", 1.0)),
+                "progress": 0,
+                "trainee_baselines": {},
+                "latest_results": {},
+            }
+
+            for trainee_name in trainees:
+                character = self.get_character_by_name(trainee_name)
+                if not character:
+                    continue
+                skill_data = character.skills.get(data["skill"], {})
+                session["trainee_baselines"][trainee_name] = {
+                    "level": skill_data.get("level", 0),
+                    "experience": skill_data.get("experience", 0.0),
+                }
+
+            self.active_training_sessions.append(session)
+            busy_instructors.add(instructor.name)
+            trainee_label = ", ".join(trainees)
+            self.add_event_log_message(
+                f"{instructor.name} opens {session['program_title']} for {trainee_label}."
+            )
+            started.append(
+                {
+                    "program": session["program_title"],
+                    "instructor": instructor.name,
+                    "trainees": list(trainees),
+                }
+            )
+
+        return started
+
+    def _advance_training_sessions(
+        self, current_day: int
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        if not self.active_training_sessions:
+            return [], []
+
+        daily_updates: List[Dict[str, Any]] = []
+        concluded_summaries: List[Dict[str, Any]] = []
+        sessions_to_remove: List[Dict[str, Any]] = []
+
+        for session in list(self.active_training_sessions):
+            day_results: List[Dict[str, Any]] = []
+            level_ups: List[Dict[str, Any]] = []
+            remaining_trainees: List[str] = []
+
+            for trainee_name in list(session.get("trainees", [])):
+                character = self.get_character_by_name(trainee_name)
+                if not character:
+                    day_results.append({"name": trainee_name, "status": "absent"})
+                    continue
+                result = character.participate_in_training(
+                    session["program_title"],
+                    session["skill"],
+                    session["daily_exp"],
+                    self,
+                )
+                session["latest_results"][trainee_name] = {
+                    "level": result["level_after"],
+                    "experience": result["experience_after"],
+                }
+                day_results.append(
+                    {
+                        "name": trainee_name,
+                        "level_before": result["level_before"],
+                        "level_after": result["level_after"],
+                        "experience_gain": session["daily_exp"],
+                    }
+                )
+                if result["level_after"] > result["level_before"]:
+                    level_ups.append(
+                        {
+                            "name": trainee_name,
+                            "new_level": result["level_after"],
+                        }
+                    )
+                    self.add_event_log_message(
+                        f"{trainee_name} advanced to {session['skill']} "
+                        f"{result['level_after']} via {session['program_title']}."
+                    )
+                remaining_trainees.append(trainee_name)
+
+            session["trainees"] = remaining_trainees
+            session["progress"] += 1
+            daily_updates.append(
+                {
+                    "program": session["program_title"],
+                    "day": current_day,
+                    "results": day_results,
+                    "level_ups": level_ups,
+                    "progress": session["progress"],
+                    "duration": session["duration"],
+                }
+            )
+
+            if not session["trainees"]:
+                self.add_event_log_message(
+                    f"{session['program_title']} paused—no trainees remaining."
+                )
+                summary = self._summarize_training_session(
+                    session, current_day, reason="empty"
+                )
+                concluded_summaries.append(summary)
+                sessions_to_remove.append(session)
+                continue
+
+            if session["progress"] >= session["duration"]:
+                summary = self._summarize_training_session(
+                    session, current_day, reason="completed"
+                )
+                concluded_summaries.append(summary)
+                sessions_to_remove.append(session)
+
+        for session in sessions_to_remove:
+            if session in self.active_training_sessions:
+                self.active_training_sessions.remove(session)
+
+        return daily_updates, concluded_summaries
+
+    def _summarize_training_session(
+        self, session: Dict[str, Any], end_day: int, reason: str
+    ) -> Dict[str, Any]:
+        summary = {
+            "program": session.get("program_title"),
+            "program_key": session.get("program_key"),
+            "skill": session.get("skill"),
+            "instructor": session.get("instructor"),
+            "trainees": list(session.get("original_trainees", [])),
+            "start_day": session.get("start_day"),
+            "end_day": end_day,
+            "reason": reason,
+            "outcomes": [],
+        }
+        for name in summary["trainees"]:
+            baseline = session.get("trainee_baselines", {}).get(name, {})
+            latest = session.get("latest_results", {}).get(name, baseline)
+            summary["outcomes"].append(
+                {
+                    "name": name,
+                    "level_before": baseline.get("level"),
+                    "level_after": latest.get("level"),
+                }
+            )
+
+        if reason == "completed":
+            self.add_event_log_message(
+                f"{summary['program']} concludes under {summary['instructor']}."
+            )
+        else:
+            self.add_event_log_message(
+                f"{summary['program']} closed without a full cohort."
+            )
+
+        self.training_history.append(summary)
+        self.training_history = self.training_history[-25:]
+        return summary
+
+    def process_training_daily(
+        self, economy_report: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        if not self.game_time:
+            return {}
+
+        current_day = self.game_time.current_day
+        if not self.training_program_definitions:
+            self.latest_training_report = {}
+            self._last_training_update_day = current_day
+            if economy_report is not None:
+                economy_report["training"] = {}
+            return {}
+
+        if (
+            self._last_training_update_day == current_day
+            and self.latest_training_report
+        ):
+            if economy_report is not None:
+                economy_report["training"] = self.latest_training_report
+            return self.latest_training_report
+
+        metrics = self._assess_training_needs()
+        waitlists = self._refresh_training_waitlists(metrics)
+        started_sessions = self._start_training_sessions(metrics, current_day)
+        session_updates, concluded_sessions = self._advance_training_sessions(
+            current_day
+        )
+
+        active_sessions = [
+            {
+                "program": session["program_title"],
+                "program_key": session["program_key"],
+                "skill": session["skill"],
+                "instructor": session["instructor"],
+                "trainees": list(session["trainees"]),
+                "progress": session["progress"],
+                "duration": session["duration"],
+                "start_day": session["start_day"],
+            }
+            for session in self.active_training_sessions
+        ]
+
+        assessed_needs = [
+            {
+                "program": data["definition"].get("title", key),
+                "program_key": key,
+                "avg_level": round(data.get("avg_level", 0.0), 2),
+                "under_target": len(data.get("under_target", [])),
+                "total_characters": data.get("total_characters", 0),
+            }
+            for key, data in metrics.items()
+        ]
+
+        report = {
+            "day": current_day,
+            "assessed_needs": assessed_needs,
+            "waitlists": [
+                {
+                    "program": entry.get("program"),
+                    "skill": entry.get("skill"),
+                    "queued": entry.get("queued", []),
+                    "count": entry.get("count", 0),
+                }
+                for entry in waitlists
+            ],
+            "started_sessions": started_sessions,
+            "active_sessions": active_sessions,
+            "session_updates": session_updates,
+            "concluded_sessions": concluded_sessions,
+            "recent_history": deepcopy(self.training_history[-6:]),
+        }
+
+        self.latest_training_report = report
+        self._last_training_update_day = current_day
+        if economy_report is not None:
+            economy_report["training"] = report
+        return report
+
+    def get_training_snapshot(self) -> Dict[str, Any]:
+        return deepcopy(self.latest_training_report)
+
+    def process_workforce_daily(
+        self, economy_report: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        if not self.game_time:
+            return {}
+
+        current_day = self.game_time.current_day
+        if not self.work_shift_definitions:
+            self.latest_workforce_report = {}
+            self._last_workforce_update_day = current_day
+            if economy_report is not None:
+                economy_report["workforce"] = {}
+            return {}
+
+        if (
+            self._last_workforce_update_day == current_day
+            and self.latest_workforce_report
+        ):
+            if economy_report is not None:
+                economy_report["workforce"] = self.latest_workforce_report
+            return self.latest_workforce_report
+
+        crews_report: List[Dict[str, Any]] = []
+        shipments: List[Dict[str, Any]] = []
+        alerts: List[str] = []
+        total_gathered = 0
+        total_delivered = 0
+        total_backlog = 0.0
+
+        for key, definition in self.work_shift_definitions.items():
+            workers = [
+                char
+                for char in self.characters
+                if char.job in definition.get("jobs", [])
+            ]
+            haulers = [
+                char
+                for char in self.characters
+                if char.job in definition.get("hauler_jobs", [])
+            ]
+
+            backlog_existing = self.work_shift_backlog.setdefault(key, 0.0)
+            resource = definition.get("resource")
+            task_name = definition.get("task")
+            skill_name = definition.get("skill") or (
+                JOB_TASK_DEFINITIONS.get(task_name, {}).get("skill_used")
+                if task_name
+                else None
+            )
+            shift_ticks = definition.get(
+                "shift_ticks", getattr(config, "DEFAULT_WORK_SHIFT_TICKS", 6)
+            )
+            base_output = definition.get("base_output_per_worker")
+            task_def = JOB_TASK_DEFINITIONS.get(task_name, {}) if task_name else {}
+            if base_output is None and task_def:
+                cycles = shift_ticks / max(1, task_def.get("base_time_per_yield", 1))
+                base_output = cycles * task_def.get("base_yield", 1)
+            if base_output is None:
+                base_output = max(1.0, float(shift_ticks))
+
+            worker_details: List[Dict[str, Any]] = []
+            sector_output = 0.0
+            inputs_required = definition.get("inputs") or {}
+            discrete_output_flag = definition.get("discrete_output")
+            discrete_output = (
+                discrete_output_flag
+                if discrete_output_flag is not None
+                else bool(inputs_required)
+            )
+            inputs_consumed: Dict[str, int] = {}
+            input_shortage = False
+            input_shortage_details: Dict[str, int] = {}
+            directive_bonus = 1.0
+            if resource and resource in self.resource_collection_directives:
+                directive_bonus += 0.1
+            resource_multiplier = (
+                self.get_resource_yield_multiplier(resource)
+                if resource
+                else 1.0
+            )
+
+            for worker in workers:
+                skill_level = (
+                    worker.skills.get(skill_name, {}).get("level", 0)
+                    if skill_name
+                    else 0
+                )
+                efficiency_bonus = 1.0 + skill_level * definition.get(
+                    "skill_yield_bonus", 0.1
+                )
+                morale_bonus = 1.0
+                if worker.mood_score > config.MOOD_SCORE_NEUTRAL_START + 10:
+                    morale_bonus += 0.05
+                elif worker.mood_score < config.MOOD_SCORE_NEUTRAL_START - 10:
+                    morale_bonus -= 0.05
+
+                worker_output = (
+                    base_output * efficiency_bonus * directive_bonus * morale_bonus
+                )
+                worker_output *= resource_multiplier
+                sector_output += worker_output
+                worker_details.append(
+                    {
+                        "name": worker.name,
+                        "skill_level": skill_level,
+                        "estimated_output": round(worker_output, 1),
+                    }
+                )
+
+            if inputs_required:
+                raw_output_units = int(sector_output)
+                if discrete_output:
+                    sector_output = float(int(sector_output))
+                max_units_possible: Optional[int] = None
+                for resource_name, amount_per_unit in inputs_required.items():
+                    if amount_per_unit <= 0:
+                        continue
+                    available = self._get_stockpile_quantity(resource_name)
+                    if available < amount_per_unit:
+                        input_shortage_details[resource_name] = amount_per_unit - available
+                    possible_units = available // amount_per_unit
+                    if max_units_possible is None or possible_units < max_units_possible:
+                        max_units_possible = possible_units
+                if max_units_possible is None:
+                    max_units_possible = int(sector_output) if discrete_output else int(sector_output)
+                if max_units_possible <= 0:
+                    if workers:
+                        input_shortage = True
+                    sector_output = 0.0
+                else:
+                    if discrete_output:
+                        sector_output = float(min(int(sector_output), max_units_possible))
+                    else:
+                        sector_output = min(sector_output, float(max_units_possible))
+                actual_units = int(sector_output)
+                if actual_units > 0:
+                    min_supported_units = actual_units
+                    for resource_name, amount_per_unit in inputs_required.items():
+                        if amount_per_unit <= 0:
+                            continue
+                        needed = actual_units * amount_per_unit
+                        consumed = self._withdraw_from_stockpiles(resource_name, needed)
+                        inputs_consumed[resource_name] = consumed
+                        if consumed < needed:
+                            shortage_amount = needed - consumed
+                            if shortage_amount > 0:
+                                input_shortage_details[resource_name] = shortage_amount
+                            supported = consumed // amount_per_unit if amount_per_unit else actual_units
+                        else:
+                            supported = consumed // amount_per_unit if amount_per_unit else actual_units
+                        if supported < min_supported_units:
+                            min_supported_units = supported
+                    if min_supported_units < actual_units:
+                        actual_units = min_supported_units
+                    sector_output = float(actual_units)
+                if raw_output_units > actual_units and raw_output_units > 0:
+                    input_shortage = True
+                    for resource_name, amount_per_unit in inputs_required.items():
+                        if amount_per_unit <= 0:
+                            continue
+                        missing_amount = (raw_output_units - actual_units) * amount_per_unit
+                        if missing_amount > 0:
+                            input_shortage_details.setdefault(resource_name, missing_amount)
+                if (int(sector_output) <= 0) and workers:
+                    input_shortage = True
+
+            gathered_units = int(sector_output)
+            total_gathered += gathered_units
+            pending_output = backlog_existing + sector_output
+
+            carry_capacity = len(workers) * definition.get(
+                "carry_capacity_per_worker", 6
+            )
+            haul_capacity = len(haulers) * definition.get("hauler_capacity", 12)
+            total_capacity = carry_capacity + haul_capacity
+
+            deliverable = min(pending_output, total_capacity) if total_capacity else 0.0
+            deliver_units = int(deliverable)
+            deposit_result: Optional[Dict[str, Any]] = None
+            delivered_actual = 0
+
+            if deliver_units > 0 and resource:
+                deposit_result = self._deposit_work_output(
+                    resource,
+                    deliver_units,
+                    preferred_stockpiles=definition.get("preferred_stockpiles"),
+                )
+                delivered_actual = deposit_result.get("delivered", 0)
+                if delivered_actual < deliver_units:
+                    alerts.append(
+                        f"{definition.get('title', key.title())} lacked storage for {deliver_units - delivered_actual} {resource}."
+                    )
+            backlog_after_delivery = max(0.0, pending_output - delivered_actual)
+            self.work_shift_backlog[key] = backlog_after_delivery
+
+            crew_entry = {
+                "key": key,
+                "title": definition.get("title", key.title()),
+                "resource": resource,
+                "workers": [detail["name"] for detail in worker_details],
+                "haulers": [hauler.name for hauler in haulers],
+                "gathered": gathered_units,
+                "delivered": delivered_actual,
+                "backlog": round(backlog_after_delivery, 1),
+                "capacity": total_capacity,
+                "pending": round(pending_output, 1),
+                "workers_detail": worker_details,
+            }
+
+            if inputs_consumed:
+                crew_entry["inputs_consumed"] = inputs_consumed
+
+            if not workers and backlog_existing <= 0:
+                crew_entry.setdefault("notes", []).append("No crew reported for duty.")
+            elif not workers and backlog_existing > 0:
+                crew_entry.setdefault("notes", []).append(
+                    "Haulers awaiting gathered stock from previous days."
+                )
+
+            if input_shortage:
+                shortage_parts = [
+                    f"{amount} {resource_name}"
+                    for resource_name, amount in inputs_required.items()
+                    if amount > 0
+                ]
+                shortage_specifics = [
+                    f"{missing} {resource_name}"
+                    for resource_name, missing in input_shortage_details.items()
+                    if missing > 0
+                ]
+                if shortage_specifics:
+                    shortage_text = ", ".join(shortage_specifics)
+                else:
+                    shortage_text = ", ".join(shortage_parts)
+                if shortage_text:
+                    crew_entry.setdefault("notes", []).append(
+                        f"Awaiting inputs ({shortage_text})."
+                    )
+                    alerts.append(
+                        f"{definition.get('title', key.title())} needs {shortage_text} to resume work."
+                    )
+                else:
+                    crew_entry.setdefault("notes", []).append("Awaiting input deliveries.")
+                    alerts.append(
+                        f"{definition.get('title', key.title())} lacks production inputs."
+                    )
+
+            if deposit_result and deposit_result.get("routes"):
+                crew_entry.setdefault("notes", []).append(
+                    ", ".join(
+                        f"{route['quantity']} to {route['stockpile']}"
+                        for route in deposit_result["routes"]
+                    )
+                )
+                shipments.append(
+                    {
+                        "sector": key,
+                        "resource": resource,
+                        "delivered": deposit_result["delivered"],
+                        "routes": deposit_result["routes"],
+                    }
+                )
+
+            if backlog_after_delivery and resource:
+                crew_entry.setdefault("notes", []).append(
+                    f"{backlog_after_delivery:.1f} {resource} waiting on carts."
+                )
+
+            if not workers and not haulers and backlog_after_delivery <= 0:
+                crew_entry.setdefault("status", "idle")
+
+            crews_report.append(crew_entry)
+            total_backlog += backlog_after_delivery
+            total_delivered += delivered_actual
+
+        report = {
+            "day": current_day,
+            "crews": crews_report,
+            "shipments": shipments,
+            "alerts": alerts,
+            "gathered_total": total_gathered,
+            "delivered_total": total_delivered,
+            "backlog_total": round(total_backlog, 1),
+            "recent_shipments": deepcopy(self.work_logistics_history[-8:]),
+        }
+
+        self.latest_workforce_report = report
+        self._last_workforce_update_day = current_day
+        if economy_report is not None:
+            economy_report["workforce"] = report
+
+        if crews_report:
+            summary = (
+                f"Work crews gathered {total_gathered} units and delivered {total_delivered}."
+            )
+            if total_backlog:
+                summary += f" Backlog stands at {total_backlog:.1f} units."
+            self.add_event_log_message(summary)
+        if alerts:
+            for alert in alerts[:3]:
+                self.add_event_log_message(f"Work alert: {alert}")
+
+        return report
+
+    def get_workforce_snapshot(self) -> Dict[str, Any]:
+        return deepcopy(self.latest_workforce_report)
+
     def process_daily_economy(self):
         if not self.game_time:
             return
@@ -2387,9 +5127,11 @@ class World:
         self._apply_daily_water_consumption(report)
         housing_snapshot = self._evaluate_housing_daily(report)
         self._resolve_theft_attempts(report)
+        self.process_workforce_daily(report)
         report["pending_crimes"] = len(self.pending_crimes)
         report["surplus_trades"] = list(self.today_surplus_sales)
         self.evaluate_population_dynamics(report, housing_snapshot)
+        training_report = self.process_training_daily(report)
 
         summary = (
             f"Economic summary — Treasury {self.treasury_coins}c "
@@ -2408,6 +5150,17 @@ class World:
             elif isinstance(available_beds, int):
                 self.add_event_log_message(
                     f"Housing report: {available_beds} bed{'s' if available_beds != 1 else ''} currently open."
+                )
+        if training_report:
+            active_count = len(training_report.get("active_sessions", []))
+            queued_total = sum(
+                len(entry.get("queued", []))
+                for entry in training_report.get("waitlists", [])
+            )
+            if active_count or queued_total:
+                self.add_event_log_message(
+                    f"Training grounds: {active_count} session{'s' if active_count != 1 else ''} active, "
+                    f"{queued_total} queued for instruction."
                 )
         for crime_event in report.get("crime_events", []):
             self.add_event_log_message(f"Security report: {crime_event['description']}.")
@@ -2661,6 +5414,72 @@ class World:
                 severity = pressure.get("severity", 0)
                 self._handle_surplus_trade(resource, severity)
                 self._spawn_conversion_work_order(resource, severity)
+
+    def process_governance_daily(self) -> None:
+        if not self.game_time:
+            return
+        today = self.game_time.current_day
+        window = getattr(config, "LAW_PETITION_CRIME_WINDOW", 6)
+        threshold = getattr(config, "LAW_PETITION_THRESHOLD", 3)
+
+        recent_incidents = [
+            report
+            for report in self.crime_reports
+            if report.get("day") is not None and today - report["day"] <= window
+        ]
+        tallies = Counter(report.get("type") for report in recent_incidents if report.get("type"))
+        for offense, count in tallies.items():
+            if not offense or count < threshold:
+                continue
+            if self.has_law_for_offense(offense):
+                continue
+            existing = next(
+                (
+                    petition
+                    for petition in self.law_petitions
+                    if petition.get("issue_type") == offense
+                    and petition.get("status") in {"pending", "drafting"}
+                ),
+                None,
+            )
+            if existing:
+                existing["incident_count"] = max(existing.get("incident_count", 0), count)
+                continue
+            summary = (
+                f"Residents demand stronger action against {offense} after {count} incidents in {window} days."
+            )
+            self.register_law_petition(
+                offense,
+                summary,
+                "Civic Council",
+                incident_count=count,
+                severity=min(5, count),
+            )
+
+        for petition in self.law_petitions:
+            if petition.get("status") != "pending":
+                continue
+            last_review = petition.get("last_reviewed_day")
+            if last_review is not None and today <= last_review:
+                continue
+            previous_support = petition.get("support", 0.0)
+            petition["support"] = min(1.0, previous_support + config.LAW_SUPPORT_ESCALATION)
+            if previous_support < 0.5 <= petition["support"]:
+                self.add_event_log_message(
+                    f"Support surges for {petition.get('title')} (now {petition['support']:.0%})."
+                )
+
+        retention_window = max(2, window)
+        self.pending_interviews = [
+            assignment
+            for assignment in self.pending_interviews
+            if assignment.get("status") in {"queued", "assigned"}
+            or (
+                assignment.get("status") == "completed"
+                and assignment.get("completed_day") is not None
+                and today - assignment.get("completed_day", today) <= retention_window
+            )
+        ]
 
     # --- Cultural Life & Festivals ---
 

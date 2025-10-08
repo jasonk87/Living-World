@@ -17,8 +17,33 @@ This document summarizes the systemic layers that drive the Living World settlem
 - Harvest executors flag when `World.deplete_resource_node()` exhausts a node, allowing the map tile to update immediately.
 - `_advance_resource_regrowth()` steadily restores depleted nodes so long-term stewardship matters.
 
+## Workforce Logistics
+- `WORK_SHIFT_DEFINITIONS` configure sector crews (logging, quarrying, farming) with shift lengths, haul capacity, and preferred stockpiles.
+- `World.process_workforce_daily()` tallies per-worker yields, applies skill and environment modifiers, and hands production to haulers.
+- Deliveries call `_deposit_work_output()` to route goods into stockpiles while recording backlogs and alerts if storage or carriers fall short.
+- Manufacturing crews can declare `inputs` so sawyers, carpenters, and other specialists withdraw raw materials before producing goods. Input shortages automatically appear in daily alerts and the HUD alongside the resources each crew consumed.
+- The HUD's Work Crews panel surfaces gathered totals, outstanding loads, and the latest shipment routes so shortages are visible at a glance.
+
 ## Population Churn
 - `World.evaluate_population_dynamics()` reviews economic surplus, housing, and morale to schedule births, invite migrants, or record departures.
 - Demographic registries capture arrivals for UI summaries while new citizens inherit traits and needs from archetype pools.
+
+## Apprenticeships & Training
+- `World.process_training_daily()` monitors job cohorts against program baselines, queues under-skilled citizens, and spins up workshops led by qualified instructors.
+- Active sessions grant experience through `Character.participate_in_training()` while boosting esteem, logging notable level-ups, and archiving cohort outcomes for the HUD.
+- The command UI surfaces active cohorts, queue pressure, and flagged disciplines so managers can see where expertise is still lagging.
+
+## Governance & Law
+- `World.process_governance_daily()` reviews recent incident history, grows support for unattended petitions, and automatically registers new civic petitions when repeated offences breach the configured threshold.
+- The mayor evaluates petitions via `_execute_review_law_petitions`, drafts new ordinances with `_execute_draft_settlement_law`, and enacts them through `World.enact_law()` which stores the statute, penalty, and evidence baseline.
+- Law enforcement gains interview queues through `World.plan_case_interviews()`; the sheriff and deputies claim assignments with `assign_investigative_interview` and log testimony using `record_interview_result`, which boosts case evidence before trial.
+- The `/game_state` payload exposes the `governance` snapshot so the HUD lists active laws, petition support, and outstanding witness interviews alongside economic and housing telemetry.
+
+## Family Registries & Life Histories
+- `World._rebuild_family_profiles()` clusters characters into households using their declared family ties, generating taglines that summarize each clan's makeup.
+- `Character.record_life_event()` captures notable beats such as arrivals, trials, and medical outcomes; `World.share_family_event()` echoes those moments to relatives and stores them inside the family ledger.
+- New helpers—`World.register_union()` and `World.record_birth()`—formalize marriages, log witnesses, assign parent/child links, and update lineage maps so each family profile exposes partners, children, and guardians at a glance.
+- Fatal medical resolutions feed into `_record_bereavement_events()` which now issues "witnessed tragedy" and "family loss" entries and records the moment inside the family chronicle.
+- The `/game_state` payload now publishes a `families` snapshot plus per-character `life_history`, `life_highlights`, and per-family `lineage` data so the HUD can surface webs of kinship alongside recent milestones.
 
 These systems feed directly into the `/game_state` payload for the HUD overlays, enabling the command interface to highlight phase shifts, weather hazards, resource pressure, and demographic changes in real time.

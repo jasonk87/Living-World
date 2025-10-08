@@ -98,6 +98,131 @@ WEATHER_EVENT_DEFINITIONS = {
 
 WEATHER_EVENT_MESSAGE_LIMIT = 4
 
+# Workforce & Logistics
+DEFAULT_WORK_SHIFT_TICKS = 6
+WORK_SHIFT_DEFINITIONS = {
+    "logging": {
+        "title": "Logging Crews",
+        "jobs": ["Woodcutter"],
+        "task": "Chop Wood",
+        "resource": "Wood",
+        "skill": "Woodcutting",
+        "shift_ticks": 6,
+        "carry_capacity_per_worker": 6,
+        "hauler_jobs": ["Builder"],
+        "hauler_capacity": 12,
+        "skill_yield_bonus": 0.12,
+        "preferred_stockpiles": ["Lumber Yard", "Central Stockpile"],
+    },
+    "quarry": {
+        "title": "Quarry Team",
+        "jobs": ["Stonemason", "Miner"],
+        "task": "Mine Stone",
+        "resource": "Stone",
+        "skill": "Mining",
+        "shift_ticks": 6,
+        "carry_capacity_per_worker": 5,
+        "hauler_jobs": ["Builder"],
+        "hauler_capacity": 10,
+        "skill_yield_bonus": 0.1,
+        "preferred_stockpiles": ["Masonry Yard", "Central Stockpile"],
+    },
+    "fields": {
+        "title": "Field Hands",
+        "jobs": ["Farmer"],
+        "task": "Tend Fields",
+        "resource": "Food",
+        "skill": "Farming",
+        "shift_ticks": 6,
+        "carry_capacity_per_worker": 8,
+        "hauler_jobs": ["Farmer"],
+        "hauler_capacity": 8,
+        "skill_yield_bonus": 0.1,
+        "preferred_stockpiles": ["Granary", "Central Stockpile"],
+    },
+    "iron_mine": {
+        "title": "Iron Miners",
+        "jobs": ["Miner"],
+        "task": "Mine Iron Ore",
+        "resource": "Iron Ore",
+        "skill": "Mining",
+        "shift_ticks": 6,
+        "carry_capacity_per_worker": 4,
+        "hauler_jobs": ["Miner", "Builder"],
+        "hauler_capacity": 9,
+        "skill_yield_bonus": 0.09,
+        "preferred_stockpiles": ["Ore Yard", "Central Stockpile"],
+    },
+    "sawmill": {
+        "title": "Sawmill Crew",
+        "jobs": ["Sawyer"],
+        "task": "Saw Lumber",
+        "resource": "Lumber",
+        "skill": "Carpentry",
+        "shift_ticks": 6,
+        "carry_capacity_per_worker": 5,
+        "hauler_jobs": ["Builder", "Laborer"],
+        "hauler_capacity": 10,
+        "skill_yield_bonus": 0.1,
+        "inputs": {"Wood": 2},
+        "preferred_stockpiles": ["Lumber Yard", "Central Stockpile"],
+        "discrete_output": True,
+    },
+    "carpentry": {
+        "title": "Carpenter's Shop",
+        "jobs": ["Carpenter"],
+        "task": "Assemble Furniture",
+        "resource": "Furniture",
+        "skill": "Carpentry",
+        "shift_ticks": 6,
+        "carry_capacity_per_worker": 4,
+        "hauler_jobs": ["Laborer", "Builder"],
+        "hauler_capacity": 8,
+        "skill_yield_bonus": 0.11,
+        "inputs": {"Lumber": 2},
+        "preferred_stockpiles": ["Workshop Store", "Central Stockpile"],
+        "discrete_output": True,
+    },
+}
+
+# Training & Apprenticeships
+TRAINING_ESTEEM_BOOST = 3
+TRAINING_PROGRAM_DEFINITIONS = {
+    "construction_basics": {
+        "title": "Construction Basics Workshop",
+        "skill": "Construction",
+        "focus_jobs": ["Builder", "Master Craftsman"],
+        "target_level": 2,
+        "min_level": 0,
+        "capacity": 3,
+        "duration_days": 2,
+        "daily_exp_gain": 6.5,
+        "instructor_roles": ["Master Craftsman", "Manager"],
+    },
+    "field_agronomy": {
+        "title": "Field Agronomy Clinic",
+        "skill": "Farming",
+        "focus_jobs": ["Farmer"],
+        "target_level": 2,
+        "min_level": 0,
+        "capacity": 4,
+        "duration_days": 3,
+        "daily_exp_gain": 5.0,
+        "instructor_roles": ["Farmer", "Chief Medical Officer"],
+    },
+    "triage_rotation": {
+        "title": "Triage Rotation Drills",
+        "skill": "Medicine",
+        "focus_jobs": ["Medic", "Chief Medical Officer"],
+        "target_level": 3,
+        "min_level": 1,
+        "capacity": 2,
+        "duration_days": 3,
+        "daily_exp_gain": 7.0,
+        "instructor_roles": ["Chief Medical Officer"],
+    },
+}
+
 # Cultural Life & Festivals
 CULTURAL_SPIRIT_BASELINE = 0.45
 CULTURAL_SPIRIT_DECAY = 0.02
@@ -361,6 +486,15 @@ EXP_LEVEL_SCALING_FACTOR = 1.5
 MAYOR_RESOURCE_LOW_THRESHOLD = 20  # Mayor becomes concerned if key resources drop below this
 MAYOR_RESOURCE_HIGH_THRESHOLD = 150 # Mayor recognizes an abundance when stores exceed this
 
+# Governance & Law System
+LAW_PETITION_CRIME_WINDOW = 6  # Days of incident history the mayor reviews when weighing petitions
+LAW_PETITION_THRESHOLD = 3     # Minimum repeated incidents before citizens file a formal petition
+LAW_BASE_FINE_AMOUNT = 15      # Default fine the mayor levies when enacting civic laws
+LAW_SUPPORT_ESCALATION = 0.08  # Daily support drift for unattended petitions
+LAW_INTERVIEW_SUPPORT_THRESHOLD = 0.45  # Petitions over this support will demand witness interviews
+LAW_INTERVIEW_EVIDENCE_BONUS = 0.2      # Max evidence boost a strong interview can contribute
+LAW_CASE_PREP_BASELINE = 0.35           # Minimum evidence strength a drafted law starts with
+
 # Medical System Thresholds
 MEDICAL_SUPPLY_LOW_THRESHOLD = 5 # Chief Medical Officer acts when medical supplies fall below this
 
@@ -488,6 +622,11 @@ RELATIONSHIP_TIERS = [
 # Special Tiers (not score-based, but set directly)
 RELATIONSHIP_TIER_FAMILY = "Family"
 RELATIONSHIP_TIER_STRANGER = "Stranger" # For characters not in relationships dict yet
+
+# Personal histories & family chronicles
+LIFE_HISTORY_MAX_EVENTS = 120
+LIFE_HISTORY_HIGHLIGHT_THRESHOLD = 2
+FAMILY_HISTORY_MAX_EVENTS = 80
 
 # Social Interaction Modifiers based on Relationship Tier (example for 'Ask for Help' success chance)
 # Values are additive modifiers to a base success chance.
