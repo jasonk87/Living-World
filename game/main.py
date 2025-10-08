@@ -395,7 +395,7 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                             "y": sp.rect[1],
                             "width": sp.rect[2],
                             "height": sp.rect[3],
-                            "map_char": "S", # Stockpile character
+                            "map_char": sp.get_map_char(),
                             "display_name": sp.name,
                             "structure_type": "Stockpile"
                         })
@@ -684,7 +684,7 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                         "is_operational": True, # Stockpiles are always "operational"
                         "inventory": stockpile_at_loc.inventory,
                         "allowed_resources": stockpile_at_loc.allowed_resources,
-                        "map_char": "S" # Placeholder map char for stockpile
+                        "map_char": stockpile_at_loc.get_map_char(),
                     }
                     self.send_response(200)
                     self.send_header('Content-type', 'application/json')

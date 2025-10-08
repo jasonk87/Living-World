@@ -885,6 +885,34 @@ class Character:
         if tags:
             record["tags"] = [str(tag) for tag in tags if tag]
 
+        significance = 1
+        if event_type in {"fell_ill", "injured", "recovered"}:
+            significance = 2
+
+        self.add_memory(summary)
+
+        life_event_logged = False
+        life_event_error: Optional[str] = None
+        try:
+            self.record_life_event(
+                world,
+                f"health_{event_type}",
+                summary,
+                tags=["health"] + list(record.get("tags", [])),
+                significance=significance,
+            )
+            life_event_logged = True
+        except Exception as exc:  # noqa: BLE001
+            life_event_error = f"{exc.__class__.__name__}: {exc}"
+            if world and hasattr(world, "add_event_log_message"):
+                world.add_event_log_message(
+                    f"Failed to log health life event '{event_type}' for {self.name}: {life_event_error}"
+                )
+
+        record["life_event_logged"] = life_event_logged
+        if life_event_error:
+            record["life_event_error"] = life_event_error
+
         events_deque = profile.setdefault(
             "recent_events",
             deque(maxlen=getattr(config, "HEALTH_RECENT_EVENT_LIMIT", 10)),
@@ -895,23 +923,6 @@ class Character:
         history.append(dict(record))
         if len(history) > 48:
             del history[:-48]
-
-        significance = 1
-        if event_type in {"fell_ill", "injured", "recovered"}:
-            significance = 2
-
-        self.add_memory(summary)
-        try:
-            self.record_life_event(
-                world,
-                f"health_{event_type}",
-                summary,
-                tags=["health"] + list(record.get("tags", [])),
-                significance=significance,
-            )
-        except Exception:
-            # In edge cases (e.g., during serialization), life event logging should not break health recording.
-            pass
 
         return dict(record)
 

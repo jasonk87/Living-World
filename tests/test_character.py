@@ -231,6 +231,47 @@ def test_daily_health_evaluation_flags_new_sickness():
     assert any(evt.get("type") == "fell_ill" for evt in patient.health_profile["recent_events"])
 
 
+def test_record_health_event_tracks_life_event_logging():
+    world, _ = _make_world_with_time()
+    patient = Character(
+        name="Sal", personality="Stoic", traits=[], skills={}, needs=_basic_needs()
+    )
+
+    result = patient.record_health_event(
+        world,
+        "fell_ill",
+        "Sal was struck by a sudden fever.",
+        severity=3.5,
+        tags=["fever"],
+    )
+
+    assert result["life_event_logged"] is True
+    history_entry = patient.health_profile["condition_history"][-1]
+    assert history_entry.get("life_event_logged") is True
+    assert "life_event_error" not in result
+
+
+def test_record_health_event_notes_failure_and_logs():
+    world, _ = _make_world_with_time()
+    patient = Character(
+        name="Reva", personality="Calm", traits=[], skills={}, needs=_basic_needs()
+    )
+
+    with patch.object(patient, "record_life_event", side_effect=RuntimeError("Ledger locked")):
+        result = patient.record_health_event(
+            world,
+            "injured",
+            "Reva slipped in the workshop.",
+            severity=2.1,
+        )
+
+    assert result["life_event_logged"] is False
+    assert "life_event_error" in result
+    assert any("Failed to log health life event" in msg for msg in world.event_log)
+    history_entry = patient.health_profile["condition_history"][-1]
+    assert history_entry.get("life_event_logged") is False
+
+
 def test_daily_health_evaluation_recovers_patient():
     world, _ = _make_world_with_time()
     patient = Character(
