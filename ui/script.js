@@ -68,6 +68,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const lawPetitionList = document.getElementById('law-petition-list');
     const lawInvestigationList = document.getElementById('law-investigation-list');
     const leadershipOversightList = document.getElementById('leadership-oversight-list');
+    const militaryChainList = document.getElementById('military-chain-list');
+    const militarySquadList = document.getElementById('military-squad-list');
+    const militaryActivityList = document.getElementById('military-activity-list');
     const healthOverviewList = document.getElementById('health-overview-list');
     const healthAtRiskList = document.getElementById('health-at-risk-list');
     const healthRecoveryList = document.getElementById('health-recovery-list');
@@ -682,6 +685,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
+        const military = governance.military || {};
+
         if (leadershipOversightList) {
             const oversightEntries = Array.isArray(governance.oversight) ? governance.oversight : [];
             const badgeFlags = new Set(['neglect', 'incident']);
@@ -766,6 +771,153 @@ document.addEventListener('DOMContentLoaded', () => {
                         `;
                     })
                     .join('');
+            }
+        }
+
+        if (militaryChainList) {
+            const commander = military.commander || null;
+            const captains = Array.isArray(military.captains) ? military.captains : [];
+            const alerts = Array.isArray(military.alerts) ? military.alerts : [];
+            addCivicCount(alerts);
+            const rows = [];
+            if (commander && commander.name) {
+                const oversight = Number.isFinite(commander.oversight)
+                    ? `${Math.round(commander.oversight * 100)}%`
+                    : '—';
+                const leadership = Number.isFinite(commander.leadership)
+                    ? `Leadership ${commander.leadership}`
+                    : null;
+                const security = Number.isFinite(commander.security)
+                    ? `Security ${commander.security}`
+                    : null;
+                const subordinates = Number.isFinite(commander.subordinates)
+                    ? `Directs ${commander.subordinates} staff`
+                    : null;
+                const detailParts = [`Oversight ${oversight}`];
+                if (leadership) detailParts.push(leadership);
+                if (security) detailParts.push(security);
+                if (subordinates) detailParts.push(subordinates);
+                rows.push(`
+                    <li>
+                        <strong>${commander.name}</strong>
+                        <small>Commander • ${detailParts.join(' • ')}</small>
+                    </li>
+                `);
+            }
+            if (captains.length) {
+                captains.slice(0, 6).forEach(captain => {
+                    const oversight = Number.isFinite(captain.oversight)
+                        ? `${Math.round(captain.oversight * 100)}%`
+                        : '—';
+                    const readiness = Number.isFinite(captain.readiness)
+                        ? `${Math.round(captain.readiness * 100)}%`
+                        : '—';
+                    const squads = Array.isArray(captain.squads) ? captain.squads.join(', ') : '';
+                    const detailParts = [`Oversight ${oversight}`, `Readiness ${readiness}`];
+                    if (squads) {
+                        detailParts.push(`Leads ${squads}`);
+                    }
+                    rows.push(`
+                        <li>
+                            <strong>${captain.name}</strong>
+                            <small>Captain • ${detailParts.join(' • ')}</small>
+                        </li>
+                    `);
+                });
+            }
+            if (!rows.length) {
+                militaryChainList.innerHTML = '<li class="empty">No commander appointed.</li>';
+            } else {
+                militaryChainList.innerHTML = rows.join('');
+            }
+        }
+
+        if (militarySquadList) {
+            const squads = Array.isArray(military.squads) ? military.squads : [];
+            const readiness = Number.isFinite(military.readiness)
+                ? `${Math.round(military.readiness * 100)}%`
+                : null;
+            if (!squads.length) {
+                militarySquadList.innerHTML = '<li class="empty">No squads organized.</li>';
+            } else {
+                const statusTagClass = (status) => {
+                    switch (status) {
+                        case 'ready':
+                            return 'status-tag good';
+                        case 'training':
+                            return 'status-tag';
+                        case 'undermanned':
+                            return 'status-tag warn';
+                        case 'critical':
+                            return 'status-tag alert';
+                        default:
+                            return 'status-tag';
+                    }
+                };
+                const statusLabel = (status) => {
+                    switch (status) {
+                        case 'ready':
+                            return 'Ready';
+                        case 'training':
+                            return 'Drilling';
+                        case 'undermanned':
+                            return 'Thin';
+                        case 'critical':
+                            return 'Critical';
+                        default:
+                            return status ? status.replace(/_/g, ' ') : 'Active';
+                    }
+                };
+                const readinessHeader = readiness ? `<li class="header">Overall readiness ${readiness}</li>` : '';
+                const entries = squads.slice(0, 8).map(squad => {
+                    const squadReadiness = Number.isFinite(squad.readiness)
+                        ? `${Math.round(squad.readiness * 100)}%`
+                        : '—';
+                    const size = Number.isFinite(squad.size) ? `${squad.size} members` : '';
+                    const captain = squad.captain ? `Captain ${squad.captain}` : 'No captain';
+                    const status = squad.status ? `<span class="${statusTagClass(squad.status)}">${statusLabel(squad.status)}</span>` : '';
+                    return `
+                        <li>
+                            <strong>${squad.id}</strong>
+                            <small>${captain} • ${squadReadiness}${size ? ` • ${size}` : ''}</small>
+                            ${status}
+                        </li>
+                    `;
+                });
+                militarySquadList.innerHTML = `${readinessHeader}${entries.join('')}`;
+            }
+        }
+
+        if (militaryActivityList) {
+            const activity = Array.isArray(military.enemy_activity) ? military.enemy_activity : [];
+            if (!activity.length) {
+                militaryActivityList.innerHTML = '<li class="empty">No enemy sightings.</li>';
+            } else {
+                const entries = activity.slice(-6).reverse().map(entry => {
+                    const day = Number.isFinite(entry.day) ? `Day ${entry.day}` : 'Recent';
+                    const severity = entry.severity ? entry.severity.replace(/_/g, ' ') : 'Skirmish';
+                    const outcome = entry.outcome === 'breached' ? 'Breach' : 'Repelled';
+                    const outcomeClass = entry.outcome === 'breached' ? 'status-tag alert' : 'status-tag good';
+                    const losses = Number.isFinite(entry.losses) ? `${entry.losses} injured` : null;
+                    const plunder = entry.plundered && typeof entry.plundered === 'object'
+                        ? Object.entries(entry.plundered)
+                            .map(([resource, amount]) => `${amount} ${resource}`)
+                            .join(', ')
+                        : null;
+                    const detailParts = [];
+                    if (losses) detailParts.push(losses);
+                    if (plunder) detailParts.push(`Lost ${plunder}`);
+                    const detailText = detailParts.length ? `<small>${detailParts.join(' • ')}</small>` : '';
+                    return `
+                        <li>
+                            <strong>${severity}</strong>
+                            <small>${day}</small>
+                            <span class="${outcomeClass}">${outcome}</span>
+                            ${detailText}
+                        </li>
+                    `;
+                });
+                militaryActivityList.innerHTML = entries.join('');
             }
         }
 

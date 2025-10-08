@@ -171,6 +171,8 @@ def tick_simulation():
                 game_world.manage_campaigns()
             if hasattr(game_world, "manage_economy"):
                 game_world.manage_economy()
+            if hasattr(game_world, "process_military_daily"):
+                game_world.process_military_daily()
             if hasattr(game_world, "process_governance_daily"):
                 game_world.process_governance_daily()
             if hasattr(game_world, "process_daily_economy"):

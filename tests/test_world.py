@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from copy import deepcopy
 from typing import Any, Dict, List
 from unittest.mock import patch
 
@@ -1429,3 +1430,97 @@ def test_world_daily_report_includes_personal_pursuits():
     assert "personal_pursuits" in report
     assert world.latest_personal_pursuit_events
     assert any(event.get("type") == "pursuit_engaged" for event in report["personal_pursuits"])
+
+
+def test_military_process_builds_chain_and_readiness():
+    world, game_time = _make_world()
+    game_time.current_day = 4
+
+    commander = Character(
+        name="Darin",
+        personality="Resolute",
+        traits=[],
+        skills={"Leadership": 5, "Security": 3},
+        job="Militia Commander",
+    )
+    captain = Character(
+        name="Lysa",
+        personality="Calm",
+        traits=[],
+        skills={"Leadership": 4, "Security": 4},
+        job="Militia Captain",
+    )
+    soldier = Character(
+        name="Holt",
+        personality="Stoic",
+        traits=[],
+        skills={"Security": 3},
+        job="Militia Soldier",
+    )
+    scout = Character(
+        name="Risa",
+        personality="Bold",
+        traits=[],
+        skills={"Security": 2},
+        job="Scout",
+    )
+
+    for character in (commander, captain, soldier, scout):
+        world.add_character(character)
+
+    commander.leadership_oversight_score = 0.6
+    captain.leadership_oversight_score = 0.52
+
+    world.process_military_daily()
+    snapshot = world.get_military_snapshot()
+
+    assert snapshot["commander"]["name"] == commander.name
+    captain_names = [entry["name"] for entry in snapshot["captains"]]
+    assert captain.name in captain_names
+    assert snapshot["squads"], "Expected at least one squad to be formed"
+    assert snapshot["readiness"] > 0
+    assert any(squad["size"] >= 1 for squad in snapshot["squads"])
+
+
+def test_enemy_raid_logs_activity_when_forced(monkeypatch):
+    world, game_time = _make_world()
+    game_time.current_day = 7
+
+    commander = Character(
+        name="Serra",
+        personality="Resolute",
+        traits=[],
+        skills={"Leadership": 3, "Security": 2},
+        job="Militia Commander",
+    )
+    captain = Character(
+        name="Bryn",
+        personality="Stoic",
+        traits=[],
+        skills={"Leadership": 2, "Security": 3},
+        job="Militia Captain",
+    )
+    soldier = Character(
+        name="Olan",
+        personality="Steady",
+        traits=[],
+        skills={"Security": 3},
+        job="Militia Soldier",
+    )
+
+    for character in (commander, captain, soldier):
+        world.add_character(character)
+
+    forced_profile = deepcopy(config.ENEMY_RAID_PROFILE)
+    forced_profile["base_chance"] = 1.0
+    forced_profile["readiness_factor"] = 0.0
+    forced_profile["severity_weights"] = {"raid": 1.0}
+    forced_profile["losses"] = {"raid": (1, 1)}
+    monkeypatch.setattr(config, "ENEMY_RAID_PROFILE", forced_profile, raising=False)
+
+    world.process_military_daily()
+    snapshot = world.get_military_snapshot()
+
+    assert snapshot["enemy_activity"], "Enemy activity should be recorded when raids are forced"
+    entry = snapshot["enemy_activity"][0]
+    assert entry["severity"] == "raid"

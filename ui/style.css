@@ -890,6 +890,16 @@ button:focus-visible {
     padding-left: 0;
 }
 
+.mini-list li.header {
+    background: none;
+    border: none;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    padding: 0.25rem 0 0.15rem;
+}
+
 .status-tag-row {
     margin: 0.3rem 0 0.1rem;
     display: flex;

@@ -172,6 +172,18 @@ class World:
         self._last_workforce_update_day: Optional[int] = None
         self.work_logistics_history: List[Dict[str, Any]] = []
         self.leadership_oversight_report: List[Dict[str, Any]] = []
+        self.military_structure: Dict[str, Any] = {
+            "commander": None,
+            "captains": [],
+            "squads": [],
+            "readiness": 0.0,
+            "alerts": [],
+            "enemy_activity": [],
+            "updated_day": None,
+        }
+        self._militia_readiness: Dict[str, float] = {}
+        self.enemy_activity_log: List[Dict[str, Any]] = []
+        self._last_enemy_activity_day: Optional[int] = None
         self.law_petitions: List[Dict[str, Any]] = []
         self.active_laws: Dict[str, Dict[str, Any]] = {}
         self.law_history: List[Dict[str, Any]] = []
@@ -192,6 +204,7 @@ class World:
         self._feature_margin: int = max(0, getattr(config, "MAP_FEATURE_MARGIN", 0))
         self.landscape_profile: Dict[str, Any] = {}
         self._generate_initial_landscape()
+        self._military_rng = random.Random(seed)
 
     # --- Map & Landscape Generation -------------------------------------------------
 
@@ -3549,6 +3562,7 @@ class World:
             "petitions": petitions_snapshot,
             "interviews": interviews_snapshot,
             "oversight": oversight_snapshot,
+            "military": self.get_military_snapshot(),
         }
 
     def get_crime_by_id(self, crime_id: str) -> Optional[Dict[str, Any]]:
@@ -6268,6 +6282,16 @@ class World:
             modifier *= 0.6
         if any(char.job == "Deputy" for char in self.characters):
             modifier *= 0.75
+        militia_readiness = 0.0
+        if self.military_structure and isinstance(self.military_structure, dict):
+            militia_readiness = float(self.military_structure.get("readiness", 0.0) or 0.0)
+        elif self._militia_readiness:
+            militia_readiness = sum(self._militia_readiness.values()) / len(self._militia_readiness)
+        militia_modifier = float(getattr(config, "MILITIA_SECURITY_MODIFIER", 0.3))
+        if militia_readiness > 0:
+            modifier *= max(0.35, 1.0 - (militia_readiness * militia_modifier))
+        else:
+            modifier *= 1.0 + (militia_modifier * 0.15)
         return modifier
 
     def _select_theft_target(self) -> Optional[Tuple[str, Stockpile]]:
@@ -7983,6 +8007,316 @@ class World:
 
         oversight_entries.sort(key=lambda entry: entry.get("score", 0.0), reverse=True)
         self.leadership_oversight_report = oversight_entries
+
+    # --- Military Command & Threats -------------------------------------------------
+
+    def _drain_resource_for_raid(self, resource_name: str, amount: int) -> int:
+        removed_total = 0
+        if amount <= 0:
+            return 0
+        for stockpile in self.stockpiles:
+            available = stockpile.inventory.get(resource_name, 0)
+            if available <= 0:
+                continue
+            take = min(amount - removed_total, available)
+            if take <= 0:
+                continue
+            success, removed = stockpile.remove_item(resource_name, take)
+            if success and removed:
+                removed_total += removed
+                if self.game_time:
+                    self.ledger.update_stockpile_record(
+                        stockpile.name,
+                        stockpile.inventory,
+                        self.game_time.current_day,
+                    )
+            if removed_total >= amount:
+                break
+        return removed_total
+
+    def process_military_daily(self) -> None:
+        if not self.game_time:
+            return
+
+        defaults = getattr(config, "MILITIA_STRUCTURE_DEFAULTS", {})
+        baseline = float(defaults.get("readiness_baseline", 0.3))
+        skill_weight = float(defaults.get("skill_weight", 0.08))
+        captain_weight = float(defaults.get("captain_skill_weight", 0.05))
+        oversight_weight = float(defaults.get("oversight_weight", 0.18))
+        persistence = max(0.0, min(0.98, float(defaults.get("persistence", 0.7))))
+        squad_size = max(1, int(defaults.get("squad_size", 6)))
+        minimum_squads = max(0, int(defaults.get("minimum_squads", 0)))
+        alert_threshold = float(defaults.get("alert_threshold", 0.45))
+        critical_threshold = float(defaults.get("critical_threshold", 0.25))
+        max_skill_benchmark = max(1.0, float(defaults.get("max_skill_benchmark", 6.0)))
+
+        commander_candidates = [
+            char for char in self.characters if getattr(char, "job", None) == "Militia Commander"
+        ]
+        commander: Optional['Character'] = None
+        if commander_candidates:
+            commander = max(
+                commander_candidates,
+                key=lambda c: (
+                    c.skills.get("Leadership", {}).get("level", 0),
+                    c.skills.get("Security", {}).get("level", 0),
+                    getattr(c, "net_worth", c.money),
+                ),
+            )
+
+        captains = [
+            char for char in self.characters if getattr(char, "job", None) == "Militia Captain"
+        ]
+        captains.sort(
+            key=lambda c: (
+                c.skills.get("Leadership", {}).get("level", 0),
+                c.skills.get("Security", {}).get("level", 0),
+            ),
+            reverse=True,
+        )
+
+        squad_roles = set(getattr(config, "MILITIA_SQUAD_ROLES", ["Militia Soldier", "Scout"]))
+        militia_members = [
+            char
+            for char in self.characters
+            if getattr(char, "job", None) in squad_roles and char is not commander
+        ]
+        militia_members.sort(
+            key=lambda c: (
+                c.skills.get("Security", {}).get("level", 0),
+                c.skills.get("Leadership", {}).get("level", 0),
+            ),
+            reverse=True,
+        )
+
+        total_squads = 0
+        if militia_members:
+            total_squads = math.ceil(len(militia_members) / squad_size)
+        total_squads = max(total_squads, minimum_squads)
+        if total_squads == 0 and (commander or captains):
+            total_squads = max(1, len(captains))
+
+        squads: List[Dict[str, Any]] = []
+        if total_squads:
+            for idx in range(total_squads):
+                assigned_captain: Optional['Character'] = None
+                if captains:
+                    assigned_captain = captains[idx % len(captains)]
+                squads.append(
+                    {
+                        "id": f"Squad {idx + 1}",
+                        "captain": assigned_captain,
+                        "members": [],
+                    }
+                )
+
+            for idx, member in enumerate(militia_members):
+                squad = squads[idx % len(squads)]
+                squad["members"].append(member)
+
+        militia_alerts: List[str] = []
+        if not commander:
+            militia_alerts.append("No militia commander appointed.")
+        if commander and not captains:
+            militia_alerts.append("Militia commander lacks captains to direct squads.")
+        if not commander and captains:
+            militia_alerts.append("Captains are operating without a commander.")
+
+        commander_oversight = getattr(commander, "leadership_oversight_score", 0.0) if commander else 0.0
+        squad_summaries: List[Dict[str, Any]] = []
+        readiness_values: List[float] = []
+
+        for squad in squads:
+            squad_id = squad["id"]
+            members: List['Character'] = squad.get("members", [])
+            captain_obj: Optional['Character'] = squad.get("captain")
+            average_security = 0.0
+            if members:
+                security_total = sum(member.skills.get("Security", {}).get("level", 0) for member in members)
+                average_security = security_total / len(members)
+            normalized_security = min(1.0, average_security / max_skill_benchmark)
+            captain_security = 0.0
+            captain_oversight = 0.0
+            if captain_obj:
+                captain_security = min(
+                    1.0,
+                    captain_obj.skills.get("Security", {}).get("level", 0) / max_skill_benchmark,
+                )
+                captain_oversight = getattr(captain_obj, "leadership_oversight_score", 0.0)
+
+            base_component = baseline + (normalized_security * skill_weight) + (captain_security * captain_weight)
+            oversight_component = (commander_oversight * oversight_weight * 0.6) + (captain_oversight * oversight_weight * 0.4)
+            fresh_score = base_component + oversight_component
+            previous = self._militia_readiness.get(squad_id, baseline)
+            readiness = previous * persistence + fresh_score * (1.0 - persistence)
+            readiness = max(0.0, min(1.0, readiness))
+            self._militia_readiness[squad_id] = readiness
+
+            status = "ready"
+            if readiness < critical_threshold:
+                status = "critical"
+                militia_alerts.append(f"{squad_id} readiness critical ({readiness:.0%}).")
+            elif readiness < alert_threshold:
+                status = "undermanned"
+                militia_alerts.append(f"{squad_id} readiness low ({readiness:.0%}).")
+            elif readiness < 0.6:
+                status = "training"
+
+            readiness_values.append(readiness)
+            squad_summary = {
+                "id": squad_id,
+                "captain": captain_obj.name if captain_obj else None,
+                "members": [member.name for member in members],
+                "size": len(members),
+                "readiness": readiness,
+                "status": status,
+            }
+            squad_summaries.append(squad_summary)
+
+        captain_summaries: List[Dict[str, Any]] = []
+        for captain_obj in captains:
+            captain_squads = [
+                squad["id"]
+                for squad in squad_summaries
+                if squad.get("captain") == captain_obj.name
+            ]
+            if not captain_squads and squads:
+                continue
+            captain_readiness = [
+                squad["readiness"] for squad in squad_summaries if squad.get("captain") == captain_obj.name
+            ]
+            average_readiness = sum(captain_readiness) / len(captain_readiness) if captain_readiness else 0.0
+            captain_summaries.append(
+                {
+                    "name": captain_obj.name,
+                    "oversight": getattr(captain_obj, "leadership_oversight_score", 0.0),
+                    "leadership": captain_obj.skills.get("Leadership", {}).get("level", 0),
+                    "security": captain_obj.skills.get("Security", {}).get("level", 0),
+                    "squads": captain_squads,
+                    "readiness": average_readiness,
+                }
+            )
+
+        overall_readiness = sum(readiness_values) / len(readiness_values) if readiness_values else 0.0
+
+        raid_profile = getattr(config, "ENEMY_RAID_PROFILE", {})
+        base_chance = float(raid_profile.get("base_chance", 0.02))
+        readiness_factor = float(raid_profile.get("readiness_factor", 0.5))
+        raid_difficulty = float(raid_profile.get("difficulty", 1.0))
+        severity_weights: Dict[str, float] = dict(raid_profile.get("severity_weights", {}))
+        severity_difficulty: Dict[str, float] = dict(raid_profile.get("severity_difficulty", {}))
+        resource_targets: List[str] = list(raid_profile.get("resource_targets", []))
+        loss_profiles: Dict[str, Tuple[int, int]] = dict(raid_profile.get("losses", {}))
+        max_log_entries = int(raid_profile.get("max_log_entries", 6))
+
+        adjusted_chance = base_chance
+        if overall_readiness > 0:
+            adjusted_chance *= max(0.05, 1.0 - overall_readiness * readiness_factor)
+        else:
+            adjusted_chance *= 1.2
+        if not commander or not captains:
+            adjusted_chance *= 1.25
+        if not squads:
+            adjusted_chance *= 1.4
+
+        enemy_activity_entries: List[Dict[str, Any]] = []
+        raid_trigger = self._military_rng.random() if adjusted_chance > 0 else 1.0
+        if raid_trigger < adjusted_chance:
+            severity_pick = "skirmish"
+            if severity_weights:
+                total_weight = sum(max(weight, 0.0) for weight in severity_weights.values())
+                roll = self._military_rng.uniform(0.0, total_weight) if total_weight > 0 else 0.0
+                cumulative = 0.0
+                for label, weight in severity_weights.items():
+                    cumulative += max(weight, 0.0)
+                    if roll <= cumulative:
+                        severity_pick = label
+                        break
+            loss_range = loss_profiles.get(severity_pick, (2, 5))
+            loss_amount = int(
+                self._military_rng.randint(
+                    max(0, int(loss_range[0])),
+                    max(max(0, int(loss_range[0])), int(loss_range[1])),
+                )
+            )
+            severity_pressure = severity_difficulty.get(severity_pick, 1.0)
+            defending_strength = overall_readiness * max(1, len(squads))
+            raid_threshold = severity_pressure * raid_difficulty
+            outcome = "repelled" if defending_strength >= raid_threshold else "breached"
+            plundered: Dict[str, int] = {}
+
+            if outcome == "breached" and resource_targets:
+                targets = resource_targets[:]
+                self._military_rng.shuffle(targets)
+                for resource in targets[:2]:
+                    removed = self._drain_resource_for_raid(resource, max(1, loss_amount // 2))
+                    if removed > 0:
+                        plundered[resource] = removed
+            elif outcome == "repelled":
+                loss_amount = max(0, loss_amount - 1)
+
+            raid_entry = {
+                "day": self.game_time.current_day,
+                "severity": severity_pick,
+                "outcome": outcome,
+                "losses": loss_amount,
+            }
+            if plundered:
+                raid_entry["plundered"] = plundered
+
+            enemy_activity_entries.append(raid_entry)
+            summary = (
+                f"Enemy {severity_pick} {'repelled' if outcome == 'repelled' else 'raid breaches defenses'}"
+            )
+            if outcome == "repelled":
+                detail = f"Militia drives off attackers with {loss_amount} wounded."
+            else:
+                if plundered:
+                    loot = ", ".join(f"{amt} {res}" for res, amt in plundered.items())
+                    detail = f"Raiders escape with {loot}."
+                else:
+                    detail = "Raiders caused damage before withdrawing."
+            self.add_event_log_message(f"{summary}: {detail}")
+            militia_alerts.append(summary)
+
+            self.enemy_activity_log.append(raid_entry)
+            if len(self.enemy_activity_log) > max(1, max_log_entries):
+                self.enemy_activity_log = self.enemy_activity_log[-max_log_entries:]
+            self._last_enemy_activity_day = self.game_time.current_day
+
+        if not enemy_activity_entries and self.enemy_activity_log:
+            recent_entries = [entry for entry in self.enemy_activity_log if entry.get("day") == self.game_time.current_day]
+            if recent_entries:
+                enemy_activity_entries.extend(deepcopy(recent_entries))
+
+        self.military_structure = {
+            "commander": (
+                {
+                    "name": commander.name,
+                    "oversight": commander_oversight,
+                    "leadership": commander.skills.get("Leadership", {}).get("level", 0) if commander else 0,
+                    "security": commander.skills.get("Security", {}).get("level", 0) if commander else 0,
+                    "subordinates": len(getattr(commander, "subordinates_names", [])) if commander else 0,
+                }
+                if commander
+                else None
+            ),
+            "captains": captain_summaries,
+            "squads": squad_summaries,
+            "readiness": overall_readiness,
+            "alerts": militia_alerts,
+            "enemy_activity": (
+                deepcopy(enemy_activity_entries)
+                if enemy_activity_entries
+                else deepcopy(self.enemy_activity_log[-3:])
+                if self.enemy_activity_log
+                else []
+            ),
+            "updated_day": self.game_time.current_day,
+        }
+
+    def get_military_snapshot(self) -> Dict[str, Any]:
+        return deepcopy(self.military_structure)
 
     def manage_economy(self):
         if not self.game_time:

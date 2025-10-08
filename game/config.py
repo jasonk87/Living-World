@@ -1158,6 +1158,48 @@ LEADERSHIP_ILLEGAL_MAX_SKIM = 6
 MOOD_CHANGE_MISCONDUCT_THRILL = 3
 FIRING_WARNING_THRESHOLD = 3 # Number of warnings before firing is likely
 
+# Military organization & external threats
+MILITIA_STRUCTURE_DEFAULTS = {
+    "readiness_baseline": 0.32,
+    "squad_size": 6,
+    "minimum_squads": 2,
+    "skill_weight": 0.08,
+    "captain_skill_weight": 0.05,
+    "oversight_weight": 0.18,
+    "persistence": 0.72,
+    "max_skill_benchmark": 6.0,
+    "alert_threshold": 0.45,
+    "critical_threshold": 0.25,
+}
+MILITIA_SQUAD_ROLES = [
+    "Militia Soldier",
+    "Scout",
+]
+MILITIA_SECURITY_MODIFIER = 0.35
+
+ENEMY_RAID_PROFILE = {
+    "base_chance": 0.04,
+    "readiness_factor": 0.7,
+    "difficulty": 1.4,
+    "severity_weights": {
+        "skirmish": 0.55,
+        "raid": 0.3,
+        "onslaught": 0.15,
+    },
+    "severity_difficulty": {
+        "skirmish": 0.8,
+        "raid": 1.0,
+        "onslaught": 1.35,
+    },
+    "resource_targets": ["Food", "Wood", "Stone", "Herbs"],
+    "losses": {
+        "skirmish": (1, 3),
+        "raid": (3, 6),
+        "onslaught": (6, 12),
+    },
+    "max_log_entries": 6,
+}
+
 # Skill System
 BASE_EXP_TO_NEXT_LEVEL = 50.0
 EXP_LEVEL_SCALING_FACTOR = 1.5
