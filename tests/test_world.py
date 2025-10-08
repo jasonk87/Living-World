@@ -108,6 +108,31 @@ def test_update_day_phase_records_single_entry_per_phase():
     assert world.phase_history.count(world.current_phase) == 1
 
 
+def test_healthcare_report_tracks_vitals_and_events():
+    world, game_time = _make_world()
+    patient_needs = _standard_needs()
+    patient_needs.update({"Hunger": 20, "Thirst": 25, "Energy": 35, "Safety": 35})
+    patient = Character(
+        name="Orin",
+        personality="Stoic",
+        traits=[],
+        skills={},
+        needs=patient_needs,
+    )
+    world.add_character(patient)
+    patient.health_profile["vitality"] = 48.0
+    patient.health_profile["immune_resilience"] = 0.22
+
+    with patch("random.random", side_effect=[0.0, 1.0]), patch("random.uniform", return_value=3.1):
+        world.process_healthcare_daily()
+
+    report = world.latest_healthcare_report
+    assert report.get("health_events")
+    assert any(evt.get("type") == "fell_ill" for evt in report.get("health_events", []))
+    assert report.get("average_vitality") is not None
+    assert report.get("new_cases")
+
+
 @patch("random.random", return_value=0.99)
 @patch("random.randint", side_effect=lambda a, b: a if a == b else a)
 def test_weather_event_applies_and_expires_effects(mock_randint, mock_random):  # noqa: ARG001

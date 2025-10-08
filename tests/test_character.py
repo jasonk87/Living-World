@@ -1,3 +1,4 @@
+from collections import deque
 from unittest.mock import patch
 
 from game import config
@@ -188,6 +189,69 @@ def test_character_initializes_personal_pursuits():
         assert "key" in pursuit
         assert "progress" in pursuit
         assert pursuit.get("level", 0) == 0
+
+
+def test_health_profile_initializes_with_defaults():
+    citizen = Character(
+        name="Lyra",
+        personality="Calm",
+        traits=[],
+        skills={},
+        needs=_basic_needs(),
+    )
+
+    snapshot = citizen.get_health_snapshot()
+    assert "vitality" in snapshot
+    assert "immune_resilience" in snapshot
+    assert "stress" in snapshot
+    assert isinstance(snapshot.get("recent_events"), list)
+    assert isinstance(citizen.health_profile.get("recent_events"), deque)
+
+
+def test_daily_health_evaluation_flags_new_sickness():
+    world, _ = _make_world_with_time()
+    patient_needs = _basic_needs()
+    patient_needs.update({"Hunger": 30, "Thirst": 35, "Energy": 40, "Safety": 40})
+    patient = Character(
+        name="Milo",
+        personality="Stoic",
+        traits=[],
+        skills={},
+        needs=patient_needs,
+    )
+    world.add_character(patient)
+    patient.health_profile["vitality"] = 50.0
+    patient.health_profile["immune_resilience"] = 0.25
+
+    with patch("random.random", side_effect=[0.0, 1.0]), patch("random.uniform", return_value=3.2):
+        events = patient.evaluate_daily_health(world)
+
+    assert patient.is_sick
+    assert any(evt.get("type") == "fell_ill" for evt in events)
+    assert any(evt.get("type") == "fell_ill" for evt in patient.health_profile["recent_events"])
+
+
+def test_daily_health_evaluation_recovers_patient():
+    world, _ = _make_world_with_time()
+    patient = Character(
+        name="Nora",
+        personality="Cheerful",
+        traits=[],
+        skills={},
+        needs=_basic_needs(),
+    )
+    world.add_character(patient)
+    patient.is_sick = True
+    patient.sickness_severity = 1.0
+    patient.health_profile["vitality"] = 88.0
+    patient.health_profile["immune_resilience"] = 0.82
+
+    with patch("random.random", side_effect=[1.0, 1.0]):
+        events = patient.evaluate_daily_health(world)
+
+    assert not patient.is_sick
+    assert patient.sickness_severity == 0
+    assert any(evt.get("type") == "recovered" for evt in events)
 
 
 def test_personal_pursuits_progress_and_log_entries():

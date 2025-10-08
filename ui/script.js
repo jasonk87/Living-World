@@ -37,6 +37,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const hudBadgeWorld = document.getElementById('hud-badge-world');
     const hudBadgeEconomy = document.getElementById('hud-badge-economy');
     const hudBadgeCivic = document.getElementById('hud-badge-civic');
+    const hudBadgeHealth = document.getElementById('hud-badge-health');
     const hudBadgeFamilies = document.getElementById('hud-badge-families');
     const economyMarketList = document.getElementById('economy-market-list');
     const economyPressureList = document.getElementById('economy-pressure-list');
@@ -67,6 +68,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const lawPetitionList = document.getElementById('law-petition-list');
     const lawInvestigationList = document.getElementById('law-investigation-list');
     const leadershipOversightList = document.getElementById('leadership-oversight-list');
+    const healthOverviewList = document.getElementById('health-overview-list');
+    const healthAtRiskList = document.getElementById('health-at-risk-list');
+    const healthRecoveryList = document.getElementById('health-recovery-list');
+    const healthEventsList = document.getElementById('health-event-list');
     const characterSearchInput = document.getElementById('character-search');
     const infoPanel = document.getElementById('info-panel');
     const hudPopoverButtons = document.querySelectorAll('[data-popover-target]');
@@ -380,6 +385,99 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         rosterWindowEl.replaceChildren(fragment);
+    }
+
+    function updateHealthcareIntel(gameState) {
+        if (!gameState) return;
+
+        const report = gameState.healthcare_report || {};
+        const supplyAlerts = Array.isArray(report.supply_alerts) ? report.supply_alerts : [];
+        const healthEvents = Array.isArray(report.health_events) ? report.health_events : [];
+        const atRiskEntries = Array.isArray(report.at_risk) ? report.at_risk : [];
+        const recoveryEntries = Array.isArray(report.recoveries) ? report.recoveries : [];
+
+        let healthBadgeCount = 0;
+        healthBadgeCount += supplyAlerts.length;
+        healthBadgeCount += atRiskEntries.length;
+        healthBadgeCount += healthEvents.filter(evt => evt && ['sickness_worsened', 'injury_worsened'].includes(evt.type)).length;
+
+        if (healthOverviewList) {
+            const lines = [];
+            if (Number.isFinite(report.average_vitality)) {
+                lines.push(`<li><strong>Avg Vitality</strong>: ${report.average_vitality.toFixed(1)}</li>`);
+            }
+            if (Number.isFinite(report.average_stress)) {
+                lines.push(`<li><strong>Avg Stress</strong>: ${(report.average_stress * 100).toFixed(0)}%</li>`);
+            }
+            if (Number.isFinite(report.average_immunity)) {
+                lines.push(`<li><strong>Avg Immunity</strong>: ${(report.average_immunity * 100).toFixed(0)}%</li>`);
+            }
+            supplyAlerts.forEach(alert => {
+                const resource = alert.resource || 'Supplies';
+                const current = Number.isFinite(alert.current) ? alert.current : '0';
+                const threshold = Number.isFinite(alert.threshold) ? alert.threshold : '0';
+                lines.push(`<li class="alert">Low ${resource}: ${current}/${threshold}</li>`);
+            });
+            healthOverviewList.innerHTML = lines.length
+                ? lines.join('')
+                : '<li class="empty">Vital signs stable.</li>';
+        }
+
+        if (healthAtRiskList) {
+            if (!atRiskEntries.length) {
+                healthAtRiskList.innerHTML = '<li class="empty">No critical patients.</li>';
+            } else {
+                healthAtRiskList.innerHTML = atRiskEntries.slice(0, 6)
+                    .map(entry => {
+                        const conditions = Array.isArray(entry.conditions)
+                            ? entry.conditions.map(cond => {
+                                if (!cond || typeof cond !== 'object') return 'condition';
+                                const label = cond.type ? cond.type.replace(/_/g, ' ') : 'condition';
+                                const severity = Number.isFinite(cond.severity) ? ` (sev ${cond.severity})` : '';
+                                return `${label}${severity}`;
+                            }).join(', ')
+                            : '—';
+                        const vitality = Number.isFinite(entry.vitality) ? entry.vitality.toFixed(1) : '—';
+                        return `<li><strong>${entry.name}</strong> • Vitality ${vitality}<br><span class="meta">${conditions}</span></li>`;
+                    })
+                    .join('');
+            }
+        }
+
+        if (healthRecoveryList) {
+            if (!recoveryEntries.length) {
+                healthRecoveryList.innerHTML = '<li class="empty">No recoveries logged today.</li>';
+            } else {
+                healthRecoveryList.innerHTML = recoveryEntries.slice(-6).reverse()
+                    .map(entry => {
+                        const who = entry.character || entry.name || 'Patient';
+                        const summary = entry.summary || 'Recovery noted.';
+                        const dayLabel = Number.isFinite(entry.day) ? `Day ${entry.day}` : 'Recent';
+                        return `<li><strong>${who}</strong> — ${summary} <span class="meta subtle">${dayLabel}</span></li>`;
+                    })
+                    .join('');
+            }
+        }
+
+        if (healthEventsList) {
+            if (!healthEvents.length) {
+                healthEventsList.innerHTML = '<li class="empty">No medical events logged.</li>';
+            } else {
+                healthEventsList.innerHTML = healthEvents.slice(-8).reverse()
+                    .map(event => {
+                        const who = event.character || event.name || 'Patient';
+                        const dayLabel = Number.isFinite(event.day)
+                            ? `Day ${event.day}`
+                            : (Number.isFinite(report.day) ? `Day ${report.day}` : 'Recent');
+                        const summary = event.summary || event.type || 'Health event recorded.';
+                        const severity = Number.isFinite(event.severity) ? ` • Sev ${event.severity}` : '';
+                        return `<li><strong>${who}</strong>: ${summary}<span class="meta subtle"> ${dayLabel}${severity}</span></li>`;
+                    })
+                    .join('');
+            }
+        }
+
+        updateHudBadge(hudBadgeHealth, healthBadgeCount);
     }
 
     function updateEconomyIntel(gameState) {
@@ -1528,6 +1626,30 @@ document.addEventListener('DOMContentLoaded', () => {
         followOverlay.classList.remove('hidden');
         const sicknessText = character.is_sick ? `Sick${character.sickness_severity !== undefined ? ` (sev ${character.sickness_severity})` : ''}` : 'Well';
         const injuryText = character.is_injured ? `Injured${character.injury_severity !== undefined ? ` (sev ${character.injury_severity})` : ''}` : 'Unhurt';
+        const healthProfile = character.health_profile || {};
+        const vitalityValue = Number.isFinite(healthProfile.vitality) ? healthProfile.vitality.toFixed(1) : null;
+        const vitalityBand = healthProfile.vitality_band ? healthProfile.vitality_band : null;
+        const vitalityText = vitalityValue ? `${vitalityValue}${vitalityBand ? ` (${vitalityBand})` : ''}` : '—';
+        const immunityValue = Number.isFinite(healthProfile.immune_resilience)
+            ? (healthProfile.immune_resilience * 100).toFixed(0)
+            : null;
+        const immunityBand = healthProfile.immunity_band ? healthProfile.immunity_band : null;
+        const immunityText = immunityValue ? `${immunityValue}%${immunityBand ? ` (${immunityBand})` : ''}` : '—';
+        const stressValue = Number.isFinite(healthProfile.stress)
+            ? (healthProfile.stress * 100).toFixed(0)
+            : null;
+        const stressBand = healthProfile.stress_band ? healthProfile.stress_band : null;
+        const stressText = stressValue ? `${stressValue}%${stressBand ? ` (${stressBand})` : ''}` : '—';
+        const activeConditions = Array.isArray(healthProfile.active_conditions) ? healthProfile.active_conditions : [];
+        const conditionSummary = activeConditions.length
+            ? activeConditions.map(cond => {
+                if (!cond || typeof cond !== 'object') return 'Condition';
+                const type = cond.type ? cond.type.replace(/_/g, ' ') : 'Condition';
+                const severity = Number.isFinite(cond.severity) ? ` (sev ${cond.severity})` : '';
+                const status = cond.status ? ` • ${cond.status}` : '';
+                return `${type}${severity}${status}`;
+            }).join(', ')
+            : 'No active conditions';
         const goalDetails = extractGoal(character.current_goal);
         const goalSummary = `${goalDetails.type}${goalDetails.priority !== '—' ? ` (prio ${goalDetails.priority})` : ''}`;
         const energyText = typeof character.energy === 'number' ? character.energy : '—';
@@ -1617,6 +1739,8 @@ document.addEventListener('DOMContentLoaded', () => {
             <p>Stage: ${careerStage} • Tenure ${tenureText} • Satisfaction ${satisfactionText}${focusSuffix}</p>
             <p>Coords: (${character.x}, ${character.y}) • Age ${ageText} • ${originText} • ${citizenshipText}</p>
             <p>Health: ${sicknessText}, ${injuryText}</p>
+            <p>Vitals: Vitality ${vitalityText} • Immunity ${immunityText} • Stress ${stressText}</p>
+            <p>${conditionSummary}</p>
             <p>Needs: Energy ${energyText} • Thirst ${thirstText}</p>
             <p>Housing: ${housingSummary}</p>
             <hr>
@@ -1925,6 +2049,57 @@ document.addEventListener('DOMContentLoaded', () => {
             <p><strong>Wealth:</strong> ${netWorthLabel ? netWorthLabel : 'Unknown'}${character.wealth_status ? ` (${character.wealth_status})` : ''} • <strong>Purse:</strong> ${purseLabel || '—'}</p>
         `;
 
+        const healthSection = document.createElement('section');
+        healthSection.innerHTML = '<h4>Health</h4>';
+        const healthProfile = character.health_profile || {};
+        const vitalityValue = Number.isFinite(healthProfile.vitality) ? healthProfile.vitality.toFixed(1) : null;
+        const vitalityBand = healthProfile.vitality_band || null;
+        const immunityValue = Number.isFinite(healthProfile.immune_resilience)
+            ? (healthProfile.immune_resilience * 100).toFixed(0)
+            : null;
+        const immunityBand = healthProfile.immunity_band || null;
+        const stressValue = Number.isFinite(healthProfile.stress)
+            ? (healthProfile.stress * 100).toFixed(0)
+            : null;
+        const stressBand = healthProfile.stress_band || null;
+        if (vitalityValue || immunityValue || stressValue) {
+            const vitalityText = vitalityValue ? `${vitalityValue}${vitalityBand ? ` (${vitalityBand})` : ''}` : '—';
+            const immunityText = immunityValue ? `${immunityValue}%${immunityBand ? ` (${immunityBand})` : ''}` : '—';
+            const stressText = stressValue ? `${stressValue}%${stressBand ? ` (${stressBand})` : ''}` : '—';
+            healthSection.innerHTML += `<p><strong>Vitality:</strong> ${vitalityText} • <strong>Immunity:</strong> ${immunityText} • <strong>Stress:</strong> ${stressText}</p>`;
+        }
+        const activeConditions = Array.isArray(healthProfile.active_conditions) ? healthProfile.active_conditions : [];
+        if (activeConditions.length) {
+            const conditions = activeConditions
+                .map(cond => {
+                    if (!cond || typeof cond !== 'object') return 'Condition';
+                    const type = cond.type ? cond.type.replace(/_/g, ' ') : 'Condition';
+                    const severity = Number.isFinite(cond.severity) ? ` (sev ${cond.severity})` : '';
+                    const status = cond.status ? ` • ${cond.status}` : '';
+                    return `${type}${severity}${status}`;
+                })
+                .join(', ');
+            healthSection.innerHTML += `<p><strong>Conditions:</strong> ${conditions}</p>`;
+        } else {
+            healthSection.innerHTML += '<p class="muted">No active conditions.</p>';
+        }
+        const recentHealthEvents = Array.isArray(healthProfile.recent_events)
+            ? healthProfile.recent_events.slice(-4).reverse()
+            : [];
+        if (recentHealthEvents.length) {
+            const list = document.createElement('ul');
+            list.classList.add('mini-list', 'compact');
+            recentHealthEvents.forEach(event => {
+                const label = event.summary || event.type || 'Health update';
+                const dayLabel = Number.isFinite(event.day) ? `Day ${event.day}` : 'Recent';
+                const severity = Number.isFinite(event.severity) ? ` • Sev ${event.severity}` : '';
+                const li = document.createElement('li');
+                li.innerHTML = `<strong>${dayLabel}</strong>: ${label}${severity}`;
+                list.appendChild(li);
+            });
+            healthSection.appendChild(list);
+        }
+
         const careerSection = document.createElement('section');
         careerSection.innerHTML = '<h4>Career</h4>';
         const stageLabel = character.career_stage || 'Apprentice';
@@ -2035,7 +2210,7 @@ document.addEventListener('DOMContentLoaded', () => {
             wealthHistorySection.appendChild(empty);
         }
 
-        wrapper.append(profileSection, careerSection, needsSection, housingSection, skillsSection, inventorySection, venturesSection, wealthHistorySection);
+        wrapper.append(profileSection, healthSection, careerSection, needsSection, housingSection, skillsSection, inventorySection, venturesSection, wealthHistorySection);
         return wrapper;
     }
 
@@ -3147,6 +3322,7 @@ document.addEventListener('DOMContentLoaded', () => {
             updateGameInfo(gameState);
             updateEventFeed(gameState.event_log);
             updateWorldSummary(gameState);
+            updateHealthcareIntel(gameState);
             updateEconomyIntel(gameState);
             updateFamilyIntel(gameState);
             renderCharacterList(gameState.characters);

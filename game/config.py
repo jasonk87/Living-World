@@ -1178,6 +1178,77 @@ LAW_CASE_PREP_BASELINE = 0.35           # Minimum evidence strength a drafted la
 # Medical System Thresholds
 MEDICAL_SUPPLY_LOW_THRESHOLD = 5 # Chief Medical Officer acts when medical supplies fall below this
 
+# Health Simulation Defaults
+HEALTH_PROFILE_DEFAULTS = {
+    "base_vitality": 74,
+    "vitality_variance": 6,
+    "base_immunity": 0.6,
+    "immunity_variance": 0.12,
+    "base_stress": 0.18,
+}
+HEALTH_RECENT_EVENT_LIMIT = 10
+HEALTH_NEED_THRESHOLDS = {
+    "Hunger": 60,
+    "Thirst": 60,
+    "Energy": 55,
+    "Safety": 65,
+    "Belonging": 55,
+}
+HEALTH_NEED_RECOVERY_MARGIN = 18
+HEALTH_VITALITY_NEED_WEIGHTS = {
+    "Hunger": 6.0,
+    "Thirst": 6.0,
+    "Energy": 7.5,
+    "Safety": 4.5,
+    "Belonging": 3.5,
+}
+HEALTH_VITALITY_RECOVERY_BONUS = 2.6
+HEALTH_STRESS_NEED_WEIGHT = 0.12
+HEALTH_STRESS_RECOVERY_RATE = 0.08
+HEALTH_IMMUNITY_VITALITY_WEIGHT = 0.32
+HEALTH_IMMUNITY_STRESS_WEIGHT = 0.45
+HEALTH_IMMUNITY_FLOOR = 0.05
+HEALTH_IMMUNITY_CEILING = 0.95
+HEALTH_VITALITY_FLOOR = 0.0
+HEALTH_VITALITY_CEILING = 100.0
+HEALTH_STRESS_FLOOR = 0.0
+HEALTH_STRESS_CEILING = 1.0
+
+HEALTH_SICKNESS_MODEL = {
+    "base_chance": 0.008,
+    "vitality_weight": 0.22,
+    "immunity_weight": 0.35,
+    "exposure_bonus": 0.06,
+    "exposure_radius": 2,
+    "severity_range": (1.0, 4.0),
+    "worsen_threshold": 36,
+    "worsen_chance": 0.18,
+    "recovery_vitality": 70,
+    "recovery_rate": 0.9,
+    "recovery_immunity_bonus": 0.05,
+}
+
+HEALTH_INJURY_MODEL = {
+    "base_chance": 0.0015,
+    "job_risk": {
+        "Builder": 0.003,
+        "Woodcutter": 0.0035,
+        "Stonemason": 0.0025,
+        "Miner": 0.004,
+        "Hunter": 0.003,
+        "Militia": 0.0025,
+    },
+    "vitality_weight": 0.015,
+    "severity_range": (1.0, 5.0),
+    "worsen_threshold": 40,
+    "worsen_chance": 0.14,
+    "recovery_vitality": 68,
+    "recovery_rate": 0.8,
+}
+
+HEALTH_CRITICAL_VITALITY = 32
+HEALTH_CRITICAL_SEVERITY = 7.0
+
 # Governance Configs
 ELECTION_CYCLE_DAYS = 30 # How often mayoral elections are held
 CAMPAIGN_PROMISE_DEFAULT_WINDOW = 4

@@ -108,6 +108,10 @@
                             <span class="hud-icon-glyph" aria-hidden="true">⚖️</span>
                             <span id="hud-badge-civic" class="hud-icon-badge" aria-hidden="true"></span>
                         </button>
+                        <button class="hud-icon-button" type="button" data-popover-target="hud-popover-health" aria-expanded="false" aria-controls="hud-popover-health" aria-label="Toggle healthcare intel">
+                            <span class="hud-icon-glyph" aria-hidden="true">⚕️</span>
+                            <span id="hud-badge-health" class="hud-icon-badge" aria-hidden="true"></span>
+                        </button>
                         <button class="hud-icon-button" type="button" data-popover-target="hud-popover-families" aria-expanded="false" aria-controls="hud-popover-families" aria-label="Toggle family stories intel">
                             <span class="hud-icon-glyph" aria-hidden="true">👪</span>
                             <span id="hud-badge-families" class="hud-icon-badge" aria-hidden="true"></span>
@@ -228,6 +232,36 @@
                             </ul>
                             <ul id="training-waitlist-list" class="mini-list compact subtle">
                                 <li class="empty">No one queued.</li>
+                            </ul>
+                        </section>
+                    </div>
+                </section>
+                <section id="hud-popover-health" class="hud-popover" aria-hidden="true" role="dialog" aria-label="Healthcare intel">
+                    <header class="hud-popover-header">
+                        <h3>Healthcare</h3>
+                        <p class="hud-popover-subtitle">Clinic resources, at-risk patients, and recent treatments.</p>
+                    </header>
+                    <div class="hud-popover-body columns">
+                        <section>
+                            <h4>Vitals</h4>
+                            <ul id="health-overview-list" class="mini-list">
+                                <li class="empty">No health telemetry.</li>
+                            </ul>
+                            <h4>Recoveries</h4>
+                            <ul id="health-recovery-list" class="mini-list compact">
+                                <li class="empty">No recoveries logged.</li>
+                            </ul>
+                        </section>
+                        <section>
+                            <h4>At Risk</h4>
+                            <ul id="health-at-risk-list" class="mini-list">
+                                <li class="empty">No critical cases.</li>
+                            </ul>
+                        </section>
+                        <section>
+                            <h4>Recent Events</h4>
+                            <ul id="health-event-list" class="mini-list compact">
+                                <li class="empty">No medical events today.</li>
                             </ul>
                         </section>
                     </div>

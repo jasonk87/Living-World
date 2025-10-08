@@ -114,6 +114,7 @@ class World:
         self.clinic_supply_requests: List[Dict[str, Any]] = []
         self.latest_healthcare_report: Dict[str, Any] = {}
         self._medical_case_counter: int = 0
+        self.health_event_history: List[Dict[str, Any]] = []
         courthouse_y = max(0, self.market_location[1] - 1)
         self.courthouse_location: Tuple[int, int] = (self.market_location[0], courthouse_y)
         self.today_surplus_sales: List[Dict[str, Any]] = []
@@ -4384,6 +4385,48 @@ class World:
         day = self.game_time.current_day
         new_cases: List[str] = []
         worsened_cases: List[str] = []
+        health_events: List[Dict[str, Any]] = []
+        recoveries: List[Dict[str, Any]] = []
+        at_risk: List[Dict[str, Any]] = []
+        vitality_samples: List[float] = []
+        stress_samples: List[float] = []
+        immunity_samples: List[float] = []
+
+        for char in self.characters:
+            if hasattr(char, "evaluate_daily_health"):
+                try:
+                    events = char.evaluate_daily_health(self)
+                except Exception as exc:  # noqa: BLE001
+                    self.add_event_log_message(
+                        f"Health evaluation failed for {char.name}: {exc}"
+                    )
+                    events = []
+                for entry in events:
+                    if not entry:
+                        continue
+                    event_payload = deepcopy(entry)
+                    event_payload.setdefault("character", char.name)
+                    health_events.append(event_payload)
+                    if event_payload.get("type") in {"recovered", "injury_healed"}:
+                        recoveries.append(event_payload)
+
+            profile = getattr(char, "health_profile", None)
+            if profile:
+                vitality_samples.append(float(profile.get("vitality", 0.0)))
+                stress_samples.append(float(profile.get("stress", 0.0)))
+                immunity_samples.append(float(profile.get("immune_resilience", 0.0)))
+                if (
+                    profile.get("vitality", 100.0) <= getattr(config, "HEALTH_CRITICAL_VITALITY", 30)
+                    or (char.is_sick and char.sickness_severity >= getattr(config, "HEALTH_CRITICAL_SEVERITY", 7))
+                    or (char.is_injured and char.injury_severity >= getattr(config, "HEALTH_CRITICAL_SEVERITY", 7))
+                ):
+                    at_risk.append(
+                        {
+                            "name": char.name,
+                            "vitality": round(float(profile.get("vitality", 0.0)), 1),
+                            "conditions": deepcopy(profile.get("active_conditions", [])),
+                        }
+                    )
 
         for char in self.characters:
             if char.is_sick and char.sickness_severity > 0:
@@ -4496,12 +4539,27 @@ class World:
                         f"Clinic restocked {resource} (now {quantity})."
                     )
 
+        if health_events:
+            self.health_event_history.extend(health_events)
+            if len(self.health_event_history) > 80:
+                self.health_event_history = self.health_event_history[-80:]
+
+        avg_vitality = round(sum(vitality_samples) / len(vitality_samples), 1) if vitality_samples else None
+        avg_stress = round(sum(stress_samples) / len(stress_samples), 3) if stress_samples else None
+        avg_immunity = round(sum(immunity_samples) / len(immunity_samples), 3) if immunity_samples else None
+
         self.latest_healthcare_report = {
             "day": day,
             "new_cases": new_cases,
             "worsened_cases": worsened_cases,
             "active_cases": len(self.medical_cases),
             "supply_alerts": supply_alerts,
+            "health_events": health_events[-12:],
+            "recoveries": recoveries[-6:],
+            "at_risk": at_risk[:6],
+            "average_vitality": avg_vitality,
+            "average_stress": avg_stress,
+            "average_immunity": avg_immunity,
         }
 
     # Event related methods (can be kept minimal if EventManager is not fully used)

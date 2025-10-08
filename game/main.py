@@ -13,7 +13,6 @@ from game.stockpile import Stockpile
 from game.work_order import WorkOrder
 from game.data import BLUEPRINTS, JOB_TASK_DEFINITIONS, STRUCTURE_BLUEPRINTS
 from game.building import Building
-from game.rumor import Rumor
 from game import config
 
 import random
@@ -198,71 +197,6 @@ def tick_simulation():
 
             # Daily needs update and goal reset for idle characters
             for char_daily_reset in game_world.characters:
-                # Sickness & Injury Chance
-                if not char_daily_reset.is_sick and random.random() < 0.005: # 0.5% chance per day to get sick
-                    char_daily_reset.is_sick = True
-                    char_daily_reset.sickness_severity = random.randint(1, 3) # Mild sickness
-                    game_world.add_event_log_message(f"{char_daily_reset.name} has fallen ill (Severity: {char_daily_reset.sickness_severity}).")
-                    char_daily_reset.add_memory("Fell ill.")
-                    char_daily_reset.needs['Safety'] = max(config.NEED_SCORE_MIN, char_daily_reset.needs.get('Safety', config.NEED_SAFETY_DEFAULT) - 15) # Sickness reduces safety
-                    char_daily_reset.add_memory(f"Sickness reduced my safety. Safety: {char_daily_reset.needs['Safety']}")
-                    # Generate a rumor and notable event for sickness
-                    game_world.add_notable_event(
-                        "CharacterSickness",
-                        {
-                            "summary": f"{char_daily_reset.name} has fallen ill.",
-                            "character": char_daily_reset.name,
-                            "severity": char_daily_reset.sickness_severity,
-                        },
-                    )
-                    rumor_content_key = "has_fallen_ill_negative"
-                    rumor_strength = config.RUMOR_INITIAL_STRENGTH_SMALL_EVENT
-                    new_rumor = Rumor(
-                        subject_char_id=char_daily_reset.name,
-                        content_key=rumor_content_key,
-                        initial_strength=rumor_strength,
-                        creation_day=game_time_obj.current_day,
-                        is_positive=False,
-                        original_source_char_id=char_daily_reset.name
-                    )
-                    game_world.add_rumor(new_rumor)
-                    char_daily_reset.known_rumor_ids.add(new_rumor.rumor_id)
-                    char_daily_reset.add_memory(f"My falling ill might start a rumor ({new_rumor.rumor_id[:4]}).")
-
-
-                injury_chance = 0.002 # Base 0.2% chance
-                if char_daily_reset.job in ["Builder", "Woodcutter", "Stonemason", "Miner"]: # Example risky jobs
-                    injury_chance = 0.005 # 0.5% for riskier jobs
-                if not char_daily_reset.is_injured and random.random() < injury_chance:
-                    char_daily_reset.is_injured = True
-                    char_daily_reset.injury_severity = random.randint(1, 3) # Mild injury
-                    game_world.add_event_log_message(f"{char_daily_reset.name} has been injured (Severity: {char_daily_reset.injury_severity}).")
-                    char_daily_reset.add_memory("Got injured.")
-                    char_daily_reset.needs['Safety'] = max(config.NEED_SCORE_MIN, char_daily_reset.needs.get('Safety', config.NEED_SAFETY_DEFAULT) - 20) # Injury significantly reduces safety
-                    char_daily_reset.add_memory(f"Injury reduced my safety. Safety: {char_daily_reset.needs['Safety']}")
-                    # Generate a rumor and notable event for injury
-                    game_world.add_notable_event(
-                        "CharacterInjury",
-                        {
-                            "summary": f"{char_daily_reset.name} has been injured.",
-                            "character": char_daily_reset.name,
-                            "severity": char_daily_reset.injury_severity,
-                        },
-                    )
-                    rumor_content_key = "has_been_injured_negative"
-                    rumor_strength = config.RUMOR_INITIAL_STRENGTH_SMALL_EVENT
-                    new_rumor = Rumor(
-                        subject_char_id=char_daily_reset.name,
-                        content_key=rumor_content_key,
-                        initial_strength=rumor_strength,
-                        creation_day=game_time_obj.current_day,
-                        is_positive=False,
-                        original_source_char_id=char_daily_reset.name
-                    )
-                    game_world.add_rumor(new_rumor)
-                    char_daily_reset.known_rumor_ids.add(new_rumor.rumor_id)
-                    char_daily_reset.add_memory(f"My injury might start a rumor ({new_rumor.rumor_id[:4]}).")
-
                 char_daily_reset.needs['Hunger'] = max(0, char_daily_reset.needs.get('Hunger', 100) - random.randint(10, 20))
                 char_daily_reset.needs['Thirst'] = max(0, char_daily_reset.needs.get('Thirst', 100) - random.randint(15, 25))
                 char_daily_reset.needs['Energy'] = max(0, char_daily_reset.needs.get('Energy', 100) - random.randint(10, 15)) # Energy decay from general activity
@@ -428,6 +362,7 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                             "job_satisfaction": getattr(char, 'job_satisfaction', None),
                             "profession_focus": getattr(char, 'professional_focus', None),
                             "profession_tenure": getattr(char, 'current_profession_tenure', None),
+                            "health_profile": char.get_health_snapshot() if hasattr(char, 'get_health_snapshot') else {},
                             "supervisor_name": getattr(char, 'supervisor_name', None),
                             "supervisor_oversight": getattr(char, 'supervisor_oversight', None),
                             "leadership_oversight": getattr(char, 'leadership_oversight_score', None),
@@ -624,6 +559,7 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "profession_focus": getattr(character, 'professional_focus', None),
                     "profession_tenure": getattr(character, 'current_profession_tenure', None),
                     "profession_history": character.export_profession_history(limit=10),
+                    "health_profile": character.get_health_snapshot() if hasattr(character, 'get_health_snapshot') else {},
                     "performance_rating": getattr(character, 'performance_rating', "N/A"),
                     "warning_count": getattr(character, 'warning_count', 0),
                     "known_characters": getattr(character, 'known_characters', []),
