@@ -80,6 +80,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const hudPopoverButtons = document.querySelectorAll('[data-popover-target]');
     const hudPopovers = document.querySelectorAll('.hud-popover');
     const hudPopoverContainer = document.getElementById('hud-popover-container');
+    const characterHud = document.getElementById('character-hud');
+    const hudCharEmoji = document.getElementById('hud-char-emoji');
+    const hudCharName = document.getElementById('hud-char-name');
+    const hudCharLocation = document.getElementById('hud-char-location');
+    const hudCharTask = document.getElementById('hud-char-task');
+    const hudCharStatus = document.getElementById('hud-char-status');
 
     // --- API & State ---
     const DEFAULT_API_BASE_URL = 'http://localhost:5000';
@@ -119,6 +125,15 @@ document.addEventListener('DOMContentLoaded', () => {
     let viewportZoom = 1;
     let activePointerId = null;
     let lastPointerPosition = { x: 0, y: 0 };
+    const camera = {
+        x: 0,
+        y: 0,
+        zoom: 1,
+        targetX: 0,
+        targetY: 0,
+        targetZoom: 1,
+        panning: false,
+    };
     let mapTerrainCache = [];
     let mapOverlayCache = [];
     let mapResourceCache = [];
@@ -134,6 +149,43 @@ document.addEventListener('DOMContentLoaded', () => {
     let rosterWindowEl = null;
     let rosterSpacerTop = null;
     let rosterSpacerBottom = null;
+
+    function tickCamera() {
+        const LERP_FACTOR = 0.1;
+        let dx = camera.targetX - camera.x;
+        let dy = camera.targetY - camera.y;
+        let dz = camera.targetZoom - camera.zoom;
+
+        if (Math.abs(dx) > 0.1 || Math.abs(dy) > 0.1 || Math.abs(dz) > 0.001) {
+            camera.x += dx * LERP_FACTOR;
+            camera.y += dy * LERP_FACTOR;
+            camera.zoom += dz * LERP_FACTOR;
+            updateViewportTransform();
+        }
+        requestAnimationFrame(tickCamera);
+    }
+
+    function updateHud(character) {
+        if (!characterHud) return;
+        if (!character || !followedCharacterName || character.name !== followedCharacterName) {
+            characterHud.setAttribute('aria-hidden', 'true');
+            return;
+        }
+
+        characterHud.setAttribute('aria-hidden', 'false');
+
+        if (hudCharEmoji) hudCharEmoji.textContent = character.emoji || '🙂';
+        if (hudCharName) hudCharName.textContent = character.name;
+        if (hudCharLocation) hudCharLocation.textContent = character.location_short || 'Unknown location';
+        if (hudCharTask) hudCharTask.textContent = character.current_task || 'Idle';
+        if (hudCharStatus) {
+            hudCharStatus.textContent = character.status || 'Idle';
+            hudCharStatus.className = 'status-pill';
+            const statusClass = (character.status || 'idle').toLowerCase().replace(/\s+/g, '-');
+            hudCharStatus.classList.add(`status-${statusClass}`);
+        }
+    }
+
 
     // --- Utility Helpers ---
     const getTileSize = () => parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--tile-size')) || 48;
@@ -2687,6 +2739,51 @@ document.addEventListener('DOMContentLoaded', () => {
         return wrapper;
     }
 
+    function buildCriminalRecordContent(character) {
+        const wrapper = document.createElement('div');
+        const section = document.createElement('section');
+        section.innerHTML = '<h4>Criminal Record</h4>';
+
+        const records = character.criminal_record || [];
+
+        if (!records.length) {
+            section.innerHTML += '<p>No criminal record.</p>';
+        } else {
+            const list = document.createElement('ul');
+            list.classList.add('mini-list');
+            records.forEach(record => {
+                const li = document.createElement('li');
+                const dayLabel = typeof record.date === 'number' ? `Day ${record.date}` : 'Date Unknown';
+                li.innerHTML = `
+                    <strong>${dayLabel}: ${record.charge || 'Charge not specified'}</strong>
+                    <div>Verdict: ${record.verdict || 'Unknown'}</div>
+                    <div class="meta">${record.sentence || 'No sentence recorded.'}</div>
+                `;
+                list.appendChild(li);
+            });
+            section.appendChild(list);
+        }
+
+        wrapper.appendChild(section);
+        return wrapper;
+    }
+
+function buildGoalsContent(character) {
+    const wrapper = document.createElement('div');
+    const goalSection = document.createElement('section');
+    goalSection.innerHTML = '<h4>Current Goal</h4>';
+
+    const goal = extractGoal(character.current_goal);
+    goalSection.innerHTML += `
+        <p><strong>Goal:</strong> ${goal.type}</p>
+        <p><strong>Status:</strong> ${goal.status}</p>
+        <p><strong>Priority:</strong> ${goal.priority}</p>
+    `;
+
+    wrapper.appendChild(goalSection);
+    return wrapper;
+}
+
     function buildCharacterDetails(character) {
         const wrapper = document.createElement('section');
         wrapper.classList.add('detail-tabs');
@@ -2732,10 +2829,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const tabs = [
             { label: 'Overview', builder: buildOverviewContent },
-            { label: 'Personality', builder: buildPersonalityContent },
             { label: 'Social', builder: buildSocialContent },
+        { label: 'Beliefs', builder: buildPersonalityContent },
+        { label: 'Goals', builder: buildGoalsContent },
             { label: 'Pursuits', builder: buildPursuitsContent },
             { label: 'Activity', builder: buildActivityContent },
+            { label: 'Criminal Record', builder: buildCriminalRecordContent },
         ];
 
         tabs.forEach((tabConfig, index) => {
@@ -2933,22 +3032,35 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function updateViewportTransform() {
         if (!mapViewport) return;
-        mapViewport.style.transform = `translate(${viewportPan.x}px, ${viewportPan.y}px) scale(${viewportZoom})`;
+        mapViewport.style.transform = `translate(${camera.x}px, ${camera.y}px) scale(${camera.zoom})`;
         if (followedCharacterName) {
-            positionFollowOverlay({ name: followedCharacterName });
+            const character = latestGameState?.characters.find(c => c.name === followedCharacterName);
+            if (character) {
+                positionFollowOverlay(character);
+                updateHud(character);
+            }
+        } else {
+            updateHud(null);
         }
     }
 
-    function centerViewportOn(x, y) {
+    function centerViewportOn(x, y, immediate = false) {
         const surface = mapCanvas || mapStage;
         if (!surface || !mapViewport) return;
         const tileSize = getTileSize();
         const surfaceRect = surface.getBoundingClientRect();
-        const targetX = (x + 0.5) * tileSize;
-        const targetY = (y + 0.5) * tileSize;
-        viewportPan.x = surfaceRect.width / 2 - targetX * viewportZoom;
-        viewportPan.y = surfaceRect.height / 2 - targetY * viewportZoom;
-        updateViewportTransform();
+        const targetXPixel = (x + 0.5) * tileSize;
+        const targetYPixel = (y + 0.5) * tileSize;
+
+        camera.targetX = surfaceRect.width / 2 - targetXPixel * camera.targetZoom;
+        camera.targetY = surfaceRect.height / 2 - targetYPixel * camera.targetZoom;
+
+        if (immediate) {
+            camera.x = camera.targetX;
+            camera.y = camera.targetY;
+            camera.zoom = camera.targetZoom;
+            updateViewportTransform();
+        }
     }
 
     function ensureMapBase(gameState) {
@@ -3521,18 +3633,17 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!mapStage) return;
         event.preventDefault();
         const zoomFactor = event.deltaY < 0 ? 1.1 : 0.9;
-        const newZoom = Math.min(3, Math.max(0.5, viewportZoom * zoomFactor));
+        const newZoom = Math.min(3, Math.max(0.5, camera.targetZoom * zoomFactor));
         const surfaceElement = mapCanvas || mapStage;
         if (!surfaceElement) return;
         const surfaceRect = surfaceElement.getBoundingClientRect();
         const cursorX = event.clientX - surfaceRect.left;
         const cursorY = event.clientY - surfaceRect.top;
-        const offsetX = (cursorX - viewportPan.x) / viewportZoom;
-        const offsetY = (cursorY - viewportPan.y) / viewportZoom;
-        viewportZoom = newZoom;
-        viewportPan.x = cursorX - offsetX * viewportZoom;
-        viewportPan.y = cursorY - offsetY * viewportZoom;
-        updateViewportTransform();
+        const offsetX = (cursorX - camera.targetX) / camera.targetZoom;
+        const offsetY = (cursorY - camera.targetY) / camera.targetZoom;
+        camera.targetZoom = newZoom;
+        camera.targetX = cursorX - offsetX * camera.targetZoom;
+        camera.targetY = cursorY - offsetY * camera.targetZoom;
     }
 
     function beginMapDrag(event) {
@@ -3551,9 +3662,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const deltaX = event.clientX - lastPointerPosition.x;
         const deltaY = event.clientY - lastPointerPosition.y;
         lastPointerPosition = { x: event.clientX, y: event.clientY };
-        viewportPan.x += deltaX;
-        viewportPan.y += deltaY;
-        updateViewportTransform();
+        camera.targetX += deltaX;
+        camera.targetY += deltaY;
+        camera.x += deltaX;
+        camera.y += deltaY;
     }
 
     function endMapDrag(event) {
@@ -3633,6 +3745,20 @@ document.addEventListener('DOMContentLoaded', () => {
             event.preventDefault();
             setPlaybackSpeed(SPEED_PRESETS[targetIndex]);
         }
+
+        if (event.key === 'f' || event.key === 'F') {
+            if (selectedCharacterName) {
+                handleCharacterSelection(selectedCharacterName);
+            }
+        }
+        if (event.key === 'c' || event.key === 'C') {
+            if (followedCharacterName && latestGameState) {
+                const followed = (latestGameState.characters || []).find(char => char.name === followedCharacterName);
+                if (followed) {
+                    centerViewportOn(followed.x, followed.y, true);
+                }
+            }
+        }
     });
 
     const dragSurface = mapCanvas || mapStage;
@@ -3667,6 +3793,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Initial State ---
     updateViewportTransform();
+    tickCamera();
 
     // --- Initial Load & Interval ---
     updateUI();

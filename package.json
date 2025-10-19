@@ -1,0 +1,29 @@
+{
+  "dependencies": {
+    "@playwright/test": "^1.56.1",
+    "playwright": "^1.56.1"
+  },
+  "name": "app",
+  "version": "1.0.0",
+  "description": "This repository powers a prototype settlement simulation with a lightweight web UI. The backend simulation and HTTP server run entirely from Python and serve static assets from the `ui/` directory.",
+  "main": "verify_tabs.js",
+  "directories": {
+    "doc": "docs",
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "playwright test verify_tabs.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jasonk87/Living-World.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/jasonk87/Living-World/issues"
+  },
+  "homepage": "https://github.com/jasonk87/Living-World#readme"
+}

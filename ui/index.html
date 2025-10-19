@@ -5,6 +5,75 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Living World Command</title>
     <link rel="stylesheet" href="style.css">
+    <style>
+        .character-hud {
+            position: absolute;
+            bottom: 1rem;
+            left: 1rem;
+            z-index: 100;
+            font-size: 0.875rem;
+            opacity: 0;
+            transform: translateY(1rem);
+            transition: opacity 0.3s ease, transform 0.3s ease;
+            pointer-events: none;
+        }
+
+        .character-hud[aria-hidden="false"] {
+            opacity: 1;
+            transform: translateY(0);
+            pointer-events: auto;
+        }
+
+        .hud-character-card {
+            background: rgba(40, 40, 50, 0.8);
+            backdrop-filter: blur(10px);
+            border-radius: 0.5rem;
+            padding: 0.75rem 1rem;
+            width: 280px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .hud-character-header {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .hud-char-emoji {
+            font-size: 2rem;
+        }
+
+        .hud-char-nameplate {
+            line-height: 1.2;
+        }
+
+        .hud-char-name {
+            margin: 0;
+            font-size: 1.125rem;
+            font-weight: 600;
+            color: #f0f0f0;
+        }
+
+        .hud-char-location {
+            margin: 0;
+            color: #a0a0b0;
+        }
+
+        .hud-character-body {
+            margin: 0.75rem 0;
+        }
+
+        .hud-char-task {
+            margin: 0;
+            color: #d0d0d0;
+            font-style: italic;
+        }
+
+        .hud-character-footer {
+            margin-top: 0.5rem;
+        }
+    </style>
 </head>
 <body>
     <main class="main-stage">
@@ -340,6 +409,23 @@
                     <div id="game-map" class="map-grid" role="presentation"></div>
                     <div id="map-characters" class="map-characters" aria-live="polite"></div>
                 </div>
+            </div>
+        </div>
+        <div id="character-hud" class="character-hud" aria-live="polite" aria-atomic="true" aria-hidden="true">
+            <div class="hud-character-card">
+                <header class="hud-character-header">
+                    <span id="hud-char-emoji" class="hud-char-emoji" aria-hidden="true"></span>
+                    <div class="hud-char-nameplate">
+                        <h3 id="hud-char-name" class="hud-char-name"></h3>
+                        <p id="hud-char-location" class="hud-char-location"></p>
+                    </div>
+                </header>
+                <div class="hud-character-body">
+                    <p id="hud-char-task" class="hud-char-task"></p>
+                </div>
+                <footer class="hud-character-footer">
+                    <span id="hud-char-status" class="status-pill"></span>
+                </footer>
             </div>
         </div>
 

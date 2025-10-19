@@ -277,6 +277,7 @@ class Character:
         self._cached_path: Deque[Tuple[int, int]] = deque()
         self._cached_path_target: Optional[Tuple[int, int]] = None
         self._cached_path_revision: Optional[int] = None
+        self.criminal_record: List[Dict[str, Any]] = []
 
     def update_reputation(self, change: int, reason: Optional[str] = None, world: Optional['World'] = None):
         """Updates reputation score, clamps it, and logs the change."""
@@ -750,8 +751,71 @@ class Character:
         self.crafting_progress = 0; self.workshop_location = None
         # self.hauling_info = None # Attribute removed
 
-    def to_dict(self):
+    def get_status_and_emoji(self) -> Tuple[str, str]:
+        if self.resting_at_home:
+            return "Resting", "😴"
+        if self.is_sick or self.is_injured:
+            return "Unwell", "🤒"
+        if self.current_goal:
+            goal_type = self.current_goal.type
+            # Mapping from goal types to status and emoji
+            goal_to_status = {
+                (GoalType.SMALL_TALK, GoalType.GREET_CHARACTER, GoalType.SHARE_POSITIVE_NEWS, GoalType.INTRODUCE_SELF_TO_STRANGER, GoalType.SHARE_RUMOR): ("Socializing", "💬"),
+                (GoalType.EXECUTE_BUILD_ORDER, GoalType.EXECUTE_CRAFT_ORDER, GoalType.GATHER_RESOURCE, GoalType.PERFORM_WOODCUTTER_DUTIES, GoalType.PERFORM_STONEMASON_DUTIES): ("Working", "🛠️"),
+                (GoalType.EAT_FOOD, GoalType.DRINK_WATER): ("Eating", "🍴"),
+                (GoalType.WANDER,): ("Wandering", "🚶"),
+            }
+            for goals, (status, emoji) in goal_to_status.items():
+                if goal_type in goals:
+                    return status, emoji
+
+            if self.job == 'Builder' and self.active_build_order_id:
+                return "Building", "🏗️"
+
+        if self.mood == "Happy":
+             return "Idle", "😊"
+        if self.mood == "Sad":
+             return "Idle", "😢"
+
+        return "Idle", "🙂"
+
+    def get_current_task_label(self) -> str:
+        if not self.current_goal:
+            return "Thinking..."
+
+        goal_type = self.current_goal.type
+        params = self.current_goal.parameters or {}
+
+        if goal_type == GoalType.IDLE:
+            return "Idling"
+        if goal_type == GoalType.WANDER:
+            return "Wandering aimlessly"
+        if goal_type == GoalType.EXECUTE_BUILD_ORDER and self.current_building_project:
+            return f"Building a {STRUCTURE_BLUEPRINTS.get(self.current_building_project, {}).get('display_name', self.current_building_project)}"
+        if goal_type == GoalType.GATHER_RESOURCE and 'resource_name' in params:
+            return f"Gathering {params['resource_name']}"
+        if goal_type in [GoalType.SMALL_TALK, GoalType.GREET_CHARACTER, GoalType.INTRODUCE_SELF_TO_STRANGER] and 'target_char_name' in params:
+            return f"Chatting with {params['target_char_name']}"
+        if goal_type == GoalType.REST_AT_HOME:
+            return "Resting at home"
+
+        # Generic fallback
+        goal_name = goal_type.name.replace("_", " ").title()
+        return goal_name
+
+    def to_dict(self, world: Optional['World'] = None):
         """Converts the character object to a dictionary for serialization."""
+        status, emoji = self.get_status_and_emoji()
+        current_task = self.get_current_task_label()
+        location_short = ""
+        if world:
+            building = world.get_building_at(self.x, self.y)
+            if building:
+                location_short = building.display_name
+            else:
+                tile = world.get_tile(self.x, self.y)
+                if tile:
+                    location_short = tile.replace("_", " ").title()
         return {
             "name": self.name,
             "personality": self.personality,
@@ -790,6 +854,17 @@ class Character:
             "personal_pursuits": self.export_personal_pursuits(),
             "personal_pursuit_log": self.export_personal_pursuit_log(limit=8),
             "active_personal_project": self.active_personal_project,
+            "criminal_record": self.criminal_record,
+            "reputation_score": self.reputation_score,
+            "family_members": self.family_members,
+            "family_roles": self.get_family_roles_snapshot(),
+            "romantic_partners": self.get_romantic_partners(),
+            "life_highlights": self.get_life_highlights(),
+            # New fields for HUD
+            "status": status,
+            "emoji": emoji,
+            "current_task": current_task,
+            "location_short": location_short,
         }
 
     @staticmethod

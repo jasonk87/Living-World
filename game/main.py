@@ -325,51 +325,18 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
 
                 characters_repr = []
                 if hasattr(game_world, 'characters'):
+                    all_criminal_records = []
                     for char in game_world.characters:
+                        if hasattr(char, 'criminal_record') and char.criminal_record:
+                            for record in char.criminal_record:
+                                all_criminal_records.append({
+                                    "character": char.name,
+                                    **record
+                                })
                         goal_payload = None
                         if hasattr(char.current_goal, 'to_dict'):
                             goal_payload = char.current_goal.to_dict()
-                        elif char.current_goal:
-                            goal_payload = str(char.current_goal)
-                        characters_repr.append({
-                            "name": char.name,
-                            "x": char.x,
-                            "y": char.y,
-                            "job": char.job,
-                            "rank": getattr(char, 'rank', None),
-                            "goal": goal_payload,
-                            "is_sick": getattr(char, 'is_sick', False), # Add health status
-                            "is_injured": getattr(char, 'is_injured', False),
-                            "inventory_load": char.get_inventory_load(),
-                            "resting_at_home": getattr(char, 'resting_at_home', False),
-                            "home_location": getattr(char, 'home_location', None),
-                            "energy": getattr(char, 'needs', {}).get('Energy'),
-                            "thirst": getattr(char, 'needs', {}).get('Thirst'),
-                            "money": getattr(char, 'money', None),
-                            "net_worth": getattr(char, 'net_worth', None),
-                            "wealth_status": getattr(char, 'wealth_status', None),
-                            "businesses_owned": list(getattr(char, 'businesses_owned', [])),
-                            "business_roles": dict(getattr(char, 'business_roles', {})),
-                            "age": getattr(char, 'age_years', None),
-                            "origin": getattr(char, 'origin', None),
-                            "citizenship": getattr(char, 'citizenship_status', 'Resident'),
-                            "family_members": list(getattr(char, 'family_members', [])),
-                            "romantic_partners": char.get_romantic_partners() if hasattr(char, 'get_romantic_partners') else list(getattr(char, 'romantic_partners', [])),
-                            "active_romances": char.get_active_romances_snapshot() if hasattr(char, 'get_active_romances_snapshot') else {},
-                            "ex_partners": sorted(list(getattr(char, 'ex_partners', []))),
-                            "children": char.get_children() if hasattr(char, 'get_children') else sorted(list(getattr(char, 'children_names', []))),
-                            "parents": char.get_parents() if hasattr(char, 'get_parents') else sorted(list(getattr(char, 'parent_names', []))),
-                            "marriage_history": deepcopy(getattr(char, 'marriage_history', [])),
-                            "life_highlights": char.get_life_highlights(limit=3) if hasattr(char, 'get_life_highlights') else [],
-                            "career_stage": getattr(char, 'career_stage', None),
-                            "job_satisfaction": getattr(char, 'job_satisfaction', None),
-                            "profession_focus": getattr(char, 'professional_focus', None),
-                            "profession_tenure": getattr(char, 'current_profession_tenure', None),
-                            "health_profile": char.get_health_snapshot() if hasattr(char, 'get_health_snapshot') else {},
-                            "supervisor_name": getattr(char, 'supervisor_name', None),
-                            "supervisor_oversight": getattr(char, 'supervisor_oversight', None),
-                            "leadership_oversight": getattr(char, 'leadership_oversight_score', None),
-                        })
+                        characters_repr.append(char.to_dict(game_world))
 
                 event_log_repr = game_world.event_log[-20:] if game_world else []
 
@@ -520,67 +487,7 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
 
             character = game_world.get_character_by_name(char_name)
             if character:
-                goal_payload = None
-                if hasattr(character.current_goal, 'to_dict'):
-                    goal_payload = character.current_goal.to_dict()
-                elif character.current_goal:
-                    goal_payload = str(character.current_goal)
-                char_data = {
-                    "name": character.name,
-                    "job": character.job,
-                    "rank": character.rank,
-                    "x": character.x,
-                    "y": character.y,
-                    "current_goal": goal_payload,
-                    "inventory": character.inventory,
-                    "skills": {skill_name: data["level"] for skill_name, data in character.skills.items()}, # Simplified skills view
-                    "needs": character.needs,
-                    "energy": character.needs.get('Energy'),
-                    "thirst": character.needs.get('Thirst'),
-                    "resting_at_home": getattr(character, 'resting_at_home', False),
-                    "home_location": getattr(character, 'home_location', None),
-                    "is_sick": getattr(character, 'is_sick', False),
-                    "sickness_severity": getattr(character, 'sickness_severity', 0),
-                    "is_injured": getattr(character, 'is_injured', False),
-                    "injury_severity": getattr(character, 'injury_severity', 0),
-                    "appointed_by": getattr(character, 'appointed_by', None),
-                    "subordinates_names": character.subordinates_names,
-                    "memory": character.memory[-10:], # Last 10 memories
-                    "personality": character.personality,
-                    "traits": character.traits,
-                    "money": getattr(character, 'money', None),
-                    "net_worth": getattr(character, 'net_worth', None),
-                    "wealth_status": getattr(character, 'wealth_status', None),
-                    "businesses_owned": list(getattr(character, 'businesses_owned', [])),
-                    "business_roles": dict(getattr(character, 'business_roles', {})),
-                    "wealth_history": [
-                        {"day": entry[0], "net_worth": entry[1]}
-                        for entry in getattr(character, 'wealth_history', [])
-                    ],
-                    "career_stage": getattr(character, 'career_stage', None),
-                    "job_satisfaction": getattr(character, 'job_satisfaction', None),
-                    "profession_focus": getattr(character, 'professional_focus', None),
-                    "profession_tenure": getattr(character, 'current_profession_tenure', None),
-                    "profession_history": character.export_profession_history(limit=10),
-                    "health_profile": character.get_health_snapshot() if hasattr(character, 'get_health_snapshot') else {},
-                    "performance_rating": getattr(character, 'performance_rating', "N/A"),
-                    "warning_count": getattr(character, 'warning_count', 0),
-                    "known_characters": getattr(character, 'known_characters', []),
-                    "relationships": getattr(character, 'relationships', {}),
-                    "opinions": getattr(character, 'opinions', {}), # Added opinions
-                    "dialogue_history": getattr(character, 'dialogue_history', [])[-10:], # Last 10 dialogue entries
-                    "life_history": character.export_life_history(limit=20) if hasattr(character, 'export_life_history') else [],
-                    "life_highlights": character.get_life_highlights(limit=6) if hasattr(character, 'get_life_highlights') else [],
-                    "personal_pursuits": character.export_personal_pursuits() if hasattr(character, 'export_personal_pursuits') else [],
-                    "personal_pursuit_log": character.export_personal_pursuit_log(limit=12) if hasattr(character, 'export_personal_pursuit_log') else [],
-                    "active_personal_project": getattr(character, 'active_personal_project', None),
-                    "family_profile": game_world.get_family_profile_for_character(character.name) if hasattr(game_world, 'get_family_profile_for_character') else None,
-                    "family_members": list(getattr(character, 'family_members', [])),
-                    "age": getattr(character, 'age_years', None),
-                    "origin": getattr(character, 'origin', None),
-                    "citizenship": getattr(character, 'citizenship_status', 'Resident'),
-                    "reputation": getattr(character, 'reputation_score', None),
-                }
+                char_data = character.to_dict(game_world)
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
                 self.send_header('Access-Control-Allow-Origin', '*')

@@ -3912,6 +3912,14 @@ class World:
                         propagate_to_family=True,
                         details={"case_id": case.get("case_id"), "verdict": verdict, "sentence": "fine"},
                     )
+                record = {
+                    "case_id": case.get("case_id"),
+                    "charge": case.get("charge"),
+                    "verdict": "guilty",
+                    "date": self.game_time.current_day if self.game_time else -1,
+                    "sentence": f"Fine of {fine_amount} coins.",
+                }
+                defendant.criminal_record.append(record)
             if prosecutor:
                 prosecutor.update_mood_score(6, "Secured conviction at trial")
                 prosecutor.add_memory(
