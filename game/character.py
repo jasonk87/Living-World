@@ -12,6 +12,7 @@ from .data import (
     STRUCTURE_BLUEPRINTS,
     JOB_SALARIES,
     NOBLE_RANKS_OR_JOBS,
+    Job,
 )
 from . import config
 from .goal import Goal, GoalType, GoalStatus, DEFAULT_IDLE_GOAL, create_goal_from_job
@@ -63,7 +64,10 @@ class Character:
 
         self.x = x; self.y = y; self.inventory = {}; self.memory = [];
         self.needs = needs if needs else {};
-        self.job = job
+        if isinstance(job, str):
+            self.job: Optional[Job] = Job(job, None, JOB_SALARIES.get(job, 0))
+        else:
+            self.job: Optional[Job] = job
 
         self.relationships = {} # Initialize relationships first
         self.family_roles: Dict[str, Set[str]] = {}
@@ -91,7 +95,8 @@ class Character:
             self.current_goal: Goal = current_goal_obj
         else:
             # Try to create a job-specific goal
-            job_goal = create_goal_from_job(self.job or "Unemployed", self.name)
+            job_title = self.job.title if self.job else "Unemployed"
+            job_goal = create_goal_from_job(job_title, self.name)
             if job_goal:
                 self.current_goal: Goal = job_goal
             else:
@@ -222,7 +227,7 @@ class Character:
         self._last_career_stage_day: Optional[int] = None
         self._last_career_high_day: Optional[int] = None
         self._last_burnout_alert_day: Optional[int] = None
-        self._last_recorded_job: Optional[str] = self.job
+        self._last_recorded_job: Optional[Job] = self.job
         self._triggered_tenure_milestones: Set[int] = set()
 
         self.age_years: int = age if age is not None else random.randint(18, 45)
@@ -277,7 +282,6 @@ class Character:
         self._cached_path: Deque[Tuple[int, int]] = deque()
         self._cached_path_target: Optional[Tuple[int, int]] = None
         self._cached_path_revision: Optional[int] = None
-        self.criminal_record: List[Dict[str, Any]] = []
 
     def update_reputation(self, change: int, reason: Optional[str] = None, world: Optional['World'] = None):
         """Updates reputation score, clamps it, and logs the change."""
@@ -689,7 +693,7 @@ class Character:
 
     def _process_builder_routine(self, world: 'World') -> bool:
         """Handle builder duty goals and active build orders."""
-        if self.job != "Builder":
+        if not self.job or self.job.title != "Builder":
             return False
 
         if not self.current_goal:
@@ -751,71 +755,8 @@ class Character:
         self.crafting_progress = 0; self.workshop_location = None
         # self.hauling_info = None # Attribute removed
 
-    def get_status_and_emoji(self) -> Tuple[str, str]:
-        if self.resting_at_home:
-            return "Resting", "😴"
-        if self.is_sick or self.is_injured:
-            return "Unwell", "🤒"
-        if self.current_goal:
-            goal_type = self.current_goal.type
-            # Mapping from goal types to status and emoji
-            goal_to_status = {
-                (GoalType.SMALL_TALK, GoalType.GREET_CHARACTER, GoalType.SHARE_POSITIVE_NEWS, GoalType.INTRODUCE_SELF_TO_STRANGER, GoalType.SHARE_RUMOR): ("Socializing", "💬"),
-                (GoalType.EXECUTE_BUILD_ORDER, GoalType.EXECUTE_CRAFT_ORDER, GoalType.GATHER_RESOURCE, GoalType.PERFORM_WOODCUTTER_DUTIES, GoalType.PERFORM_STONEMASON_DUTIES): ("Working", "🛠️"),
-                (GoalType.EAT_FOOD, GoalType.DRINK_WATER): ("Eating", "🍴"),
-                (GoalType.WANDER,): ("Wandering", "🚶"),
-            }
-            for goals, (status, emoji) in goal_to_status.items():
-                if goal_type in goals:
-                    return status, emoji
-
-            if self.job == 'Builder' and self.active_build_order_id:
-                return "Building", "🏗️"
-
-        if self.mood == "Happy":
-             return "Idle", "😊"
-        if self.mood == "Sad":
-             return "Idle", "😢"
-
-        return "Idle", "🙂"
-
-    def get_current_task_label(self) -> str:
-        if not self.current_goal:
-            return "Thinking..."
-
-        goal_type = self.current_goal.type
-        params = self.current_goal.parameters or {}
-
-        if goal_type == GoalType.IDLE:
-            return "Idling"
-        if goal_type == GoalType.WANDER:
-            return "Wandering aimlessly"
-        if goal_type == GoalType.EXECUTE_BUILD_ORDER and self.current_building_project:
-            return f"Building a {STRUCTURE_BLUEPRINTS.get(self.current_building_project, {}).get('display_name', self.current_building_project)}"
-        if goal_type == GoalType.GATHER_RESOURCE and 'resource_name' in params:
-            return f"Gathering {params['resource_name']}"
-        if goal_type in [GoalType.SMALL_TALK, GoalType.GREET_CHARACTER, GoalType.INTRODUCE_SELF_TO_STRANGER] and 'target_char_name' in params:
-            return f"Chatting with {params['target_char_name']}"
-        if goal_type == GoalType.REST_AT_HOME:
-            return "Resting at home"
-
-        # Generic fallback
-        goal_name = goal_type.name.replace("_", " ").title()
-        return goal_name
-
-    def to_dict(self, world: Optional['World'] = None):
+    def to_dict(self):
         """Converts the character object to a dictionary for serialization."""
-        status, emoji = self.get_status_and_emoji()
-        current_task = self.get_current_task_label()
-        location_short = ""
-        if world:
-            building = world.get_building_at(self.x, self.y)
-            if building:
-                location_short = building.display_name
-            else:
-                tile = world.get_tile(self.x, self.y)
-                if tile:
-                    location_short = tile.replace("_", " ").title()
         return {
             "name": self.name,
             "personality": self.personality,
@@ -826,7 +767,7 @@ class Character:
             "inventory": self.inventory,
             "memory": self.memory,
             "needs": self.needs,
-            "job": self.job,
+            "job": self.job.to_dict() if self.job else None,
             "money": self.money,
             "current_goal": self.current_goal.to_dict() if self.current_goal else None,
             "rank": self.rank,
@@ -854,17 +795,6 @@ class Character:
             "personal_pursuits": self.export_personal_pursuits(),
             "personal_pursuit_log": self.export_personal_pursuit_log(limit=8),
             "active_personal_project": self.active_personal_project,
-            "criminal_record": self.criminal_record,
-            "reputation_score": self.reputation_score,
-            "family_members": self.family_members,
-            "family_roles": self.get_family_roles_snapshot(),
-            "romantic_partners": self.get_romantic_partners(),
-            "life_highlights": self.get_life_highlights(),
-            # New fields for HUD
-            "status": status,
-            "emoji": emoji,
-            "current_task": current_task,
-            "location_short": location_short,
         }
 
     @staticmethod
@@ -1211,7 +1141,8 @@ class Character:
 
         # Injury progression or onset
         if not self.is_injured:
-            job_modifier = injury_model.get("job_risk", {}).get(self.job, 0.0)
+            job_title = self.job.title if self.job else "Unemployed"
+            job_modifier = injury_model.get("job_risk", {}).get(job_title, 0.0)
             vitality_penalty = max(0.0, (injury_model.get("worsen_threshold", 45) - vitality) / 100.0) * injury_model.get("vitality_weight", 0.01)
             injury_chance = min(0.9, max(0.0, injury_model.get("base_chance", 0.0015) + job_modifier + vitality_penalty))
             if random.random() < injury_chance:
@@ -1324,7 +1255,8 @@ class Character:
 
     def __str__(self):
         goal_str = str(self.current_goal) if self.current_goal else "None"
-        base_info = (f"Character(Name: {self.name}, Rank: {self.rank}, Job: {self.job}, Pos: ({self.x},{self.y}), Goal: {goal_str}, WO: {self.active_work_order_id}, Load: {self.get_inventory_load()}/{self.max_inventory_items})")
+        job_title = self.job.title if self.job else "Unemployed"
+        base_info = (f"Character(Name: {self.name}, Rank: {self.rank}, Job: {job_title}, Pos: ({self.x},{self.y}), Goal: {goal_str}, WO: {self.active_work_order_id}, Load: {self.get_inventory_load()}/{self.max_inventory_items})")
         supervisor_info = f"  Supervisor: {self.supervisor_name if self.supervisor_name else 'None'}"
         subordinates_info = f"  Subordinates: {len(self.subordinates_names)}"
         performance_info = f"  Performance: {self.performance_rating} (Warnings: {self.warning_count}, Last Review: Day {self.last_performance_review_day if self.last_performance_review_day is not None else 'N/A'})"
@@ -1393,7 +1325,8 @@ class Character:
 
         if self.job:
             job_biases: Dict[str, Dict[str, float]] = getattr(config, "DECISION_JOB_FOCUS", {})
-            for key, value in job_biases.get(self.job, {}).items():
+            job_title = self.job.title
+            for key, value in job_biases.get(job_title, {}).items():
                 profile[key] = profile.get(key, 0.0 if key == "rest_threshold_adjustment" else 1.0) + value
 
         positive_threshold = getattr(config, "DECISION_RELATIONSHIP_POSITIVE_THRESHOLD", 60)
@@ -1649,8 +1582,9 @@ class Character:
 
     def export_profession_history(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         history: List[Dict[str, Any]] = [deepcopy(entry) for entry in self.profession_history]
+        job_title = self.job.title if self.job else "Unassigned"
         current_entry: Dict[str, Any] = {
-            "job": self.job or "Unassigned",
+            "job": job_title,
             "stage": self.career_stage,
             "tenure": self.current_profession_tenure,
             "status": "current",
@@ -1694,7 +1628,7 @@ class Character:
             for trait in self.traits:
                 weight += trait_weights.get(trait, {}).get(key, 0.0)
             if self.job:
-                weight += job_weights.get(self.job, {}).get(key, 0.0)
+                weight += job_weights.get(self.job.title, {}).get(key, 0.0)
             weight = max(0.0, weight)
             if weight > 0:
                 weighted.append((key, weight))
@@ -2532,7 +2466,7 @@ class Character:
         tracks = getattr(config, "PROFESSION_TRACK_DEFINITIONS", {})
         if not isinstance(tracks, dict):
             return {}
-        job_name = self.job or "Unassigned"
+        job_name = self.job.title if self.job else "Unassigned"
         track: Optional[Dict[str, Any]] = tracks.get(job_name)
         if track is None:
             lowered = job_name.lower()
@@ -2549,13 +2483,13 @@ class Character:
         world: Optional['World'],
         today: int,
     ) -> Optional[Dict[str, Any]]:
-        previous_job = self._last_recorded_job
+        previous_job_title = self._last_recorded_job.title if self._last_recorded_job else "Unassigned"
         tenure_before_reset = self.current_profession_tenure
         updates: Dict[str, Any] = {}
 
-        if previous_job and previous_job not in {"Unemployed", "Retiree"} and tenure_before_reset > 0:
+        if previous_job_title not in {"Unemployed", "Retiree"} and tenure_before_reset > 0:
             history_entry: Dict[str, Any] = {
-                "job": previous_job,
+                "job": previous_job_title,
                 "stage": self.career_stage,
                 "tenure": tenure_before_reset,
                 "end_day": today,
@@ -2568,7 +2502,7 @@ class Character:
             if len(self.profession_history) > max_history:
                 self.profession_history = self.profession_history[-max_history:]
             summary = (
-                f"Departed role as {previous_job} after {tenure_before_reset} "
+                f"Departed role as {previous_job_title} after {tenure_before_reset} "
                 f"day{'s' if tenure_before_reset != 1 else ''}."
             )
             self.add_memory(summary)
@@ -2578,17 +2512,18 @@ class Character:
                 summary,
                 tags=["career"],
                 significance=2,
-                details={"job": previous_job, "tenure": tenure_before_reset},
+                details={"job": previous_job_title, "tenure": tenure_before_reset},
             )
+            new_job_title = self.job.title if self.job else "Unassigned"
             updates["job_change"] = {
-                "from": previous_job,
-                "to": self.job or "Unassigned",
+                "from": previous_job_title,
+                "to": new_job_title,
                 "tenure": tenure_before_reset,
             }
 
-        new_job = self.job or "Unassigned"
-        if new_job and new_job not in {"Unassigned", "Unemployed", "Retiree"}:
-            join_summary = f"Began work as a {new_job}."
+        new_job_title = self.job.title if self.job else "Unassigned"
+        if new_job_title not in {"Unassigned", "Unemployed", "Retiree"}:
+            join_summary = f"Began work as a {new_job_title}."
             self.add_memory(join_summary)
             self.record_life_event(
                 world,
@@ -2596,18 +2531,18 @@ class Character:
                 join_summary,
                 tags=["career"],
                 significance=2,
-                details={"job": new_job},
+                details={"job": new_job_title},
             )
             if "job_change" not in updates:
                 updates["job_change"] = {
-                    "from": previous_job or "Unassigned",
-                    "to": new_job,
+                    "from": previous_job_title,
+                    "to": new_job_title,
                     "tenure": tenure_before_reset,
                 }
 
         self.current_profession_tenure = 0
         self._current_profession_start_day = today
-        self._last_recorded_job = self.job
+        self._last_recorded_job = self.job  # Now correctly assigns a Job object or None
         self._last_career_stage_day = today
         baseline = getattr(config, "CAREER_SATISFACTION_BASELINE", 0.6)
         personality_mods = getattr(config, "CAREER_PERSONALITY_MODIFIERS", {}).get(self.personality, {})
@@ -2707,7 +2642,8 @@ class Character:
             world.add_event_log_message(f"{self.name} is recognized as a {noble_title} after amassing considerable wealth.")
             updates["nobility"] = {"title": noble_title, "net_worth": net}
 
-        if not self.retired and self.job not in {"Mayor", "Reeve"}:
+        job_title = self.job.title if self.job else None
+        if not self.retired and job_title and job_title not in {"Mayor", "Reeve"}:
             retirement_personalities = set(getattr(config, "RETIREMENT_PERSONALITIES", []))
             wealth_threshold = getattr(config, "RETIREMENT_WEALTH_THRESHOLD", 0)
             min_age = getattr(config, "RETIREMENT_MIN_AGE", 60)
@@ -2718,8 +2654,8 @@ class Character:
                 and self.personality in retirement_personalities
                 and random.random() < chance
             ):
-                old_job = self.job
-                self.job = "Retiree"
+                old_job = self.job.title if self.job else "Unemployed"
+                self.job = Job("Retiree", None, 0)
                 self.retired = True
                 self.add_memory(f"Retired from life as a {old_job} after securing {net} coins in wealth.")
                 self.record_life_event(
@@ -2766,7 +2702,7 @@ class Character:
         self._last_profession_review_day = today
 
         updates: Dict[str, Any] = {}
-        job_name = self.job or "Unassigned"
+        job_name = self.job.title if self.job else "Unassigned"
 
         track = self._get_profession_track()
         if self._last_recorded_job != self.job:
@@ -3017,7 +2953,7 @@ class Character:
 
         summary: Dict[str, Any] = {
             "leader": self.name,
-            "role": self.job or self.rank or "Leader",
+            "role": (self.job.title if self.job else self.rank) or "Leader",
             "score": oversight_score,
             "actions": round(self._management_actions_today, 2),
             "skill": leadership_skill,
@@ -3493,28 +3429,31 @@ class Character:
     def build(self, structure_type: str, world: 'World') -> bool: return False
 
     def job_default_goal_type_str(self) -> str: # Returns a string representing the goal type or job title
-        if self.job == "Woodcutter": return "Perform Woodcutter Duties"
-        if self.job == "Stonemason": return "Perform Stonemason Duties"
-        if self.job == "Farmer": return "Perform Farmer Duties"
-        if self.job == "Hunter": return "Perform Hunter Duties"
-        if self.job == "Fletcher": return "Perform Fletcher Duties"
-        if self.job == "Master Craftsman": return "Assess Production Needs"
-        if self.job == "Manager": return "Manage Subordinates"
-        if self.job == "Chancellor": return "Oversee Settlement"
-        if self.job == "Bookkeeper": return "Maintain Ledger"
-        if self.job == "Expedition Leader": return "Oversee Expedition"
-        if self.job == "Mayor": return "Oversee Settlement"
-        if self.job == "Chief Medical Officer": return "Oversee Medical Operations"
-        if self.job == "Medic": return "Provide Medical Care"
-        if self.job == "Sheriff": return "Maintain Peace in Settlement"
-        if self.job == "Marshal": return "Maintain Defenses"
-        if self.job == "Spymaster": return "Maintain Peace in Settlement"
-        if self.job == "Deputy": return "Patrol Area"
-        if self.job == "Scout": return "Patrol Area"
-        if self.job == "Militia Soldier": return "Patrol Area"
-        if self.job == "Reeve": return "Manage Estate"
-        if self.job == "Steward": return "Manage Estate"
-        if self.job == "Bailiff": return "Assist Reeve"
+        if not self.job:
+            return "Idle"
+        job_title = self.job.title
+        if job_title == "Woodcutter": return "Perform Woodcutter Duties"
+        if job_title == "Stonemason": return "Perform Stonemason Duties"
+        if job_title == "Farmer": return "Perform Farmer Duties"
+        if job_title == "Hunter": return "Perform Hunter Duties"
+        if job_title == "Fletcher": return "Perform Fletcher Duties"
+        if job_title == "Master Craftsman": return "Assess Production Needs"
+        if job_title == "Manager": return "Manage Subordinates"
+        if job_title == "Chancellor": return "Oversee Settlement"
+        if job_title == "Bookkeeper": return "Maintain Ledger"
+        if job_title == "Expedition Leader": return "Oversee Expedition"
+        if job_title == "Mayor": return "Oversee Settlement"
+        if job_title == "Chief Medical Officer": return "Oversee Medical Operations"
+        if job_title == "Medic": return "Provide Medical Care"
+        if job_title == "Sheriff": return "Maintain Peace in Settlement"
+        if job_title == "Marshal": return "Maintain Defenses"
+        if job_title == "Spymaster": return "Maintain Peace in Settlement"
+        if job_title == "Deputy": return "Patrol Area"
+        if job_title == "Scout": return "Patrol Area"
+        if job_title == "Militia Soldier": return "Patrol Area"
+        if job_title == "Reeve": return "Manage Estate"
+        if job_title == "Steward": return "Manage Estate"
+        if job_title == "Bailiff": return "Assist Reeve"
         if self.rank in ["Noble Lord", "Baron"] and not self.subordinates_names:
             return "Oversee Domain"
         elif self.rank in ["Noble Lord", "Baron"]:
@@ -3530,7 +3469,7 @@ class Character:
         if self.subordinates_names:
             return True
         leadership_titles = set(getattr(config, "LEADERSHIP_ROLE_TITLES", []))
-        if self.job and self.job in leadership_titles:
+        if self.job and self.job.title in leadership_titles:
             return True
         if self.rank and self.rank in leadership_titles:
             return True
@@ -3944,7 +3883,7 @@ class Character:
         else: self.move_towards(spot[0], spot[1], world)
 
     def _execute_assess_production_needs(self, world: 'World'):
-        if self.job != "Master Craftsman":
+        if not self.job or self.job.title != "Master Craftsman":
             self.current_goal = self.get_default_goal()
             return
         item_processed_this_tick = False;
@@ -3982,12 +3921,12 @@ class Character:
 
     # Renamed from _execute_manage_work_orders to _execute_manage_subordinates
     def _execute_manage_subordinates(self, world: 'World'):
-        if not (self.job == "Manager" or self.rank in ["Noble Lord", "Baron"]) or not self.subordinates_names:
+        if not (self.job and self.job.title == "Manager" or self.rank in ["Noble Lord", "Baron"]) or not self.subordinates_names:
             self.current_goal = self.get_default_goal()
             return # Not a manager or no one to manage
 
         # Prioritize managing work orders if also a Manager (dual role)
-        if self.job == "Manager":
+        if self.job and self.job.title == "Manager":
             self._execute_manage_work_orders_as_part_of_supervision(world) # A new helper for this
             # After potentially handling a WO, proceed to subordinate management unless an action was taken that changes goal
 
@@ -4042,9 +3981,11 @@ class Character:
 
                 if random.random() < warning_chance:
                     self.add_memory(f"Considering issuing warning to {subordinate.name} (Perf: {subordinate.performance_rating}, Warns: {subordinate.warning_count}, Rel: {relationship_to_sub}, Chance: {warning_chance:.2f}).")
-                    if subordinate.job == "Bookkeeper" and any(world.ledger.get_stockpile_last_update_day(sp.name) is None or (world.game_time.current_day - world.ledger.get_stockpile_last_update_day(sp.name) > config.STALE_THRESHOLD_DAYS + 2) for sp in world.stockpiles):
+                sub_job_title = subordinate.job.title if subordinate.job else ""
+                if sub_job_title == "Bookkeeper" and any(world.ledger.get_stockpile_last_update_day(sp.name) is None or (world.game_time.current_day - world.ledger.get_stockpile_last_update_day(sp.name) > config.STALE_THRESHOLD_DAYS + 2) for sp in world.stockpiles):
                         reason_for_warning = "Ledger maintenance remains unsatisfactory."
 
+                if random.random() < warning_chance:
                     self.issue_warning(subordinate.name, world, reason_for_warning)
                     # Issuing a warning affects relationships
                     self.modify_relationship(subordinate.name, -10, world, reason=f"Issued warning to them for {reason_for_warning}")
@@ -4124,7 +4065,7 @@ class Character:
             self._receive_payment(JOB_SALARIES.get("Manage Subordinates", 3), f"reviewing WO {order_to_process.order_id[:4]}", world)
             self._record_management_activity(world, f"order_deny:{order_to_process.order_id[:4]}", weight=0.5)
     def _execute_maintain_ledger(self, world: 'World'):
-        if self.job != "Bookkeeper":
+        if not self.job or self.job.title != "Bookkeeper":
             self.current_goal = self.get_default_goal()
             return
         stockpiles_to_check=world.stockpiles; target_sp=None; min_day=float('inf')
@@ -4149,7 +4090,7 @@ class Character:
             return
 
         target_stockpile_name = self.current_goal.parameters.get("stockpile_name")
-        if self.job != "Bookkeeper" or not target_stockpile_name : # Check job and if name is actually there
+        if not self.job or self.job.title != "Bookkeeper" or not target_stockpile_name : # Check job and if name is actually there
             self.current_goal = create_goal_from_job("Maintain Ledger", self.name) or self.get_default_goal()
             self.decide_action(world)
             return
@@ -4187,7 +4128,7 @@ class Character:
         else:self.move_towards(spot[0],spot[1],world)
 
     def _execute_perform_woodcutter_duties(self, world: 'World'):
-        if self.job!="Woodcutter":
+        if not self.job or self.job.title != "Woodcutter":
             self.current_goal = self.get_default_goal()
             return
         quota=self.needs.get("Wood",5);inv_val=self.inventory.get("Wood",0) # Default quota, can be overridden by Goal params
@@ -4212,7 +4153,7 @@ class Character:
             self.decide_action(world) # Process new goal
         # If no next_goal_type, means current logic is fine, or it's already Idle/Wander
     def _execute_perform_stonemason_duties(self, world: 'World'):
-        if self.job != "Stonemason":
+        if not self.job or self.job.title != "Stonemason":
             self.current_goal = self.get_default_goal()
             return
         quota = self.current_goal.parameters.get("quota", self.needs.get("Stone",5)) # Corrected: Use current_goal.parameters
@@ -4237,7 +4178,7 @@ class Character:
         # If no next_goal_type, means current logic is fine, or it's already Idle/Wander - or if the above didn't set a new goal, it implies current one continues or becomes default via decide_action
 
     def _execute_perform_farmer_duties(self, world: 'World'):
-        if self.job != "Farmer":
+        if not self.job or self.job.title != "Farmer":
             self.current_goal = self.get_default_goal()
             return
 
@@ -4269,7 +4210,7 @@ class Character:
             params["phase"] = "deliver"
 
     def _execute_perform_hunter_duties(self, world: 'World'):
-        if self.job != "Hunter":
+        if not self.job or self.job.title != "Hunter":
             self.current_goal = self.get_default_goal()
             return
 
@@ -4301,7 +4242,7 @@ class Character:
             params["phase"] = "deliver"
 
     def _execute_perform_fletcher_duties(self, world: 'World'):
-        if self.job != "Fletcher":
+        if not self.job or self.job.title != "Fletcher":
             self.current_goal = self.get_default_goal()
             return
 
@@ -4440,9 +4381,9 @@ class Character:
                 self._reset_crafting_state()
 
             # Pay for hauling if it's a primary job duty
-            if self.job == "Woodcutter" and res == "Wood":
+            if self.job and self.job.title == "Woodcutter" and res == "Wood":
                 self._receive_payment(JOB_SALARIES.get("Perform Woodcutter Duties", 5), f"hauling {res}", world)
-            elif self.job == "Stonemason" and res == "Stone":
+            elif self.job and self.job.title == "Stonemason" and res == "Stone":
                 self._receive_payment(JOB_SALARIES.get("Perform Stonemason Duties", 5), f"hauling {res}", world)
 
             self.current_goal = self.get_default_goal()
@@ -4463,7 +4404,7 @@ class Character:
 
         inv_wood = self.inventory.get("Wood",0)
         # Default job quota, could be overridden by goal parameters if a specific amount is requested
-        job_quota = self.current_goal.parameters.get("quota", self.needs.get("Wood",5) if self.job == "Woodcutter" else float('inf'))
+        job_quota = self.current_goal.parameters.get("quota", self.needs.get("Wood",5) if self.job and self.job.title == "Woodcutter" else float('inf'))
 
         directive = world.get_resource_directive("Wood") if hasattr(world, "get_resource_directive") else None
         if directive:
@@ -4492,7 +4433,7 @@ class Character:
             return
 
         inv_stone = self.inventory.get("Stone",0)
-        job_quota = self.current_goal.parameters.get("quota", self.needs.get("Stone",5) if self.job == "Stonemason" else float('inf'))
+        job_quota = self.current_goal.parameters.get("quota", self.needs.get("Stone",5) if self.job and self.job.title == "Stonemason" else float('inf'))
 
         directive = world.get_resource_directive("Stone") if hasattr(world, "get_resource_directive") else None
         if directive:
@@ -4543,7 +4484,7 @@ class Character:
             # e.g. self.current_goal = Goal(GoalType.INITIATE_HAULING, ..., {"resource": "Herbs"})
 
     def _execute_oversee_medical_operations(self, world: 'World'):
-        if self.job != "Chief Medical Officer":
+        if not self.job or self.job.title != "Chief Medical Officer":
             self.current_goal = self.get_default_goal()
             return
 
@@ -4608,7 +4549,7 @@ class Character:
         return
 
     def _execute_provide_medical_care(self, world: 'World'):
-        if self.job != "Medic":
+        if not self.job or self.job.title != "Medic":
             self.current_goal = self.get_default_goal()
             return
 
@@ -4821,14 +4762,14 @@ class Character:
 
 
     def _execute_oversee_expedition(self, world: 'World'):
-         if self.job != "Expedition Leader":
+         if not self.job or self.job.title != "Expedition Leader":
             self.current_goal = self.get_default_goal()
             return
          if random.random() < 0.1: self.add_memory("Surveyed expedition progress.")
          self.current_goal = self.get_default_goal() # Expedition leaders might idle if nothing specific to do
 
     def _execute_oversee_settlement(self, world: 'World'):
-        if self.job != "Mayor":
+        if not self.job or self.job.title != "Mayor":
             self.current_goal = self.get_default_goal()
             return
 
@@ -4902,7 +4843,7 @@ class Character:
 
         # Periodically review appointments
         if random.random() < 0.1: # 10% chance each time Mayor oversees settlement
-            if self.job == "Mayor": # Ensure only mayor does this
+            if self.job and self.job.title == "Mayor": # Ensure only mayor does this
                 self._execute_manage_appointments(world)
 
         # Chance to give a speech
@@ -4961,7 +4902,7 @@ class Character:
         return
 
     def _execute_manage_appointments(self, world: 'World'):
-        if self.job != "Mayor": # Should only be called by Mayor
+        if not self.job or self.job.title != "Mayor": # Should only be called by Mayor
             return
 
         self.add_memory(f"Mayor {self.name} is reviewing key settlement appointments.")
@@ -4971,7 +4912,8 @@ class Character:
         for position_job_title in key_positions:
             current_holder: Optional['Character'] = None
             for char in world.characters:
-                if char.job == position_job_title:
+                char_job_title = char.job.title if char.job else ""
+                if char_job_title == position_job_title:
                     current_holder = char
                     break
 
@@ -4981,7 +4923,8 @@ class Character:
                 candidate: Optional['Character'] = None
                 potential_candidates: List['Character'] = []
                 for char_to_check in world.characters:
-                    if char_to_check.job not in key_positions and char_to_check.job != "Mayor" and char_to_check.rank != "Noble Lord":
+                    char_to_check_job_title = char_to_check.job.title if char_to_check.job else ""
+                    if char_to_check_job_title not in key_positions and char_to_check_job_title != "Mayor" and char_to_check.rank != "Noble Lord":
                         required_skill_for_job = {"Sheriff": "Security", "Chief Medical Officer": "Medicine", "Manager": "Leadership"}.get(position_job_title)
                         if required_skill_for_job and char_to_check.skills.get(required_skill_for_job, {}).get("level", 0) > 0:
                             potential_candidates.append(char_to_check)
@@ -5002,7 +4945,7 @@ class Character:
                         supervisor = world.get_character_by_name(candidate.supervisor_name)
                         if supervisor: supervisor.remove_subordinate(candidate.name)
 
-                    candidate.job = position_job_title
+                    candidate.job = Job(position_job_title, None, JOB_SALARIES.get(position_job_title, 0))
                     candidate.supervisor_name = self.name # Mayor becomes their supervisor
                     candidate.appointed_by = self.name
                     # Potentially adjust rank, e.g., to "Skilled Worker" or similar if not already appropriate
@@ -5030,7 +4973,7 @@ class Character:
                     if random.random() < actual_firing_chance:
                         self.add_memory(f"Decided to relieve {current_holder.name} of their duties as {position_job_title} due to perceived unsatisfactory performance.")
                         current_holder.add_memory(f"I have been fired from my position as {position_job_title} by Mayor {self.name}.")
-                        current_holder.job = "Unemployed" # This will make their default goal Idle or similar
+                        current_holder.job = Job("Unemployed", None, 0) # This will make their default goal Idle or similar
                         current_holder.current_goal = Goal(GoalType.IDLE, assignee_id=current_holder.name) # Explicitly set to Idle
                         current_holder.appointed_by = None
                         if current_holder.supervisor_name == self.name : current_holder.supervisor_name = None
@@ -5041,7 +4984,7 @@ class Character:
         return
 
     def _execute_review_law_petitions(self, world: 'World'):
-        if self.job != "Mayor":
+        if not self.job or self.job.title != "Mayor":
             self.current_goal = self.get_default_goal()
             return
 
@@ -5087,7 +5030,7 @@ class Character:
         self.current_goal = self.get_default_goal()
 
     def _execute_draft_settlement_law(self, world: 'World'):
-        if self.job != "Mayor":
+        if not self.job or self.job.title != "Mayor":
             self.current_goal = self.get_default_goal()
             return
 
@@ -5119,7 +5062,7 @@ class Character:
         )
 
     def _execute_enact_settlement_law(self, world: 'World'):
-        if self.job != "Mayor":
+        if not self.job or self.job.title != "Mayor":
             self.current_goal = self.get_default_goal()
             return
 
@@ -5149,7 +5092,7 @@ class Character:
         self.current_goal = self.get_default_goal()
 
     def _execute_maintain_peace(self, world: 'World'): # For Sheriff
-        if self.job != "Sheriff":
+        if not self.job or self.job.title != "Sheriff":
             self.current_goal = self.get_default_goal()
             return
 
@@ -5245,7 +5188,7 @@ class Character:
         return
 
     def _execute_patrol_area(self, world: 'World'): # For Deputy
-        if self.job != "Deputy":
+        if not self.job or self.job.title not in ["Deputy", "Scout", "Militia Soldier"]:
             self.current_goal = self.get_default_goal()
             return
 
@@ -5315,7 +5258,7 @@ class Character:
         return
 
     def _execute_conduct_witness_interview(self, world: 'World'):
-        if self.job not in {"Sheriff", "Deputy"}:
+        if not self.job or self.job.title not in {"Sheriff", "Deputy"}:
             self.current_goal = self.get_default_goal()
             return
 
@@ -5580,7 +5523,8 @@ class Character:
         # Future: Could search for a "Clinic" building first.
         medical_personnel: List['Character'] = []
         for char in world.characters:
-            if char.job in ["Medic", "Chief Medical Officer"] and char.name != self.name:
+            char_job_title = char.job.title if char.job else ""
+            if char_job_title in ["Medic", "Chief Medical Officer"] and char.name != self.name:
                 medical_personnel.append(char)
 
         if not medical_personnel:
@@ -5646,7 +5590,7 @@ class Character:
         self.current_goal = self.get_default_goal()
 
     def _execute_manage_estate(self, world: 'World'):
-        if self.job != "Reeve":
+        if not self.job or self.job.title != "Reeve":
             self.current_goal = self.get_default_goal()
             return
 
@@ -5735,7 +5679,7 @@ class Character:
         self.current_goal = self.get_default_goal()
 
     def _execute_assist_reeve(self, world: 'World'):
-        if self.job != "Bailiff":
+        if not self.job or self.job.title != "Bailiff":
             self.current_goal = self.get_default_goal()
             return
 
@@ -5980,7 +5924,7 @@ class Character:
         self.current_goal = self.get_default_goal() # Will likely idle here
 
     def _execute_give_speech(self, world: 'World'):
-        if self.job != "Mayor": # Should be GoalType.GIVE_SPEECH
+        if not self.job or self.job.title != "Mayor": # Should be GoalType.GIVE_SPEECH
             self.current_goal = self.get_default_goal()
             return
 
@@ -7008,8 +6952,9 @@ class Character:
         # --- Base Performance Assessment ---
         objective_rating = "Needs Improvement" # Default if no specific positive criteria met
         review_notes = []
+        sub_job_title = subordinate.job.title if subordinate.job else ""
 
-        if subordinate.job == "Bookkeeper":
+        if sub_job_title == "Bookkeeper":
             is_diligent = True
             if not world.stockpiles: review_notes.append("No stockpiles for Bookkeeper to check.")
             else:
@@ -7020,7 +6965,7 @@ class Character:
             if is_diligent and world.stockpiles: objective_rating = "Good"; review_notes.append("Ledger up-to-date.")
             elif not world.stockpiles and is_diligent: objective_rating = "Not Evaluated"; review_notes.append("No stockpiles to manage.")
 
-        elif subordinate.job == "Woodcutter":
+        elif sub_job_title == "Woodcutter":
             if subordinate.inventory.get("Wood", 0) >= 3: # Arbitrary threshold for "Good"
                 objective_rating = "Good"; review_notes.append("Carrying a good amount of Wood.")
             elif subordinate.inventory.get("Wood", 0) > 0:
@@ -7189,9 +7134,9 @@ class Character:
             self.remove_subordinate(subordinate.name) # Uses existing method
 
         # Update subordinate's status
-        original_job = subordinate.job
+        original_job = subordinate.job.title if subordinate.job else "Unemployed"
         subordinate.supervisor_name = None
-        subordinate.job = "Unemployed"
+        subordinate.job = None
         subordinate.rank = "Commoner" # Or some other default non-noble/non-worker rank
         subordinate.current_goal = Goal(GoalType.IDLE, assignee_id=subordinate.name)
         subordinate.assigned_tasks = []

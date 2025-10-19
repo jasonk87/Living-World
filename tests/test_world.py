@@ -9,10 +9,12 @@ import pytest
 
 from game import config
 from game.building import Building
-from game.character import Character
+from game.character import Character, Job
+from game.data import Job
 from game.stockpile import Stockpile
 from game.time import Time
 from game.world import World
+from game.data import JOB_SALARIES
 
 
 def _make_world() -> tuple[World, Time]:
@@ -118,7 +120,7 @@ def test_healthcare_report_tracks_vitals_and_events():
         personality="Stoic",
         traits=[],
         skills={},
-        needs=patient_needs,
+        needs=patient_needs, job=Job("Unemployed", None, 0)
     )
     world.add_character(patient)
     patient.health_profile["vitality"] = 48.0
@@ -219,7 +221,7 @@ def test_population_birth_event_when_conditions_are_right():
         personality="Kind",
         traits=[],
         skills={},
-        job="Farmer",
+        job=Job("Farmer", None, JOB_SALARIES.get("Farmer", 0)),
         needs={**_standard_needs(), "Belonging": 85},
     )
     world.add_character(parent)
@@ -246,7 +248,7 @@ def test_population_migration_when_surplus_resources_exist():
         personality="Calm",
         traits=[],
         skills={},
-        job="Woodcutter",
+        job=Job("Woodcutter", None, JOB_SALARIES.get("Woodcutter", 0)),
         needs=_standard_needs(),
     )
     world.add_character(resident)
@@ -298,7 +300,7 @@ def test_leadership_cycle_records_commendable_oversight():
         personality="Charismatic",
         traits=["Diligent"],
         skills={"Leadership": 3},
-        job="Mayor",
+        job=Job("Mayor", None, JOB_SALARIES.get("Mayor", 0)),
         needs=_standard_needs(),
     )
     steward = Character(
@@ -306,7 +308,7 @@ def test_leadership_cycle_records_commendable_oversight():
         personality="Calm",
         traits=[],
         skills={},
-        job="Steward",
+        job=Job("Steward", None, JOB_SALARIES.get("Steward", 0)),
         needs=_standard_needs(),
         supervisor_name=mayor.name,
     )
@@ -341,7 +343,7 @@ def test_leadership_cycle_flags_neglect_and_records_incident(mock_random):  # no
         personality="Lenient",
         traits=["Lazy", "Careless"],
         skills={},
-        job="Steward",
+        job=Job("Steward", None, JOB_SALARIES.get("Steward", 0)),
         needs=_standard_needs(),
     )
     worker = Character(
@@ -349,7 +351,7 @@ def test_leadership_cycle_flags_neglect_and_records_incident(mock_random):  # no
         personality="Rebellious",
         traits=["Greedy"],
         skills={},
-        job="Laborer",
+        job=Job("Laborer", None, JOB_SALARIES.get("Laborer", 0)),
         needs=_standard_needs(),
         supervisor_name=steward.name,
         money=0,
@@ -398,7 +400,7 @@ def test_household_evening_generates_story_and_bonuses(mock_choice):  # noqa: AR
         traits=["Compassionate"],
         skills={},
         needs=_standard_needs(),
-        job="Farmer",
+        job=Job("Farmer", None, JOB_SALARIES.get("Farmer", 0)),
     )
     world.add_character(resident)
     building.add_occupant(resident.name)
@@ -510,7 +512,7 @@ def test_neighborhood_gathering_records_story(mock_choice):  # noqa: ARG001
             personality="Cheerful",
             traits=[],
             skills={},
-            job="Laborer",
+            job=Job("Laborer", None, JOB_SALARIES.get("Laborer", 0)),
             needs=_standard_needs(),
         )
         resident.net_worth = 50 + (len(names) - idx) * 5
@@ -553,7 +555,7 @@ def test_population_departure_under_hardship_and_low_mood():
             personality="Stoic",
             traits=[],
             skills={},
-            job="Laborer",
+            job=Job("Laborer", None, JOB_SALARIES.get("Laborer", 0)),
             needs=_standard_needs(),
         )
         world.add_character(character)
@@ -582,7 +584,7 @@ def test_estate_allocation_matches_wealth_tiers():
         personality="Pragmatic",
         traits=[],
         skills={},
-        job="Craftswoman",
+        job=Job("Craftswoman", None, JOB_SALARIES.get("Craftswoman", 0)),
         needs=_standard_needs(),
     )
     comfortable.wealth_status = "comfortable"
@@ -592,7 +594,7 @@ def test_estate_allocation_matches_wealth_tiers():
         personality="Ambitious",
         traits=[],
         skills={},
-        job="Merchant",
+        job=Job("Merchant", None, JOB_SALARIES.get("Merchant", 0)),
         needs=_standard_needs(),
     )
     prosperous.wealth_status = "prosperous"
@@ -602,7 +604,7 @@ def test_estate_allocation_matches_wealth_tiers():
         personality="Stoic",
         traits=[],
         skills={},
-        job="Noble",
+        job=Job("Noble", None, JOB_SALARIES.get("Noble", 0)),
         needs=_standard_needs(),
         rank="Noble Lord",
     )
@@ -655,7 +657,7 @@ def test_cultural_event_boosts_characters_and_spirit():
             "Social": 60,
             "Belonging": 50,
             "Esteem": 45,
-        },
+        }, job=Job("Unemployed", None, 0)
     )
     world.add_character(celebrant)
 
@@ -695,7 +697,7 @@ def test_training_sessions_launch_and_award_experience():
         personality="Pragmatic",
         traits=["Diligent"],
         skills={"Construction": 4},
-        job="Master Craftsman",
+        job=Job("Master Craftsman", None, JOB_SALARIES.get("Master Craftsman", 0)),
         needs=_standard_needs(),
     )
     apprentice_one = Character(
@@ -703,7 +705,7 @@ def test_training_sessions_launch_and_award_experience():
         personality="Studious",
         traits=["Curious"],
         skills={"Construction": 0},
-        job="Builder",
+        job=Job("Builder", None, JOB_SALARIES.get("Builder", 0)),
         needs=_standard_needs(),
     )
     apprentice_two = Character(
@@ -711,7 +713,7 @@ def test_training_sessions_launch_and_award_experience():
         personality="Steadfast",
         traits=["Patient"],
         skills={"Construction": 0},
-        job="Builder",
+        job=Job("Builder", None, JOB_SALARIES.get("Builder", 0)),
         needs=_standard_needs(),
     )
 
@@ -761,7 +763,7 @@ def test_workforce_crews_deliver_resources_and_queue_backlog():
         personality="Stoic",
         traits=[],
         skills={"Woodcutting": 2},
-        job="Woodcutter",
+        job=Job("Woodcutter", None, JOB_SALARIES.get("Woodcutter", 0)),
         needs=_standard_needs(),
     )
     hauler = Character(
@@ -769,7 +771,7 @@ def test_workforce_crews_deliver_resources_and_queue_backlog():
         personality="Helpful",
         traits=[],
         skills={},
-        job="Builder",
+        job=Job("Builder", None, JOB_SALARIES.get("Builder", 0)),
         needs=_standard_needs(),
     )
 
@@ -844,7 +846,7 @@ def test_manufacturing_crews_transform_inputs_into_outputs():
         personality="Focused",
         traits=[],
         skills={"Carpentry": 2},
-        job="Sawyer",
+        job=Job("Sawyer", None, JOB_SALARIES.get("Sawyer", 0)),
         needs=_standard_needs(),
     )
     carpenter = Character(
@@ -852,7 +854,7 @@ def test_manufacturing_crews_transform_inputs_into_outputs():
         personality="Patient",
         traits=[],
         skills={"Carpentry": 3},
-        job="Carpenter",
+        job=Job("Carpenter", None, JOB_SALARIES.get("Carpenter", 0)),
         needs=_standard_needs(),
     )
     hauler = Character(
@@ -860,7 +862,7 @@ def test_manufacturing_crews_transform_inputs_into_outputs():
         personality="Helpful",
         traits=[],
         skills={},
-        job="Builder",
+        job=Job("Builder", None, JOB_SALARIES.get("Builder", 0)),
         needs=_standard_needs(),
     )
 
@@ -942,7 +944,7 @@ def test_manufacturing_crews_surface_shortages():
         personality="Stubborn",
         traits=[],
         skills={"Carpentry": 2},
-        job="Carpenter",
+        job=Job("Carpenter", None, JOB_SALARIES.get("Carpenter", 0)),
         needs=_standard_needs(),
     )
     world.add_character(carpenter)
@@ -995,7 +997,7 @@ def test_business_industry_consumes_inputs_and_reports():
         personality="Driven",
         traits=[],
         skills={"Woodcutting": 2, "Carpentry": 3},
-        job="Sawyer",
+        job=Job("Sawyer", None, JOB_SALARIES.get("Sawyer", 0)),
         needs=_standard_needs(),
     )
     owner.money = 100
@@ -1033,7 +1035,7 @@ def test_business_industry_shortage_creates_alert():
         personality="Steady",
         traits=[],
         skills={"Woodcutting": 1},
-        job="Sawyer",
+        job=Job("Sawyer", None, JOB_SALARIES.get("Sawyer", 0)),
         needs=_standard_needs(),
     )
     owner.money = 50
@@ -1071,14 +1073,14 @@ def test_family_arrival_event_and_profile():
         personality="Brave",
         traits=[],
         skills={},
-        family_members=["Bryn"],
+        family_members=["Bryn"], job=Job("Unemployed", None, 0)
     )
     bryn = Character(
         name="Bryn",
         personality="Calm",
         traits=[],
         skills={},
-        family_members=["Alice"],
+        family_members=["Alice"], job=Job("Unemployed", None, 0)
     )
 
     world.add_character(alice)
@@ -1104,13 +1106,13 @@ def test_record_birth_creates_family_links_and_events():
         name="Elena",
         personality="Caring",
         traits=["Compassionate"],
-        skills={},
+        skills={}, job=Job("Unemployed", None, 0)
     )
     partner = Character(
         name="Garrin",
         personality="Steadfast",
         traits=["Diligent"],
-        skills={},
+        skills={}, job=Job("Unemployed", None, 0)
     )
 
     world.add_character(parent)
@@ -1146,14 +1148,14 @@ def test_medical_events_populate_life_history():
         personality="Patient",
         traits=[],
         skills={},
-        family_members=["Nox"],
+        family_members=["Nox"], job=Job("Unemployed", None, 0)
     )
     kin = Character(
         name="Nox",
         personality="Guarded",
         traits=[],
         skills={},
-        family_members=["Mae"],
+        family_members=["Mae"], job=Job("Unemployed", None, 0)
     )
 
     world.add_character(patient)
@@ -1186,9 +1188,9 @@ def test_medical_events_populate_life_history():
 def test_register_union_logs_history_and_lineage():
     world, _ = _make_world()
 
-    rowan = Character(name="Rowan", personality="Curious", traits=[], skills={})
-    sera = Character(name="Sera", personality="Cheerful", traits=[], skills={})
-    witness = Character(name="Bryn", personality="Calm", traits=[], skills={})
+    rowan = Character(name="Rowan", personality="Curious", traits=[], skills={}, job=Job("Unemployed", None, 0))
+    sera = Character(name="Sera", personality="Cheerful", traits=[], skills={}, job=Job("Unemployed", None, 0))
+    witness = Character(name="Bryn", personality="Calm", traits=[], skills={}, job=Job("Unemployed", None, 0))
 
     world.add_character(rowan)
     world.add_character(sera)
@@ -1210,8 +1212,8 @@ def test_register_union_logs_history_and_lineage():
 
 def test_relationship_tier_change_creates_life_event():
     world, _ = _make_world()
-    iris = Character(name="Iris", personality="Bold", traits=[], skills={})
-    oren = Character(name="Oren", personality="Calm", traits=[], skills={})
+    iris = Character(name="Iris", personality="Bold", traits=[], skills={}, job=Job("Unemployed", None, 0))
+    oren = Character(name="Oren", personality="Calm", traits=[], skills={}, job=Job("Unemployed", None, 0))
 
     world.add_character(iris)
     world.add_character(oren)
@@ -1227,9 +1229,9 @@ def test_relationship_tier_change_creates_life_event():
 def test_fatal_medical_case_creates_bereavement_events():
     world, _ = _make_world()
 
-    patient = Character(name="Calla", personality="Stoic", traits=[], skills={}, family_members=["Ivor"])
-    kin = Character(name="Ivor", personality="Loyal", traits=[], skills={}, family_members=["Calla"])
-    medic = Character(name="Mae", personality="Patient", traits=[], skills={})
+    patient = Character(name="Calla", personality="Stoic", traits=[], skills={}, family_members=["Ivor"], job=Job("Unemployed", None, 0))
+    kin = Character(name="Ivor", personality="Loyal", traits=[], skills={}, family_members=["Calla"], job=Job("Unemployed", None, 0))
+    medic = Character(name="Mae", personality="Patient", traits=[], skills={}, job=Job("Unemployed", None, 0))
 
     world.add_character(patient)
     world.add_character(kin)
@@ -1274,10 +1276,14 @@ def test_governance_generates_petitions_from_crime_history():
 def test_enacted_law_applies_to_case_and_queues_interviews():
     world, _ = _make_world()
 
-    mayor = Character(name="Elena", personality="Resolute", traits=[], skills={"Leadership": 6}, job="Mayor")
-    sheriff = Character(name="Rogan", personality="Stoic", traits=[], skills={"Security": 5}, job="Sheriff")
-    suspect = Character(name="Vail", personality="Impulsive", traits=[], skills={}, job="Laborer")
-    witness = Character(name="Mira", personality="Calm", traits=[], skills={}, job="Farmer")
+    mayor = Character(name="Elena", personality="Resolute", traits=[], skills={"Leadership": 6}, job=Job("Mayor", None, JOB_SALARIES.get("Mayor", 0)))
+    sheriff = Character(name="Rogan", personality="Stoic", traits=[], skills={"Security": 5}, job=Job("Sheriff", None, JOB_SALARIES.get("Sheriff", 0)))
+    suspect = Character(name="Vail", personality="Impulsive", traits=[], skills={}, job=Job("Laborer", None, JOB_SALARIES.get("Laborer", 0)))
+    witness = Character(name="Mira", personality="Calm", traits=[], skills={}, job=Job("Farmer", None, JOB_SALARIES.get("Farmer", 0)))
+    mayor = Character(name="Elena", personality="Resolute", traits=[], skills={"Leadership": 6}, job=Job("Mayor", None, JOB_SALARIES.get("Mayor", 0)))
+    sheriff = Character(name="Rogan", personality="Stoic", traits=[], skills={"Security": 5}, job=Job("Sheriff", None, JOB_SALARIES.get("Sheriff", 0)))
+    suspect = Character(name="Vail", personality="Impulsive", traits=[], skills={}, job=Job("Laborer", None, JOB_SALARIES.get("Laborer", 0)))
+    witness = Character(name="Mira", personality="Calm", traits=[], skills={}, job=Job("Farmer", None, JOB_SALARIES.get("Farmer", 0)))
 
     for char in (mayor, sheriff, suspect, witness):
         world.add_character(char)
@@ -1345,7 +1351,7 @@ def test_dissolve_union_tracks_ex_partners():
         personality="Romantic",
         traits=["Affectionate"],
         skills={},
-        job="Tailor",
+        job=Job("Tailor", None, JOB_SALARIES.get("Tailor", 0)),
         needs=_standard_needs(),
     )
     borin = Character(
@@ -1353,7 +1359,7 @@ def test_dissolve_union_tracks_ex_partners():
         personality="Stoic",
         traits=["Loyal"],
         skills={},
-        job="Smith",
+        job=Job("Smith", None, JOB_SALARIES.get("Smith", 0)),
         needs=_standard_needs(),
     )
     world.add_character(alice)
@@ -1380,7 +1386,7 @@ def test_process_family_dynamics_starts_romance():
         personality="Romantic",
         traits=["Charming"],
         skills={},
-        job="Baker",
+        job=Job("Baker", None, JOB_SALARIES.get("Baker", 0)),
         needs=_standard_needs(),
     )
     borin = Character(
@@ -1388,7 +1394,7 @@ def test_process_family_dynamics_starts_romance():
         personality="Dreamer",
         traits=["Loyal"],
         skills={},
-        job="Farmer",
+        job=Job("Farmer", None, JOB_SALARIES.get("Farmer", 0)),
         needs=_standard_needs(),
     )
     world.add_character(aisling)
@@ -1412,7 +1418,7 @@ def test_world_daily_report_includes_personal_pursuits():
         personality="Curious",
         traits=["Resourceful"],
         skills={},
-        needs=_standard_needs(),
+        needs=_standard_needs(), job=Job("Unemployed", None, 0)
     )
     world.add_character(resident)
 
@@ -1441,28 +1447,28 @@ def test_military_process_builds_chain_and_readiness():
         personality="Resolute",
         traits=[],
         skills={"Leadership": 5, "Security": 3},
-        job="Militia Commander",
+        job=Job("Militia Commander", None, JOB_SALARIES.get("Militia Commander", 0)),
     )
     captain = Character(
         name="Lysa",
         personality="Calm",
         traits=[],
         skills={"Leadership": 4, "Security": 4},
-        job="Militia Captain",
+        job=Job("Militia Captain", None, JOB_SALARIES.get("Militia Captain", 0)),
     )
     soldier = Character(
         name="Holt",
         personality="Stoic",
         traits=[],
         skills={"Security": 3},
-        job="Militia Soldier",
+        job=Job("Militia Soldier", None, JOB_SALARIES.get("Militia Soldier", 0)),
     )
     scout = Character(
         name="Risa",
         personality="Bold",
         traits=[],
         skills={"Security": 2},
-        job="Scout",
+        job=Job("Scout", None, JOB_SALARIES.get("Scout", 0)),
     )
 
     for character in (commander, captain, soldier, scout):
@@ -1491,21 +1497,21 @@ def test_enemy_raid_logs_activity_when_forced(monkeypatch):
         personality="Resolute",
         traits=[],
         skills={"Leadership": 3, "Security": 2},
-        job="Militia Commander",
+        job=Job("Militia Commander", None, JOB_SALARIES.get("Militia Commander", 0)),
     )
     captain = Character(
         name="Bryn",
         personality="Stoic",
         traits=[],
         skills={"Leadership": 2, "Security": 3},
-        job="Militia Captain",
+        job=Job("Militia Captain", None, JOB_SALARIES.get("Militia Captain", 0)),
     )
     soldier = Character(
         name="Olan",
         personality="Steady",
         traits=[],
         skills={"Security": 3},
-        job="Militia Soldier",
+        job=Job("Militia Soldier", None, JOB_SALARIES.get("Militia Soldier", 0)),
     )
 
     for character in (commander, captain, soldier):

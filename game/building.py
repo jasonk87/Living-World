@@ -179,26 +179,6 @@ class Building:
         if char_name in self.occupants:
             self.occupants.remove(char_name)
 
-    def to_dict(self):
-        """Converts the building object to a dictionary for serialization."""
-        return {
-            "structure_type": self.structure_type,
-            "display_name": self.display_name,
-            "location": self.location,
-            "size": self.size,
-            "is_operational": self.is_operational,
-            "current_progress": self.current_progress,
-            "build_time": self.build_time,
-            "map_char": self.get_current_map_char(),
-            "current_phase_name": self.get_current_phase_name(),
-            "occupants": self.occupants,
-            "tile_layout": self.get_tile_layout(),
-            "amenities": list(self.amenities),
-            "household_style": self.household_style,
-            "comfort_score": round(self.comfort_score, 1),
-            "household_comfort_state": deepcopy(self.household_comfort_state),
-        }
-
     @staticmethod
     def _normalize_tile_layout(
         layout: Optional[List[Any]],
@@ -217,6 +197,53 @@ class Building:
                 if isinstance(entry, str) and palette and entry in palette:
                     normalized_row.append(palette[entry])
                 else:
-                    normalized_row.append(entry)
+                    normalized_row.append(str(entry))
             normalized.append(normalized_row)
         return normalized
+
+    def to_dict(self):
+        """Converts the building object to a dictionary for serialization."""
+        data = {
+            "structure_type": self.structure_type,
+            "display_name": self.display_name,
+            "location": self.location,
+            "size": self.size,
+            "is_operational": self.is_operational,
+            "current_progress": self.current_progress,
+            "build_time": self.build_time,
+            "map_char": self.get_current_map_char(),
+            "current_phase_name": self.get_current_phase_name(),
+            "occupants": self.occupants,
+            "tile_layout": self.get_tile_layout(),
+            "amenities": list(self.amenities),
+            "household_style": self.household_style,
+            "comfort_score": round(self.comfort_score, 1),
+            "household_comfort_state": deepcopy(self.household_comfort_state),
+        }
+        if isinstance(self, Workplace):
+            data.update(
+                {
+                    "job_titles": self.job_titles,
+                    "employees": self.employees,
+                }
+            )
+        return data
+
+
+class Workplace(Building):
+    def __init__(
+        self,
+        job_titles: List[str],
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.job_titles = job_titles
+        self.employees: List[str] = []
+
+    def add_employee(self, char_name: str):
+        if char_name not in self.employees:
+            self.employees.append(char_name)
+
+    def remove_employee(self, char_name: str):
+        if char_name in self.employees:
+            self.employees.remove(char_name)

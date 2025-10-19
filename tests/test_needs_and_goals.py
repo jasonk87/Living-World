@@ -1,12 +1,12 @@
 import unittest
 import random
-from game.character import Character
+from game.character import Character, Job
 from game.world import World
 from game.time import Time
 from game.goal import Goal, GoalType
 from game import config
 from game.work_order import WorkOrder
-from game.data import BLUEPRINTS
+from game.data import BLUEPRINTS, JOB_SALARIES
 
 class TestNeedsAndGoals(unittest.TestCase):
     def setUp(self):
@@ -23,7 +23,7 @@ class TestNeedsAndGoals(unittest.TestCase):
 
     def test_low_esteem_generates_seek_recognition_goal(self):
         # Setup character with low esteem
-        low_esteem_char = Character(name="LowEsteem", personality="Insecure", traits=[], skills={}, job="Crafter")
+        low_esteem_char = Character(name="LowEsteem", personality="Insecure", traits=[], skills={}, job=Job("Crafter", None, JOB_SALARIES.get("Crafter", 0)))
         low_esteem_char.needs['Esteem'] = config.NEED_ESTEEM_CRITICAL_THRESHOLD - 1
         self.world.add_character(low_esteem_char)
 
@@ -43,8 +43,8 @@ class TestNeedsAndGoals(unittest.TestCase):
 
     def test_praise_interaction_boosts_esteem(self):
         # Setup characters
-        crafter = Character(name="Crafter", personality="Focused", traits=[], skills={"Crafting": 5}, job="Master Craftsman", x=0, y=0)
-        witness = Character(name="Witness", personality="Friendly", traits=[], skills={}, job="Unemployed", x=1, y=0)
+        crafter = Character(name="Crafter", personality="Focused", traits=[], skills={"Crafting": 5}, job=Job("Master Craftsman", None, JOB_SALARIES.get("Master Craftsman", 0)), x=0, y=0)
+        witness = Character(name="Witness", personality="Friendly", traits=[], skills={}, job=Job("Unemployed", None, JOB_SALARIES.get("Unemployed", 0)), x=1, y=0)
         self.world.add_character(crafter)
         self.world.add_character(witness)
 

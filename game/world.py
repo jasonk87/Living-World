@@ -3912,14 +3912,6 @@ class World:
                         propagate_to_family=True,
                         details={"case_id": case.get("case_id"), "verdict": verdict, "sentence": "fine"},
                     )
-                record = {
-                    "case_id": case.get("case_id"),
-                    "charge": case.get("charge"),
-                    "verdict": "guilty",
-                    "date": self.game_time.current_day if self.game_time else -1,
-                    "sentence": f"Fine of {fine_amount} coins.",
-                }
-                defendant.criminal_record.append(record)
             if prosecutor:
                 prosecutor.update_mood_score(6, "Secured conviction at trial")
                 prosecutor.add_memory(
@@ -4046,7 +4038,7 @@ class World:
                 )
 
     def _select_presiding_officer(self) -> Optional[str]:
-        mayor = next((char for char in self.characters if char.job == "Mayor"), None)
+        mayor = next((char for char in self.characters if char.job and char.job.title == "Mayor"), None)
         if mayor:
             return mayor.name
         best_candidate: Optional['Character'] = None
@@ -4706,7 +4698,7 @@ class World:
         candidates: List['Character'] = []
         current_mayor: Optional['Character'] = None
         for char in self.characters:
-            if char.job == "Mayor":
+            if char.job and char.job.title == "Mayor":
                 current_mayor = char
 
             is_noble_lord = hasattr(char, 'rank') and char.rank == "Noble Lord"
@@ -4719,7 +4711,7 @@ class World:
             ):
                 leadership_skill = char.skills["Leadership"].get("level", 0)
 
-            if (is_noble_lord or leadership_skill >= 3) and char.job != "Mayor":
+            if (is_noble_lord or leadership_skill >= 3) and (not char.job or char.job.title != "Mayor"):
                 candidates.append(char)
 
         if not candidates and not current_mayor:
@@ -6286,9 +6278,9 @@ class World:
 
     def _get_security_modifier(self) -> float:
         modifier = 1.0
-        if any(char.job == "Sheriff" for char in self.characters):
+        if any(char.job and char.job.title == "Sheriff" for char in self.characters):
             modifier *= 0.6
-        if any(char.job == "Deputy" for char in self.characters):
+        if any(char.job and char.job.title == "Deputy" for char in self.characters):
             modifier *= 0.75
         militia_readiness = 0.0
         if self.military_structure and isinstance(self.military_structure, dict):
@@ -6687,7 +6679,7 @@ class World:
             relevant_chars = [
                 char
                 for char in self.characters
-                if not focus_jobs or char.job in focus_jobs
+                if not focus_jobs or (char.job and char.job.title in focus_jobs)
             ]
             levels: List[int] = []
             under_target: List[str] = []
@@ -6734,7 +6726,7 @@ class World:
                 char = self.get_character_by_name(name)
                 if not char:
                     continue
-                if focus_jobs and char.job not in focus_jobs:
+                if focus_jobs and (not char.job or char.job.title not in focus_jobs):
                     continue
                 skill_level = char.skills.get(skill_name, {}).get("level", 0)
                 if skill_level >= target_level:
@@ -6785,7 +6777,7 @@ class World:
         for char in self.characters:
             if char.name in busy_instructors:
                 continue
-            if char.job not in instructor_roles:
+            if not char.job or char.job.title not in instructor_roles:
                 continue
             skill_level = char.skills.get(skill_name, {}).get("level", 0)
             if skill_level > best_score:
@@ -7238,12 +7230,12 @@ class World:
             workers = [
                 char
                 for char in self.characters
-                if char.job in definition.get("jobs", [])
+                if char.job and char.job.title in definition.get("jobs", [])
             ]
             haulers = [
                 char
                 for char in self.characters
-                if char.job in definition.get("hauler_jobs", [])
+                if char.job and char.job.title in definition.get("hauler_jobs", [])
             ]
 
             backlog_existing = self.work_shift_backlog.setdefault(key, 0.0)
@@ -8059,7 +8051,7 @@ class World:
         max_skill_benchmark = max(1.0, float(defaults.get("max_skill_benchmark", 6.0)))
 
         commander_candidates = [
-            char for char in self.characters if getattr(char, "job", None) == "Militia Commander"
+            char for char in self.characters if char.job and getattr(char.job, "title", None) == "Militia Commander"
         ]
         commander: Optional['Character'] = None
         if commander_candidates:
@@ -8073,7 +8065,7 @@ class World:
             )
 
         captains = [
-            char for char in self.characters if getattr(char, "job", None) == "Militia Captain"
+            char for char in self.characters if char.job and getattr(char.job, "title", None) == "Militia Captain"
         ]
         captains.sort(
             key=lambda c: (
@@ -8087,7 +8079,7 @@ class World:
         militia_members = [
             char
             for char in self.characters
-            if getattr(char, "job", None) in squad_roles and char is not commander
+            if char.job and getattr(char.job, "title", None) in squad_roles and char is not commander
         ]
         militia_members.sort(
             key=lambda c: (

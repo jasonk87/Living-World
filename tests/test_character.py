@@ -2,11 +2,12 @@ from collections import deque
 from unittest.mock import patch
 
 from game import config
-from game.character import Character
+from game.character import Character, Job
 from game.goal import Goal, GoalType, create_goal_from_job
 from game.building import Building
 from game.time import Time
 from game.world import World
+from game.data import JOB_SALARIES
 
 
 def _make_world_with_time() -> tuple[World, Time]:
@@ -35,14 +36,14 @@ def test_character_shifts_to_job_goal_during_work_phase(mock_random):  # noqa: A
         personality="Calm",
         traits=[],
         skills={},
-        job="Farmer",
+        job=Job("Farmer", None, JOB_SALARIES.get("Farmer", 0)),
         needs=_basic_needs(),
         current_goal_obj=Goal(GoalType.IDLE, assignee_id="Avery", originator_id="Test"),
     )
     world.add_character(worker)
 
     phase_info = config.DAY_PHASE_CONFIG[1]
-    with patch.object(worker, "get_default_goal", return_value=create_goal_from_job(worker.job, worker.name)):
+    with patch.object(worker, "get_default_goal", return_value=create_goal_from_job(worker.job.title, worker.name)):
         worker._apply_phase_behavior(world, phase_info)
 
     assert worker.current_goal.type == GoalType.PERFORM_FARMER_DUTIES
@@ -56,7 +57,7 @@ def test_character_prioritizes_meal_during_supper(mock_random):  # noqa: ARG001
         personality="Cheerful",
         traits=[],
         skills={},
-        job="Unemployed",
+        job=Job("Unemployed", None, JOB_SALARIES.get("Unemployed", 0)),
         needs=_basic_needs(),
         current_goal_obj=Goal(GoalType.WANDER, assignee_id="Bryn", originator_id="Test", priority=6),
     )
@@ -89,7 +90,7 @@ def test_character_forced_to_rest_during_night(mock_random):  # noqa: ARG001
         personality="Calm",
         traits=[],
         skills={},
-        job="Farmer",
+        job=Job("Farmer", None, JOB_SALARIES.get("Farmer", 0)),
         needs=_basic_needs(),
         current_goal_obj=Goal(GoalType.PERFORM_FARMER_DUTIES, assignee_id="Caro", originator_id="Test", priority=4),
     )
@@ -110,7 +111,7 @@ def test_decision_profile_blends_memory_relationships():
         personality="Cautious",
         traits=["Generous", "Empathetic"],
         skills={},
-        job="Builder",
+        job=Job("Builder", None, JOB_SALARIES.get("Builder", 0)),
         needs=_basic_needs(),
     )
     thinker.job_satisfaction = 0.8
@@ -156,7 +157,7 @@ def test_decision_profile_adjusts_rest_threshold(mock_random):  # noqa: ARG001
         personality="Cautious",
         traits=["Lazy"],
         skills={},
-        job="Farmer",
+        job=Job("Farmer", None, JOB_SALARIES.get("Farmer", 0)),
         needs=sleeper_needs,
         current_goal_obj=Goal(GoalType.WANDER, assignee_id="Dara", originator_id="Test"),
     )

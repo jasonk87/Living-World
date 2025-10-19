@@ -1,11 +1,12 @@
 import unittest
-from game.character import Character
+from game.character import Character, Job
+from game.data import Job
 from game.world import World
 from game.time import Time
 from game.ledger import Ledger
 from game.stockpile import Stockpile
 from game.work_order import WorkOrder # Import WorkOrder
-from game.data import BLUEPRINTS # Import BLUEPRINTS for item definition
+from game.data import BLUEPRINTS, JOB_SALARIES # Import BLUEPRINTS for item definition
 from game.goal import Goal, GoalType
 from game import config
 
@@ -19,9 +20,9 @@ class TestManagement(unittest.TestCase):
         default_traits = ["average"]
 
         self.supervisor = Character(name="Supervisor", personality=default_personality, traits=default_traits,
-                                    job="Manager", rank="Baron", x=0, y=0, skills={})
+                                    job=Job("Manager", None, JOB_SALARIES.get("Manager", 0)), rank="Baron", x=0, y=0, skills={})
         self.subordinate = Character(name="Subordinate", personality=default_personality, traits=default_traits,
-                                     job="Bookkeeper", rank="Worker", x=1, y=0, skills={})
+                                     job=Job("Bookkeeper", None, JOB_SALARIES.get("Bookkeeper", 0)), rank="Worker", x=1, y=0, skills={})
 
         self.world.add_character(self.supervisor)
         self.world.add_character(self.subordinate)
@@ -131,12 +132,12 @@ class TestManagement(unittest.TestCase):
         self.assertEqual(self.subordinate.performance_rating, "Poor") # Stays poor
 
     def test_fire_subordinate(self):
-        original_job = self.subordinate.job
+        original_job = self.subordinate.job.title if self.subordinate.job else "Unemployed"
         self.supervisor.fire_subordinate(self.subordinate.name, self.world)
 
         self.assertIsNone(self.subordinate.supervisor_name)
         self.assertNotIn(self.subordinate.name, self.supervisor.subordinates_names)
-        self.assertEqual(self.subordinate.job, "Unemployed")
+        self.assertIsNone(self.subordinate.job)
         self.assertEqual(self.subordinate.rank, "Commoner")
         self.assertEqual(self.subordinate.current_goal.type, GoalType.IDLE)
         self.assertEqual(self.subordinate.performance_rating, "Fired")
@@ -163,11 +164,11 @@ class TestManagement(unittest.TestCase):
         work_order_obj.status = "InProgress"
         work_order_obj.assigned_to = self.subordinate.name
         self.subordinate.active_work_order_id = work_order_obj.order_id
-        self.subordinate.job = "Master Craftsman" # A job that can do WOs
+        self.subordinate.job = Job("Master Craftsman", None, JOB_SALARIES.get("Master Craftsman", 0))
 
         self.supervisor.fire_subordinate(self.subordinate.name, self.world)
 
-        self.assertEqual(self.subordinate.job, "Unemployed")
+        self.assertIsNone(self.subordinate.job)
         # The subordinate's active_work_order_id should be reset by _reset_crafting_state
         self.assertIsNone(self.subordinate.active_work_order_id)
 
@@ -216,7 +217,7 @@ class TestManagement(unittest.TestCase):
         self.supervisor.modify_relationship(self.subordinate.name, -60, self.world, "Dislikes subordinate") # Negative relationship
 
         # Subordinate does okay (e.g. Satisfactory for a Woodcutter carrying some wood, but not much)
-        self.subordinate.job = "Woodcutter" # Change job for this test
+        self.subordinate.job = Job("Woodcutter", None, JOB_SALARIES.get("Woodcutter", 0))
         self.subordinate.inventory["Wood"] = 1 # Objective "Satisfactory"
 
         self.supervisor.conduct_performance_review(self.subordinate.name, self.world)
@@ -285,7 +286,7 @@ class TestManagement(unittest.TestCase):
         self.assertTrue(fired, "Ruthless supervisor with bad relationship failed to fire under dire conditions.")
         sub_char = next((c for c in self.world.characters if c.name == self.subordinate.name), None)
         if sub_char: # If still in world (current logic keeps them as Unemployed)
-            self.assertEqual(sub_char.job, "Unemployed")
+            self.assertIsNone(sub_char.job)
 
 
 if __name__ == '__main__':

@@ -112,6 +112,8 @@ class GoalType(Enum):
     PERFORM_SAWYER_DUTIES = auto()
     PERFORM_CARPENTER_DUTIES = auto()
 
+    GO_TO_WORK = auto()
+
 
 class GoalStatus(Enum):
     PENDING = auto()    # Newly created, not yet started

@@ -368,8 +368,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (typeof character.energy === 'number' && character.energy < 40) statusFlags.push('Fatigued');
         if (typeof character.thirst === 'number' && character.thirst < 40) statusFlags.push('Thirsty');
         const statusSignature = statusFlags.join(',');
+        const jobTitle = (character.job && character.job.title) || 'Unassigned';
         const signature = [
-            character.job || 'Unassigned',
+            jobTitle,
             goal,
             character.x,
             character.y,
@@ -384,7 +385,7 @@ document.addEventListener('DOMContentLoaded', () => {
             card.dataset.signature = signature;
             card.innerHTML = `
                 <strong>${character.name}</strong>
-                <small>${character.job || 'Unassigned'} • Goal: ${goal}</small>
+                <small>${jobTitle} • Goal: ${goal}</small>
                 <small>Pos: (${character.x}, ${character.y})${loadText}</small>
                 ${statusLine}
             `;
@@ -1879,6 +1880,7 @@ document.addEventListener('DOMContentLoaded', () => {
             ? `${netWorthValue}${character.wealth_status ? ` (${character.wealth_status})` : ''}`
             : 'Unknown';
         const purseText = formatCoins(character.money) || '—';
+        const jobTitle = character.job && character.job.title ? character.job.title : 'Unassigned';
         const careerStage = character.career_stage || 'Apprentice';
         const tenureValue = typeof character.profession_tenure === 'number' ? character.profession_tenure : null;
         const tenureText = tenureValue !== null ? `${tenureValue} day${tenureValue === 1 ? '' : 's'}` : '—';
@@ -1946,7 +1948,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         followOverlayBody.innerHTML = `
             <p><strong>${character.name}</strong>${rankTitle ? ` • ${rankTitle}` : ''}</p>
-            <p>${character.job || 'Unassigned'} • Goal: ${goalSummary}</p>
+            <p>${jobTitle} • Goal: ${goalSummary}</p>
             <p>Stage: ${careerStage} • Tenure ${tenureText} • Satisfaction ${satisfactionText}${focusSuffix}</p>
             <p>Coords: (${character.x}, ${character.y}) • Age ${ageText} • ${originText} • ${citizenshipText}</p>
             <p>Health: ${sicknessText}, ${injuryText}</p>
@@ -2254,8 +2256,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const rankLabel = character.rank ? ` • ${character.rank}` : '';
         const netWorthLabel = formatCoins(character.net_worth);
         const purseLabel = formatCoins(character.money);
+        const jobTitle = character.job && character.job.title ? character.job.title : 'Unassigned';
         profileSection.innerHTML += `
-            <p><strong>Role:</strong> ${character.job || 'Unassigned'}${rankLabel}</p>
+            <p><strong>Role:</strong> ${jobTitle}${rankLabel}</p>
             <p><strong>Age:</strong> ${ageLabel} • <strong>Origin:</strong> ${originLabel} • <strong>Citizenship:</strong> ${citizenshipLabel}</p>
             <p><strong>Wealth:</strong> ${netWorthLabel ? netWorthLabel : 'Unknown'}${character.wealth_status ? ` (${character.wealth_status})` : ''} • <strong>Purse:</strong> ${purseLabel || '—'}</p>
         `;
@@ -2311,43 +2314,6 @@ document.addEventListener('DOMContentLoaded', () => {
             healthSection.appendChild(list);
         }
 
-        const careerSection = document.createElement('section');
-        careerSection.innerHTML = '<h4>Career</h4>';
-        const stageLabel = character.career_stage || 'Apprentice';
-        const tenureDisplay = typeof character.profession_tenure === 'number'
-            ? `${character.profession_tenure} day${character.profession_tenure === 1 ? '' : 's'}`
-            : '—';
-        const satisfactionDisplay = formatSatisfaction(character.job_satisfaction);
-        const focusDisplay = character.profession_focus || 'Generalist';
-        careerSection.innerHTML += `
-            <p><strong>Stage:</strong> ${stageLabel} • <strong>Tenure:</strong> ${tenureDisplay}</p>
-            <p><strong>Satisfaction:</strong> ${satisfactionDisplay} • <strong>Focus:</strong> ${focusDisplay}</p>
-        `;
-        const careerHistory = Array.isArray(character.profession_history) ? character.profession_history : [];
-        if (careerHistory.length) {
-            const list = document.createElement('ul');
-            list.classList.add('mini-list', 'compact', 'subtle');
-            careerHistory.slice(-5).reverse().forEach(entry => {
-                const li = document.createElement('li');
-                const jobLabel = entry.job || 'Unassigned';
-                const stage = entry.stage || '—';
-                const tenure = typeof entry.tenure === 'number' ? `${entry.tenure}d` : '—';
-                const startDay = typeof entry.start_day === 'number' ? `Day ${entry.start_day}` : null;
-                const endDay = typeof entry.end_day === 'number' ? `Day ${entry.end_day}` : null;
-                const period = entry.status === 'current'
-                    ? (startDay ? `${startDay} → present` : 'current post')
-                    : (startDay && endDay ? `${startDay} → ${endDay}` : endDay ? `ended ${endDay}` : 'concluded');
-                const statusTag = entry.status === 'current' ? ' • current' : '';
-                li.innerHTML = `<strong>${jobLabel}</strong> • ${stage} • ${tenure}${period ? ` • ${period}` : ''}${statusTag}`;
-                list.appendChild(li);
-            });
-            careerSection.appendChild(list);
-        } else {
-            const empty = document.createElement('p');
-            empty.classList.add('muted');
-            empty.textContent = 'No recorded career history yet.';
-            careerSection.appendChild(empty);
-        }
 
         const needsSection = document.createElement('section');
         needsSection.innerHTML = '<h4>Needs</h4>';
@@ -2377,51 +2343,7 @@ document.addEventListener('DOMContentLoaded', () => {
             inventorySection.appendChild(empty);
         }
 
-        const venturesSection = document.createElement('section');
-        venturesSection.innerHTML = '<h4>Ventures</h4>';
-        const ventureLines = [];
-        (character.businesses_owned || []).forEach(name => {
-            ventureLines.push(`Owner • ${name}`);
-        });
-        Object.entries(character.business_roles || {}).forEach(([businessId, role]) => {
-            ventureLines.push(`${role.replace(/_/g, ' ')} • ${businessId}`);
-        });
-        if (ventureLines.length) {
-            const list = document.createElement('ul');
-            list.classList.add('mini-list');
-            ventureLines.forEach(line => {
-                const li = document.createElement('li');
-                li.textContent = line;
-                list.appendChild(li);
-            });
-            venturesSection.appendChild(list);
-        } else {
-            const empty = document.createElement('p');
-            empty.textContent = 'No current business roles.';
-            venturesSection.appendChild(empty);
-        }
-
-        const wealthHistorySection = document.createElement('section');
-        wealthHistorySection.innerHTML = '<h4>Wealth Trend</h4>';
-        const history = Array.isArray(character.wealth_history) ? character.wealth_history : [];
-        if (history.length) {
-            const list = document.createElement('ul');
-            list.classList.add('mini-list', 'compact', 'subtle');
-            history.slice(-6).reverse().forEach(entry => {
-                const li = document.createElement('li');
-                const day = typeof entry.day === 'number' ? entry.day : '—';
-                const worth = formatCoins(entry.net_worth);
-                li.innerHTML = `<strong>Day ${day}</strong>: ${worth || '—'}`;
-                list.appendChild(li);
-            });
-            wealthHistorySection.appendChild(list);
-        } else {
-            const empty = document.createElement('p');
-            empty.textContent = 'No wealth records logged yet.';
-            wealthHistorySection.appendChild(empty);
-        }
-
-        wrapper.append(profileSection, healthSection, careerSection, needsSection, housingSection, skillsSection, inventorySection, venturesSection, wealthHistorySection);
+        wrapper.append(profileSection, healthSection, needsSection, housingSection, skillsSection, inventorySection);
         return wrapper;
     }
 
@@ -2784,17 +2706,118 @@ function buildGoalsContent(character) {
     return wrapper;
 }
 
+function buildCareerContent(character) {
+    const wrapper = document.createElement('div');
+
+    const careerSection = document.createElement('section');
+    careerSection.innerHTML = '<h4>Profession</h4>';
+
+    const jobTitle = character.job && character.job.title ? character.job.title : 'Unemployed';
+    const workplace = character.job && character.job.workplace ? character.job.workplace : 'N/A';
+    const stageLabel = character.career_stage || 'Apprentice';
+    const tenureDisplay = typeof character.profession_tenure === 'number'
+        ? `${character.profession_tenure} day${character.profession_tenure === 1 ? '' : 's'}`
+        : '—';
+    const satisfactionDisplay = formatSatisfaction(character.job_satisfaction);
+    const focusDisplay = character.profession_focus || 'Generalist';
+
+    careerSection.innerHTML += `
+        <p><strong>Title:</strong> ${jobTitle} @ ${workplace}</p>
+        <p><strong>Stage:</strong> ${stageLabel} • <strong>Tenure:</strong> ${tenureDisplay}</p>
+        <p><strong>Satisfaction:</strong> ${satisfactionDisplay} • <strong>Focus:</strong> ${focusDisplay}</p>
+    `;
+    const careerHistory = Array.isArray(character.profession_history) ? character.profession_history : [];
+    if (careerHistory.length) {
+        const list = document.createElement('ul');
+        list.classList.add('mini-list', 'compact', 'subtle');
+        careerHistory.slice(-5).reverse().forEach(entry => {
+            const li = document.createElement('li');
+            const jobLabel = entry.job || 'Unassigned';
+            const stage = entry.stage || '—';
+            const tenure = typeof entry.tenure === 'number' ? `${entry.tenure}d` : '—';
+            const startDay = typeof entry.start_day === 'number' ? `Day ${entry.start_day}` : null;
+            const endDay = typeof entry.end_day === 'number' ? `Day ${entry.end_day}` : null;
+            const period = entry.status === 'current'
+                ? (startDay ? `${startDay} → present` : 'current post')
+                : (startDay && endDay ? `${startDay} → ${endDay}` : endDay ? `ended ${endDay}` : 'concluded');
+            const statusTag = entry.status === 'current' ? ' • current' : '';
+            li.innerHTML = `<strong>${jobLabel}</strong> • ${stage} • ${tenure}${period ? ` • ${period}` : ''}${statusTag}`;
+            list.appendChild(li);
+        });
+        careerSection.appendChild(list);
+    } else {
+        const empty = document.createElement('p');
+        empty.classList.add('muted');
+        empty.textContent = 'No recorded career history yet.';
+        careerSection.appendChild(empty);
+    }
+
+    const wealthSection = document.createElement('section');
+    wealthSection.innerHTML = '<h4>Wealth & Ventures</h4>';
+    const netWorthLabel = formatCoins(character.net_worth);
+    const purseLabel = formatCoins(character.money);
+    wealthSection.innerHTML += `
+        <p><strong>Net Worth:</strong> ${netWorthLabel ? netWorthLabel : 'Unknown'}${character.wealth_status ? ` (${character.wealth_status})` : ''}</p>
+        <p><strong>Purse:</strong> ${purseLabel || '—'}</p>
+    `;
+     const venturesSection = document.createElement('section');
+    const ventureLines = [];
+    (character.businesses_owned || []).forEach(name => {
+        ventureLines.push(`Owner • ${name}`);
+    });
+    Object.entries(character.business_roles || {}).forEach(([businessId, role]) => {
+        ventureLines.push(`${role.replace(/_/g, ' ')} • ${businessId}`);
+    });
+    if (ventureLines.length) {
+        const list = document.createElement('ul');
+        list.classList.add('mini-list');
+        ventureLines.forEach(line => {
+            const li = document.createElement('li');
+            li.textContent = line;
+            list.appendChild(li);
+        });
+        venturesSection.appendChild(list);
+    } else {
+        const empty = document.createElement('p');
+        empty.textContent = 'No current business roles.';
+        venturesSection.appendChild(empty);
+    }
+     const wealthHistorySection = document.createElement('section');
+    wealthHistorySection.innerHTML = '<h5>Wealth Trend</h5>';
+    const history = Array.isArray(character.wealth_history) ? character.wealth_history : [];
+    if (history.length) {
+        const list = document.createElement('ul');
+        list.classList.add('mini-list', 'compact', 'subtle');
+        history.slice(-6).reverse().forEach(entry => {
+            const li = document.createElement('li');
+            const day = typeof entry.day === 'number' ? entry.day : '—';
+            const worth = formatCoins(entry.net_worth);
+            li.innerHTML = `<strong>Day ${day}</strong>: ${worth || '—'}`;
+            list.appendChild(li);
+        });
+        wealthHistorySection.appendChild(list);
+    } else {
+        const empty = document.createElement('p');
+        empty.textContent = 'No wealth records logged yet.';
+        wealthHistorySection.appendChild(empty);
+    }
+
+    wrapper.append(careerSection, wealthSection, venturesSection, wealthHistorySection);
+    return wrapper;
+}
+
     function buildCharacterDetails(character) {
         const wrapper = document.createElement('section');
         wrapper.classList.add('detail-tabs');
 
         const header = document.createElement('header');
+        const jobTitle = character.job && character.job.title ? character.job.title : 'Unemployed';
         const stageLabel = character.career_stage ? ` • ${character.career_stage}` : '';
         const satisfactionLabel = formatSatisfaction(character.job_satisfaction);
         const reputationLabel = character.reputation ?? '—';
         header.innerHTML = `
             <h3>${character.name}</h3>
-            <p>${character.job || 'Unassigned'}${stageLabel} • Reputation ${reputationLabel} • Satisfaction ${satisfactionLabel}</p>
+            <p>${jobTitle}${stageLabel} • Reputation ${reputationLabel} • Satisfaction ${satisfactionLabel}</p>
         `;
 
         const followButton = document.createElement('button');
@@ -2829,9 +2852,10 @@ function buildGoalsContent(character) {
 
         const tabs = [
             { label: 'Overview', builder: buildOverviewContent },
+            { label: 'Career', builder: buildCareerContent },
             { label: 'Social', builder: buildSocialContent },
-        { label: 'Beliefs', builder: buildPersonalityContent },
-        { label: 'Goals', builder: buildGoalsContent },
+            { label: 'Beliefs', builder: buildPersonalityContent },
+            { label: 'Goals', builder: buildGoalsContent },
             { label: 'Pursuits', builder: buildPursuitsContent },
             { label: 'Activity', builder: buildActivityContent },
             { label: 'Criminal Record', builder: buildCriminalRecordContent },

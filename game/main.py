@@ -30,6 +30,7 @@ import webbrowser
 import signal
 
 # --- Global Game State Variables ---
+httpd = None
 game_world: Optional[World] = None
 game_time_obj: Optional[Time] = None
 simulation_running = True # Controls the simulation loop
@@ -282,7 +283,7 @@ def simulation_thread_func():
 
 
 # --- HTTP Server Logic ---
-PORT = 8888
+PORT = 5000
 
 
 def trigger_initial_ui_fetch(port: int, delay: float = 0.5, attempts: int = 5) -> None:
@@ -306,6 +307,16 @@ def trigger_initial_ui_fetch(port: int, delay: float = 0.5, attempts: int = 5) -
             print(f"Unable to launch browser automatically for {url}: {exc}")
 
     threading.Thread(target=_fetch, daemon=True).start()
+
+def signal_handler(sig, frame):
+    """Gracefully shut down the server and simulation."""
+    global simulation_running, httpd
+    print(f"\nSignal {sig} received. Shutting down...")
+    simulation_running = False
+    if httpd:
+        # Shutdown httpd in a separate thread to avoid deadlocks
+        threading.Thread(target=httpd.shutdown).start()
+
 class GameDataHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         global game_world, game_time_obj, game_paused, simulation_running, SIMULATION_SPEED_MULTIPLIER # Correct placement
@@ -325,18 +336,51 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
 
                 characters_repr = []
                 if hasattr(game_world, 'characters'):
-                    all_criminal_records = []
                     for char in game_world.characters:
-                        if hasattr(char, 'criminal_record') and char.criminal_record:
-                            for record in char.criminal_record:
-                                all_criminal_records.append({
-                                    "character": char.name,
-                                    **record
-                                })
                         goal_payload = None
                         if hasattr(char.current_goal, 'to_dict'):
                             goal_payload = char.current_goal.to_dict()
-                        characters_repr.append(char.to_dict(game_world))
+                        elif char.current_goal:
+                            goal_payload = str(char.current_goal)
+                        characters_repr.append({
+                            "name": char.name,
+                            "x": char.x,
+                            "y": char.y,
+                            "job": char.job,
+                            "rank": getattr(char, 'rank', None),
+                            "goal": goal_payload,
+                            "is_sick": getattr(char, 'is_sick', False), # Add health status
+                            "is_injured": getattr(char, 'is_injured', False),
+                            "inventory_load": char.get_inventory_load(),
+                            "resting_at_home": getattr(char, 'resting_at_home', False),
+                            "home_location": getattr(char, 'home_location', None),
+                            "energy": getattr(char, 'needs', {}).get('Energy'),
+                            "thirst": getattr(char, 'needs', {}).get('Thirst'),
+                            "money": getattr(char, 'money', None),
+                            "net_worth": getattr(char, 'net_worth', None),
+                            "wealth_status": getattr(char, 'wealth_status', None),
+                            "businesses_owned": list(getattr(char, 'businesses_owned', [])),
+                            "business_roles": dict(getattr(char, 'business_roles', {})),
+                            "age": getattr(char, 'age_years', None),
+                            "origin": getattr(char, 'origin', None),
+                            "citizenship": getattr(char, 'citizenship_status', 'Resident'),
+                            "family_members": list(getattr(char, 'family_members', [])),
+                            "romantic_partners": char.get_romantic_partners() if hasattr(char, 'get_romantic_partners') else list(getattr(char, 'romantic_partners', [])),
+                            "active_romances": char.get_active_romances_snapshot() if hasattr(char, 'get_active_romances_snapshot') else {},
+                            "ex_partners": sorted(list(getattr(char, 'ex_partners', []))),
+                            "children": char.get_children() if hasattr(char, 'get_children') else sorted(list(getattr(char, 'children_names', []))),
+                            "parents": char.get_parents() if hasattr(char, 'get_parents') else sorted(list(getattr(char, 'parent_names', []))),
+                            "marriage_history": deepcopy(getattr(char, 'marriage_history', [])),
+                            "life_highlights": char.get_life_highlights(limit=3) if hasattr(char, 'get_life_highlights') else [],
+                            "career_stage": getattr(char, 'career_stage', None),
+                            "job_satisfaction": getattr(char, 'job_satisfaction', None),
+                            "profession_focus": getattr(char, 'professional_focus', None),
+                            "profession_tenure": getattr(char, 'current_profession_tenure', None),
+                            "health_profile": char.get_health_snapshot() if hasattr(char, 'get_health_snapshot') else {},
+                            "supervisor_name": getattr(char, 'supervisor_name', None),
+                            "supervisor_oversight": getattr(char, 'supervisor_oversight', None),
+                            "leadership_oversight": getattr(char, 'leadership_oversight_score', None),
+                        })
 
                 event_log_repr = game_world.event_log[-20:] if game_world else []
 
@@ -487,7 +531,67 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
 
             character = game_world.get_character_by_name(char_name)
             if character:
-                char_data = character.to_dict(game_world)
+                goal_payload = None
+                if hasattr(character.current_goal, 'to_dict'):
+                    goal_payload = character.current_goal.to_dict()
+                elif character.current_goal:
+                    goal_payload = str(character.current_goal)
+                char_data = {
+                    "name": character.name,
+                    "job": character.job,
+                    "rank": character.rank,
+                    "x": character.x,
+                    "y": character.y,
+                    "current_goal": goal_payload,
+                    "inventory": character.inventory,
+                    "skills": {skill_name: data["level"] for skill_name, data in character.skills.items()}, # Simplified skills view
+                    "needs": character.needs,
+                    "energy": character.needs.get('Energy'),
+                    "thirst": character.needs.get('Thirst'),
+                    "resting_at_home": getattr(character, 'resting_at_home', False),
+                    "home_location": getattr(character, 'home_location', None),
+                    "is_sick": getattr(character, 'is_sick', False),
+                    "sickness_severity": getattr(character, 'sickness_severity', 0),
+                    "is_injured": getattr(character, 'is_injured', False),
+                    "injury_severity": getattr(character, 'injury_severity', 0),
+                    "appointed_by": getattr(character, 'appointed_by', None),
+                    "subordinates_names": character.subordinates_names,
+                    "memory": character.memory[-10:], # Last 10 memories
+                    "personality": character.personality,
+                    "traits": character.traits,
+                    "money": getattr(character, 'money', None),
+                    "net_worth": getattr(character, 'net_worth', None),
+                    "wealth_status": getattr(character, 'wealth_status', None),
+                    "businesses_owned": list(getattr(character, 'businesses_owned', [])),
+                    "business_roles": dict(getattr(character, 'business_roles', {})),
+                    "wealth_history": [
+                        {"day": entry[0], "net_worth": entry[1]}
+                        for entry in getattr(character, 'wealth_history', [])
+                    ],
+                    "career_stage": getattr(character, 'career_stage', None),
+                    "job_satisfaction": getattr(character, 'job_satisfaction', None),
+                    "profession_focus": getattr(character, 'professional_focus', None),
+                    "profession_tenure": getattr(character, 'current_profession_tenure', None),
+                    "profession_history": character.export_profession_history(limit=10),
+                    "health_profile": character.get_health_snapshot() if hasattr(character, 'get_health_snapshot') else {},
+                    "performance_rating": getattr(character, 'performance_rating', "N/A"),
+                    "warning_count": getattr(character, 'warning_count', 0),
+                    "known_characters": getattr(character, 'known_characters', []),
+                    "relationships": getattr(character, 'relationships', {}),
+                    "opinions": getattr(character, 'opinions', {}), # Added opinions
+                    "dialogue_history": getattr(character, 'dialogue_history', [])[-10:], # Last 10 dialogue entries
+                    "life_history": character.export_life_history(limit=20) if hasattr(character, 'export_life_history') else [],
+                    "life_highlights": character.get_life_highlights(limit=6) if hasattr(character, 'get_life_highlights') else [],
+                    "personal_pursuits": character.export_personal_pursuits() if hasattr(character, 'export_personal_pursuits') else [],
+                    "personal_pursuit_log": character.export_personal_pursuit_log(limit=12) if hasattr(character, 'export_personal_pursuit_log') else [],
+                    "active_personal_project": getattr(character, 'active_personal_project', None),
+                    "family_profile": game_world.get_family_profile_for_character(character.name) if hasattr(game_world, 'get_family_profile_for_character') else None,
+                    "family_members": list(getattr(character, 'family_members', [])),
+                    "age": getattr(character, 'age_years', None),
+                    "origin": getattr(character, 'origin', None),
+                    "citizenship": getattr(character, 'citizenship_status', 'Resident'),
+                    "reputation": getattr(character, 'reputation_score', None),
+                }
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
                 self.send_header('Access-Control-Allow-Origin', '*')
@@ -610,51 +714,34 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
             super().do_GET()
 
 # --- Main Execution ---
+import sys
+
 def run_server(port: int = PORT) -> None:
     """Start the simulation loop and HTTP server on the requested port."""
+    global httpd
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
 
     initialize_game_world()
 
     sim_thread = threading.Thread(target=simulation_thread_func, daemon=True)
     sim_thread.start()
 
-    httpd = None
     ui_dir = os.path.join(project_root, "ui")
 
     class Handler(GameDataHandler):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, directory=ui_dir, **kwargs)
 
-    try:
-        socketserver.TCPServer.allow_reuse_address = True
-        httpd = socketserver.TCPServer(("", port), Handler)
-
-        def shutdown_handler(signum, frame):
-            print(f"\nReceived signal {signum}. Shutting down...")
-            global simulation_running
-            simulation_running = False
-            if httpd:
-                # Shutdown must be from a different thread
-                threading.Thread(target=httpd.shutdown).start()
-
-        signal.signal(signal.SIGTERM, shutdown_handler)
-        signal.signal(signal.SIGINT, shutdown_handler)
-
-
+    with socketserver.TCPServer(("", port), Handler) as httpd_instance:
+        httpd = httpd_instance
         print(f"Serving HTTP on port {port} from '{ui_dir}'...")
         print(f"Game simulation running in background. Access UI at http://localhost:{port}/")
         print("Press Ctrl+C to stop server and simulation.")
         trigger_initial_ui_fetch(port)
         httpd.serve_forever()
-    finally:
-        global simulation_running
-        simulation_running = False # Signal simulation thread to stop
-        if httpd:
-            httpd.server_close() # Release the port
-        if sim_thread.is_alive():
-            sim_thread.join() # Wait for simulation thread to finish
 
-    print("Exited gracefully.")
+    print("Server has shut down.")
 
 
 if __name__ == "__main__":

@@ -1,12 +1,12 @@
 import unittest
 import random
-from game.character import Character
+from game.character import Character, Job
 from game.world import World
 from game.time import Time
 from game.stockpile import Stockpile
 from game.ledger import Ledger
 from game.work_order import WorkOrder # For potential crafting tests
-from game.data import JOB_TASK_DEFINITIONS, BLUEPRINTS
+from game.data import JOB_TASK_DEFINITIONS, BLUEPRINTS, JOB_SALARIES
 from game.goal import Goal, GoalType
 from game import config
 
@@ -59,7 +59,7 @@ class TestCharacterTaskPerformance(unittest.TestCase):
             # Add other task types here if needed (e.g. crafting)
 
     def test_lazy_generic_task_slower_progress(self):
-        lazy_char = Character(name="LazyTest", personality="slacker", traits=["Lazy"], skills={}, job="Woodcutter")
+        lazy_char = Character(name="LazyTest", personality="slacker", traits=["Lazy"], skills={}, job=Job("Woodcutter", None, JOB_SALARIES.get("Woodcutter", 0)))
         lazy_char.equip_tool("Stone Axe") # Assume Stone Axe blueprint exists and is an Axe
         self.world.add_character(lazy_char)
 
@@ -97,7 +97,7 @@ class TestCharacterTaskPerformance(unittest.TestCase):
         random.random = original_random # Restore random
 
     def test_diligent_generic_task_faster_progress(self):
-        diligent_char = Character(name="DiligentTest", personality="worker", traits=["Diligent"], skills={}, job="Woodcutter")
+        diligent_char = Character(name="DiligentTest", personality="worker", traits=["Diligent"], skills={}, job=Job("Woodcutter", None, JOB_SALARIES.get("Woodcutter", 0)))
         diligent_char.equip_tool("Stone Axe")
         self.world.add_character(diligent_char)
 
@@ -141,7 +141,7 @@ class TestCharacterTaskPerformance(unittest.TestCase):
         random.random = original_random
 
     def test_focused_overrides_lazy_generic_task(self):
-        focused_lazy_char = Character(name="FocusLazy", personality="focused", traits=["Focused", "Lazy"], skills={}, job="Woodcutter")
+        focused_lazy_char = Character(name="FocusLazy", personality="focused", traits=["Focused", "Lazy"], skills={}, job=Job("Woodcutter", None, JOB_SALARIES.get("Woodcutter", 0)))
         focused_lazy_char.equip_tool("Stone Axe")
         self.world.add_character(focused_lazy_char)
 
@@ -166,7 +166,7 @@ class TestCharacterTaskPerformance(unittest.TestCase):
         random.random = original_random
 
     def test_strong_trait_extra_yield_generic_task(self):
-        strong_char = Character(name="StrongTest", personality="strong", traits=["Strong"], skills={}, job="Woodcutter")
+        strong_char = Character(name="StrongTest", personality="strong", traits=["Strong"], skills={}, job=Job("Woodcutter", None, JOB_SALARIES.get("Woodcutter", 0)))
         strong_char.equip_tool("Stone Axe")
         self.world.add_character(strong_char)
 
@@ -185,7 +185,7 @@ class TestCharacterTaskPerformance(unittest.TestCase):
         random.random = original_random
 
     def test_careless_trait_extra_tool_wear_generic_task(self):
-        careless_char = Character(name="CarelessTest", personality="clumsy", traits=["Careless"], skills={}, job="Woodcutter")
+        careless_char = Character(name="CarelessTest", personality="clumsy", traits=["Careless"], skills={}, job=Job("Woodcutter", None, JOB_SALARIES.get("Woodcutter", 0)))
         self.world.add_character(careless_char)
 
         # Equip a tool with known durability
@@ -287,7 +287,7 @@ class TestCharacterTaskPerformance(unittest.TestCase):
         stockpile_for_char.inventory = {"Logs": 10, "Stones": 5}
         self.world.ledger.update_stockpile_record(target_stockpile_name, stockpile_for_char.inventory.copy(), self.time.current_day)
 
-        careless_bookie = Character(name="CarelessBookie", personality="distracted", traits=["Careless"], skills={}, job="Bookkeeper")
+        careless_bookie = Character(name="CarelessBookie", personality="distracted", traits=["Careless"], skills={}, job=Job("Bookkeeper", None, JOB_SALARIES.get("Bookkeeper", 0)))
         self.world.add_character(careless_bookie)
         careless_bookie.x, careless_bookie.y = stockpile_for_char.rect[0], stockpile_for_char.rect[1]
 

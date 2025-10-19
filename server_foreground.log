@@ -1,0 +1,24 @@
+127.0.0.1 - - [19/Oct/2025 18:32:57] "GET / HTTP/1.1" 200 -
+Exception in thread Thread-1 (simulation_thread_func):
+Traceback (most recent call last):
+  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/threading.py", line 1075, in _bootstrap_inner
+    self.run()
+  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/threading.py", line 1012, in run
+    self._target(*self._args, **self._kwargs)
+  File "/app/game/main.py", line 261, in simulation_thread_func
+    tick_simulation()
+  File "/app/game/main.py", line 180, in tick_simulation
+    game_world.process_daily_economy()
+  File "/app/game/world.py", line 7548, in process_daily_economy
+    profession_events = self._update_professions(report)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/game/world.py", line 6213, in _update_professions
+    updates = character.evaluate_profession_daily(self)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/game/character.py", line 2790, in evaluate_profession_daily
+    track = self._get_profession_track()
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/game/character.py", line 2557, in _get_profession_track
+    lowered = job_name.lower()
+              ^^^^^^^^^^^^^^
+AttributeError: 'builtin_function_or_method' object has no attribute 'lower'
