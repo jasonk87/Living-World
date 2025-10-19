@@ -67,7 +67,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const lawCodeList = document.getElementById('law-code-list');
     const lawPetitionList = document.getElementById('law-petition-list');
     const lawInvestigationList = document.getElementById('law-investigation-list');
-    const criminalRecordList = document.getElementById('criminal-record-list');
     const leadershipOversightList = document.getElementById('leadership-oversight-list');
     const militaryChainList = document.getElementById('military-chain-list');
     const militarySquadList = document.getElementById('military-squad-list');
@@ -681,20 +680,6 @@ document.addEventListener('DOMContentLoaded', () => {
                         const status = interview.status ? interview.status.replace(/_/g, ' ') : 'Pending';
                         const assigned = interview.assigned_to ? ` • ${interview.assigned_to}` : '';
                         return `<li><strong>${interview.witness || 'Witness'}</strong><small>Case ${interview.case_id} • ${status}${assigned}</small></li>`;
-                    })
-                    .join('');
-            }
-        }
-
-        if (criminalRecordList) {
-            const records = Array.isArray(gameState.criminal_records) ? gameState.criminal_records : [];
-            if (!records.length) {
-                criminalRecordList.innerHTML = '<li class="empty">No criminal records on file.</li>';
-            } else {
-                criminalRecordList.innerHTML = records
-                    .map(record => {
-                        const sentence = record.sentence_type === 'jail' ? `${record.sentence_duration} days` : `${record.fine_amount}c fine`;
-                        return `<li><strong>${record.character}</strong><small>${record.crime} • ${sentence}</small></li>`;
                     })
                     .join('');
             }
@@ -2670,35 +2655,6 @@ document.addEventListener('DOMContentLoaded', () => {
         return wrapper;
     }
 
-    function buildCriminalRecordContent(character) {
-        const wrapper = document.createElement('div');
-        const records = Array.isArray(character.criminal_record) ? character.criminal_record : [];
-
-        if (!records.length) {
-            wrapper.innerHTML = '<p class="muted">No criminal record on file.</p>';
-            return wrapper;
-        }
-
-        const list = document.createElement('ul');
-        list.classList.add('mini-list');
-
-        records.forEach(record => {
-            const li = document.createElement('li');
-            const sentence = record.sentence_type === 'jail'
-                ? `${record.sentence_duration} days`
-                : `${record.fine_amount}c fine`;
-            const status = record.status ? ` • ${record.status}` : '';
-            li.innerHTML = `
-                <strong>${record.crime}</strong>
-                <div class="meta">Day ${record.day_of_crime} • ${sentence}${status}</div>
-            `;
-            list.appendChild(li);
-        });
-
-        wrapper.appendChild(list);
-        return wrapper;
-    }
-
     function buildCharacterDetails(character) {
         const wrapper = document.createElement('section');
         wrapper.classList.add('detail-tabs');
@@ -2747,7 +2703,6 @@ document.addEventListener('DOMContentLoaded', () => {
             { label: 'Social', builder: buildSocialContent },
             { label: 'Pursuits', builder: buildPursuitsContent },
             { label: 'Activity', builder: buildActivityContent },
-            { label: 'Criminal Record', builder: buildCriminalRecordContent },
         ];
 
         tabs.forEach((tabConfig, index) => {

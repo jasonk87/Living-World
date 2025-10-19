@@ -27,6 +27,7 @@ import threading
 import time as py_time # Renamed to avoid conflict with game.time.Time
 import urllib.request
 import webbrowser
+import signal
 
 # --- Global Game State Variables ---
 game_world: Optional[World] = None
@@ -443,17 +444,6 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "families": game_world.get_family_snapshot() if hasattr(game_world, 'get_family_snapshot') else {},
                     "governance": game_world.get_governance_snapshot() if hasattr(game_world, 'get_governance_snapshot') else {},
                     "personal_pursuit_events": getattr(game_world, 'latest_personal_pursuit_events', []),
-                    "criminal_records": [
-                        {
-                            "character": char.name,
-                            "crime": record["crime"],
-                            "sentence": record["sentence"],
-                            "status": record["status"],
-                            "day_of_crime": record["day_of_crime"],
-                        }
-                        for char in game_world.characters if char.criminal_record
-                        for record in char.criminal_record
-                    ],
                 }
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
@@ -730,19 +720,29 @@ def run_server(port: int = PORT) -> None:
 
     try:
         socketserver.TCPServer.allow_reuse_address = True
-        with socketserver.TCPServer(("", port), Handler) as httpd:
-            print(f"Serving HTTP on port {port} from '{ui_dir}'...")
-            print(f"Game simulation running in background. Access UI at http://localhost:{port}/")
-            print("Press Ctrl+C to stop server and simulation.")
-            trigger_initial_ui_fetch(port)
-            httpd.serve_forever()
-    except KeyboardInterrupt:
-        print("\nCtrl+C received. Shutting down server and simulation...")
+        httpd = socketserver.TCPServer(("", port), Handler)
+
+        def shutdown_handler(signum, frame):
+            print(f"\nReceived signal {signum}. Shutting down...")
+            global simulation_running
+            simulation_running = False
+            if httpd:
+                # Shutdown must be from a different thread
+                threading.Thread(target=httpd.shutdown).start()
+
+        signal.signal(signal.SIGTERM, shutdown_handler)
+        signal.signal(signal.SIGINT, shutdown_handler)
+
+
+        print(f"Serving HTTP on port {port} from '{ui_dir}'...")
+        print(f"Game simulation running in background. Access UI at http://localhost:{port}/")
+        print("Press Ctrl+C to stop server and simulation.")
+        trigger_initial_ui_fetch(port)
+        httpd.serve_forever()
     finally:
         global simulation_running
         simulation_running = False # Signal simulation thread to stop
         if httpd:
-            httpd.shutdown() # Stop the HTTP server
             httpd.server_close() # Release the port
         if sim_thread.is_alive():
             sim_thread.join() # Wait for simulation thread to finish
