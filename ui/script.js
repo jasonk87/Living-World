@@ -1729,8 +1729,15 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function handleCharacterSelection(name) {
-        selectedCharacterName = name;
-        setFollowedCharacter(name, { autoCenter: true });
+        if (followedCharacterName === name) {
+            // If the character is already being followed, unfollow them.
+            setFollowedCharacter(null);
+            selectedCharacterName = name; // Keep them selected, just stop following
+        } else {
+            // Otherwise, select and follow the new character.
+            selectedCharacterName = name;
+            setFollowedCharacter(name, { autoCenter: true });
+        }
         openPanel('info-panel');
         openPanel('characters-panel');
         loadCharacterDetails(name, { worldPanel: true, characterPanel: true });
@@ -2655,6 +2662,31 @@ document.addEventListener('DOMContentLoaded', () => {
         return wrapper;
     }
 
+    function buildPersonalityContent(character) {
+        const wrapper = document.createElement('div');
+
+        const personalitySection = document.createElement('section');
+        personalitySection.innerHTML = '<h4>Personality</h4>';
+        personalitySection.innerHTML += `<p><strong>Archetype:</strong> ${character.personality || 'Unknown'}</p>`;
+
+        const traitsSection = document.createElement('section');
+        traitsSection.innerHTML = '<h4>Traits</h4>';
+        if (character.traits && character.traits.length) {
+            const list = document.createElement('ul');
+            character.traits.forEach(trait => {
+                const li = document.createElement('li');
+                li.textContent = trait;
+                list.appendChild(li);
+            });
+            traitsSection.appendChild(list);
+        } else {
+            traitsSection.innerHTML += '<p>No specific traits recorded.</p>';
+        }
+
+        wrapper.append(personalitySection, traitsSection);
+        return wrapper;
+    }
+
     function buildCharacterDetails(character) {
         const wrapper = document.createElement('section');
         wrapper.classList.add('detail-tabs');
@@ -2700,6 +2732,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const tabs = [
             { label: 'Overview', builder: buildOverviewContent },
+            { label: 'Personality', builder: buildPersonalityContent },
             { label: 'Social', builder: buildSocialContent },
             { label: 'Pursuits', builder: buildPursuitsContent },
             { label: 'Activity', builder: buildActivityContent },
