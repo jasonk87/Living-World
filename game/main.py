@@ -281,7 +281,7 @@ def simulation_thread_func():
 
 
 # --- HTTP Server Logic ---
-PORT = 5000
+PORT = 8888
 
 
 def trigger_initial_ui_fetch(port: int, delay: float = 0.5, attempts: int = 5) -> None:
@@ -443,6 +443,17 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "families": game_world.get_family_snapshot() if hasattr(game_world, 'get_family_snapshot') else {},
                     "governance": game_world.get_governance_snapshot() if hasattr(game_world, 'get_governance_snapshot') else {},
                     "personal_pursuit_events": getattr(game_world, 'latest_personal_pursuit_events', []),
+                    "criminal_records": [
+                        {
+                            "character": char.name,
+                            "crime": record["crime"],
+                            "sentence": record["sentence"],
+                            "status": record["status"],
+                            "day_of_crime": record["day_of_crime"],
+                        }
+                        for char in game_world.characters if char.criminal_record
+                        for record in char.criminal_record
+                    ],
                 }
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
@@ -718,6 +729,7 @@ def run_server(port: int = PORT) -> None:
             super().__init__(*args, directory=ui_dir, **kwargs)
 
     try:
+        socketserver.TCPServer.allow_reuse_address = True
         with socketserver.TCPServer(("", port), Handler) as httpd:
             print(f"Serving HTTP on port {port} from '{ui_dir}'...")
             print(f"Game simulation running in background. Access UI at http://localhost:{port}/")

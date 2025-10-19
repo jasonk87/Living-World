@@ -277,6 +277,7 @@ class Character:
         self._cached_path: Deque[Tuple[int, int]] = deque()
         self._cached_path_target: Optional[Tuple[int, int]] = None
         self._cached_path_revision: Optional[int] = None
+        self.criminal_record: List[Dict[str, Any]] = []
 
     def update_reputation(self, change: int, reason: Optional[str] = None, world: Optional['World'] = None):
         """Updates reputation score, clamps it, and logs the change."""
@@ -790,6 +791,7 @@ class Character:
             "personal_pursuits": self.export_personal_pursuits(),
             "personal_pursuit_log": self.export_personal_pursuit_log(limit=8),
             "active_personal_project": self.active_personal_project,
+            "criminal_record": self.criminal_record,
         }
 
     @staticmethod

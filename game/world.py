@@ -3890,6 +3890,15 @@ class World:
             fine_amount = max(3, int(round(4 * severity + evidence * 6)))
             fine_paid = 0
             if defendant:
+                # Append criminal record
+                record = {
+                    "crime": case.get('charge', 'a crime'),
+                    "day_of_crime": crime_record.get('reported_day') if crime_record else case.get('scheduled_day'),
+                    "sentence": f"Fined {fine_amount} coins",
+                    "status": "Sentenced"
+                }
+                defendant.criminal_record.append(record)
+
                 fine_paid = min(defendant.money, fine_amount)
                 if fine_paid:
                     defendant.money -= fine_paid
