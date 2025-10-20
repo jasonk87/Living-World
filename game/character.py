@@ -795,6 +795,8 @@ class Character:
             "personal_pursuits": self.export_personal_pursuits(),
             "personal_pursuit_log": self.export_personal_pursuit_log(limit=8),
             "active_personal_project": self.active_personal_project,
+            "reputation_score": self.reputation_score,
+            "reputation_tier": self.get_reputation_tier(),
         }
 
     @staticmethod
@@ -1264,6 +1266,16 @@ class Character:
         if self.equipped_tool: equipped_tool_info = f"{self.equipped_tool['name']} ({self.equipped_tool['durability']}/{self.equipped_tool['max_durability']})"
         tool_info_str = f"  Equipped Tool: {equipped_tool_info}"
         return f"{base_info}\n{supervisor_info}; {subordinates_info}\n{performance_info}\n{tool_info_str}"
+
+    def get_reputation_tier(self) -> str:
+        """Determines the descriptive reputation tier based on reputation_score."""
+        score = self.reputation_score
+        # Assumes REPUTATION_TIERS is sorted from highest score to lowest
+        for tier_name, threshold in config.REPUTATION_TIERS:
+            if score >= threshold:
+                return tier_name
+        # Fallback to the last tier name if something goes wrong or score is very low
+        return config.REPUTATION_TIERS[-1][0] if config.REPUTATION_TIERS else "Unknown"
     def set_supervisor(self, s: Optional[str]): self.supervisor_name=s
     def add_subordinate(self, s: str): self.subordinates_names.append(s) if s not in self.subordinates_names else None
     def remove_subordinate(self, s: str): self.subordinates_names.remove(s) if s in self.subordinates_names else None

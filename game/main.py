@@ -11,7 +11,7 @@ from game.world import World
 from game.time import Time
 from game.stockpile import Stockpile
 from game.work_order import WorkOrder
-from game.data import BLUEPRINTS, JOB_TASK_DEFINITIONS, STRUCTURE_BLUEPRINTS
+from game.data import BLUEPRINTS, JOB_TASK_DEFINITIONS, STRUCTURE_BLUEPRINTS, Job
 from game.building import Building
 from game import config
 
@@ -38,6 +38,12 @@ game_paused = False       # To pause/resume the simulation
 SIMULATION_SPEED_MULTIPLIER = 1.0 # 1.0 is normal speed
 BASE_TICK_SLEEP_DURATION = 0.2 # Seconds for 1x speed per tick
 test_characters_list: List[Character] = [] # To store characters for final report
+
+class GameEncoder(json.JSONEncoder):
+    def default(self, o):
+        if isinstance(o, Job):
+            return o.to_dict()
+        return super().default(o)
 
 # --- Simulation Logic ---
 def initialize_game_world():
@@ -380,6 +386,8 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                             "supervisor_name": getattr(char, 'supervisor_name', None),
                             "supervisor_oversight": getattr(char, 'supervisor_oversight', None),
                             "leadership_oversight": getattr(char, 'leadership_oversight_score', None),
+                            "reputation_score": getattr(char, 'reputation_score', 0),
+                            "reputation_tier": char.get_reputation_tier() if hasattr(char, 'get_reputation_tier') else "Neutral",
                         })
 
                 event_log_repr = game_world.event_log[-20:] if game_world else []
@@ -460,7 +468,8 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_header('Content-type', 'application/json')
                 self.send_header('Access-Control-Allow-Origin', '*') # For local UI development
                 self.end_headers()
-                self.wfile.write(json.dumps(state).encode('utf-8'))
+                json_state = json.dumps(state, cls=GameEncoder)
+                self.wfile.write(json_state.encode('utf-8'))
             else:
                 self.send_response(503) # Service Unavailable
                 self.end_headers()
@@ -591,12 +600,13 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "origin": getattr(character, 'origin', None),
                     "citizenship": getattr(character, 'citizenship_status', 'Resident'),
                     "reputation": getattr(character, 'reputation_score', None),
+                    "reputation_tier": character.get_reputation_tier() if hasattr(character, 'get_reputation_tier') else "Neutral",
                 }
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
                 self.send_header('Access-Control-Allow-Origin', '*')
                 self.end_headers()
-                self.wfile.write(json.dumps(char_data).encode('utf-8'))
+                self.wfile.write(json.dumps(char_data, cls=GameEncoder).encode('utf-8'))
             else:
                 self.send_error(404, f"Character '{char_name}' not found")
 
@@ -633,9 +643,9 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "build_time": getattr(building, 'build_time', 0), # Total work for all phases
                     "current_phase_name": building.get_current_phase_name() if hasattr(building, 'get_current_phase_name') else "N/A",
                     "map_char": building.get_current_map_char(),
-                    "occupants": getattr(building, 'occupants', []),
-                    "provides_shelter": building.functionality.get('provides_shelter') if building.functionality else None,
-                    "wealth_tier": building.functionality.get('wealth_tier') if building.functionality else None,
+                    "occupants": getattr(b, 'occupants', []),
+                    "provides_shelter": b.functionality.get('provides_shelter') if b.functionality else None,
+                    "wealth_tier": b.functionality.get('wealth_tier') if b.functionality else None,
                     "household_style": getattr(building, 'household_style', None),
                     "amenities": list(getattr(building, 'amenities', [])),
                     "tile_layout": building.get_tile_layout() if hasattr(building, 'get_tile_layout') else [],
@@ -680,7 +690,7 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_header('Content-type', 'application/json')
                 self.send_header('Access-Control-Allow-Origin', '*')
                 self.end_headers()
-                self.wfile.write(json.dumps(building_data).encode('utf-8'))
+                self.wfile.write(json.dumps(building_data, cls=GameEncoder).encode('utf-8'))
             else:
                 # Check if it's a stockpile, as they are separate from buildings in world lists
                 stockpile_at_loc = None
@@ -733,6 +743,7 @@ def run_server(port: int = PORT) -> None:
         def __init__(self, *args, **kwargs):
             super().__init__(*args, directory=ui_dir, **kwargs)
 
+    socketserver.TCPServer.allow_reuse_address = True
     with socketserver.TCPServer(("", port), Handler) as httpd_instance:
         httpd = httpd_instance
         print(f"Serving HTTP on port {port} from '{ui_dir}'...")

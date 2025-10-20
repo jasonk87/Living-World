@@ -1695,3 +1695,56 @@ button:focus-visible {
     color: rgba(255, 255, 255, 0.55);
 }
 
+/* Reputation Tier Styles */
+.reputation-tier {
+    display: inline-block;
+    padding: 0.1rem 0.5rem;
+    border-radius: 999px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    border: 1px solid;
+}
+
+.reputation-venerated {
+    background-color: rgba(184, 227, 255, 0.2);
+    border-color: rgba(184, 227, 255, 0.5);
+    color: #cce7ff;
+}
+
+.reputation-respected {
+    background-color: rgba(126, 242, 179, 0.2);
+    border-color: rgba(126, 242, 179, 0.5);
+    color: var(--accent-color);
+}
+
+.reputation-upstanding {
+    background-color: rgba(93, 224, 255, 0.15);
+    border-color: rgba(93, 224, 255, 0.4);
+    color: #a4eaff;
+}
+
+.reputation-neutral {
+    background-color: rgba(153, 167, 216, 0.15);
+    border-color: rgba(153, 167, 216, 0.4);
+    color: var(--text-muted);
+}
+
+.reputation-unsavory {
+    background-color: rgba(255, 191, 102, 0.15);
+    border-color: rgba(255, 191, 102, 0.4);
+    color: var(--accent-warning);
+}
+
+.reputation-shunned {
+    background-color: rgba(255, 118, 140, 0.18);
+    border-color: rgba(255, 118, 140, 0.45);
+    color: #ffdde4;
+}
+
+.reputation-despised {
+    background-color: rgba(214, 40, 40, 0.2);
+    border-color: rgba(214, 40, 40, 0.5);
+    color: #ff8f8f;
+}

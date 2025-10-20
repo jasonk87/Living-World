@@ -382,11 +382,13 @@ document.addEventListener('DOMContentLoaded', () => {
             const statusLine = statusFlags.length
                 ? `<small class="status-flags">${statusFlags.join(' • ')}</small>`
                 : '';
+            const reputationTier = character.reputation_tier || 'Neutral';
             card.dataset.signature = signature;
             card.innerHTML = `
                 <strong>${character.name}</strong>
                 <small>${jobTitle} • Goal: ${goal}</small>
                 <small>Pos: (${character.x}, ${character.y})${loadText}</small>
+                <small class="reputation-tier reputation-${reputationTier.toLowerCase()}">${reputationTier}</small>
                 ${statusLine}
             `;
         }
@@ -2815,9 +2817,10 @@ function buildCareerContent(character) {
         const stageLabel = character.career_stage ? ` • ${character.career_stage}` : '';
         const satisfactionLabel = formatSatisfaction(character.job_satisfaction);
         const reputationLabel = character.reputation ?? '—';
+        const reputationTier = character.reputation_tier || 'Neutral';
         header.innerHTML = `
             <h3>${character.name}</h3>
-            <p>${jobTitle}${stageLabel} • Reputation ${reputationLabel} • Satisfaction ${satisfactionLabel}</p>
+            <p>${jobTitle}${stageLabel} • Reputation ${reputationLabel} <span class="reputation-tier reputation-${reputationTier.toLowerCase()}">${reputationTier}</span> • Satisfaction ${satisfactionLabel}</p>
         `;
 
         const followButton = document.createElement('button');

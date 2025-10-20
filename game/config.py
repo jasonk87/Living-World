@@ -1635,6 +1635,18 @@ REPUTATION_CHANGE_FIRED = -5
 REPUTATION_EFFECT_ON_INITIAL_RELATIONSHIP = 0.1 # e.g. 10 reputation = +1 initial relationship score
 REPUTATION_EFFECT_ON_WILLINGNESS_TO_HELP = 0.005 # e.g. 10 reputation = +0.05 to willingness chance
 
+# Reputation Tiers (Score Thresholds - lower bound for each tier)
+# Order matters for lookup (highest score first)
+REPUTATION_TIERS = [
+    ("Venerated", 80),
+    ("Respected", 50),
+    ("Upstanding", 20),
+    ("Neutral", -20),
+    ("Unsavory", -50),
+    ("Shunned", -80),
+    ("Despised", -101) # Catch-all for the lowest scores
+]
+
 # Relationship Tiers (Score Thresholds - lower bound for each tier)
 # Order matters for get_relationship_tier lookup (highest score first)
 RELATIONSHIP_TIERS = [
