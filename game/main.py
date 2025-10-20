@@ -138,6 +138,38 @@ def initialize_game_world():
     test_characters_list.append(bailiff)
     initial_setup_messages.append(f"  Added: {bailiff.name} (Job: {bailiff.job}, Rank: {bailiff.rank}) at ({bailiff.x},{bailiff.y})")
 
+    # Procedurally generate additional characters
+    num_additional_chars = 100
+    first_names = ["John", "Mary", "Peter", "Susan", "Michael", "Jennifer", "Robert", "Linda"]
+    last_names = ["Smith", "Jones", "Williams", "Brown", "Davis", "Miller", "Wilson", "Moore"]
+    personalities = ["Optimistic", "Pragmatic", "Idealistic", "Cynical", "Gregarious", "Introverted"]
+    jobs = ["Farmer", "Woodcutter", "Miner", "Stonemason", "Builder"]
+
+    for i in range(num_additional_chars):
+        name = f"{random.choice(first_names)} {random.choice(last_names)} {i}"
+        personality = random.choice(personalities)
+        job_title = random.choice(jobs)
+        x = random.randint(0, game_world.grid_size[0] - 1)
+        y = random.randint(0, game_world.grid_size[1] - 1)
+
+        # Ensure characters don't spawn in impassable terrain
+        while not game_world.is_walkable(x, y):
+            x = random.randint(0, game_world.grid_size[0] - 1)
+            y = random.randint(0, game_world.grid_size[1] - 1)
+
+        char = Character(
+            name=name,
+            personality=personality,
+            traits=[],
+            skills={},
+            job=job_title,
+            x=x,
+            y=y
+        )
+        game_world.add_character(char)
+        test_characters_list.append(char)
+        initial_setup_messages.append(f"  Added: {char.name} (Job: {char.job}) at ({char.x},{char.y})")
+
 
     # Initial Build Order (Optional, can be removed if Mayor initiates projects)
     # hut_bp_key = "wooden_hut" ... (rest of build order setup from original main_simulation_logic)

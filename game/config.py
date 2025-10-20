@@ -14,7 +14,7 @@ MAX_SIMULATION_DAYS = 20 # Max days the simulation runs for in headless/test mod
 IMPASSABLE_TERRAINS = {"Mountain", "Water", "DeepWater", "Chasm", "Void"}
 
 # World Map Generation
-MAP_DEFAULT_SIZE = (200, 200)
+MAP_DEFAULT_SIZE = (400, 400)
 MAP_RANDOM_SEED = None  # Set to an int to make initial landscapes deterministic
 MAP_GENERATION_DISABLED = False
 MAP_RESERVED_CLEARING_RADIUS = 2
