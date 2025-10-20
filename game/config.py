@@ -6,15 +6,15 @@ LLM_MODEL = "llama2"  # Specify the model you want to use with Ollama
 LLM_HAS_THINKING_TAGS = False # Set to True if your model uses <thinking>...</thinking> tags
 
 # General Game Settings
-TICKS_PER_DAY = 1
+TICKS_PER_DAY = 10
 DAYS_PER_SEASON = 10 # Example, can be adjusted
-MAX_SIMULATION_DAYS = 1 # Max days the simulation runs for in headless/test mode.
+MAX_SIMULATION_DAYS = 20 # Max days the simulation runs for in headless/test mode.
 
 # Navigation & movement
 IMPASSABLE_TERRAINS = {"Mountain", "Water", "DeepWater", "Chasm", "Void"}
 
 # World Map Generation
-MAP_DEFAULT_SIZE = (500, 500)
+MAP_DEFAULT_SIZE = (200, 200)
 MAP_RANDOM_SEED = None  # Set to an int to make initial landscapes deterministic
 MAP_GENERATION_DISABLED = False
 MAP_RESERVED_CLEARING_RADIUS = 2
@@ -1663,6 +1663,11 @@ RELATIONSHIP_TIERS = [
 RELATIONSHIP_TIER_FAMILY = "Family"
 RELATIONSHIP_TIER_STRANGER = "Stranger" # For characters not in relationships dict yet
 
+FRIENDSHIP_THRESHOLD = 40
+FRIENDSHIP_END_THRESHOLD = 30
+RIVALRY_THRESHOLD = -70
+RIVALRY_END_THRESHOLD = -60
+
 # Personal histories & family chronicles
 LIFE_HISTORY_MAX_EVENTS = 120
 LIFE_HISTORY_HIGHLIGHT_THRESHOLD = 2
@@ -1737,6 +1742,7 @@ ENVIRONMENT_CONSUMPTION_MINIMUM = 1 # Never consume fewer than this many rations
 # Critical Thresholds for Needs (when they start causing significant mood/behavioral changes)
 NEED_SAFETY_CRITICAL_THRESHOLD = 20
 NEED_BELONGING_CRITICAL_THRESHOLD = 25
+BELONGING_THRESHOLD_FAMILY = 60
 NEED_ESTEEM_CRITICAL_THRESHOLD = 15
 
 # Mood changes related to complex needs

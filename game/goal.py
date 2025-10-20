@@ -72,6 +72,10 @@ class GoalType(Enum):
     PRAISE_CHARACTER = auto()
     MAKE_NEW_FRIEND = auto()
     SHARE_RUMOR = auto()
+    SPEND_TIME_WITH_FAMILY = auto()
+    ATTEND_FAMILY_GATHERING = auto()
+    PROPOSE_MARRIAGE = auto()
+    PLAN_FOR_CHILD = auto()
 
     # Economic
     SEEK_TO_BUY_ITEM = auto()

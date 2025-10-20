@@ -70,6 +70,8 @@ class Character:
             self.job: Optional[Job] = job
 
         self.relationships = {} # Initialize relationships first
+        self.friends: Set[str] = set()
+        self.rivals: Set[str] = set()
         self.family_roles: Dict[str, Set[str]] = {}
         self.romantic_partners: Set[str] = set()
         self.ex_partners: Set[str] = set()
@@ -83,6 +85,7 @@ class Character:
         self._romance_attempt_window: Deque[Tuple[int, str]] = deque(maxlen=10)
         self._last_romance_eval_day: Optional[int] = None
         self._last_commitment_check: Optional[int] = None
+        self._social_cooldowns: Dict[str, int] = {}
         if self.family_members: # Then set family scores
             for member_name in self.family_members:
                 if member_name != self.name:
@@ -789,6 +792,8 @@ class Character:
             "warning_count": self.warning_count,
             "known_characters": self.known_characters,
             "relationships": self.relationships,
+            "friends": sorted(list(self.friends)),
+            "rivals": sorted(list(self.rivals)),
             "opinions": self.opinions,
             "dialogue_history": self.dialogue_history[-10:], # Return last 10 for brevity
             "decision_profile": deepcopy(self._decision_profile) if self._decision_profile else None,
@@ -1276,11 +1281,73 @@ class Character:
                 return tier_name
         # Fallback to the last tier name if something goes wrong or score is very low
         return config.REPUTATION_TIERS[-1][0] if config.REPUTATION_TIERS else "Unknown"
+
+    def _update_friend_rival_status(self, target_char_name: str, world: 'World'):
+        """Update friend/rival status based on relationship score."""
+        score = self.get_relationship_score(target_char_name)
+
+        is_friend = target_char_name in self.friends
+        is_rival = target_char_name in self.rivals
+
+        # Friend status
+        if score >= config.FRIENDSHIP_THRESHOLD and not is_friend:
+            self.friends.add(target_char_name)
+            if is_rival:
+                self.rivals.remove(target_char_name)
+            self.add_memory(f"I now consider {target_char_name} a friend.")
+            world.add_event_log_message(f"{self.name} and {target_char_name} are now friends.")
+        elif score < config.FRIENDSHIP_END_THRESHOLD and is_friend:
+            self.friends.remove(target_char_name)
+            self.add_memory(f"I no longer consider {target_char_name} a close friend.")
+
+        # Rival status
+        if score <= config.RIVALRY_THRESHOLD and not is_rival:
+            self.rivals.add(target_char_name)
+            self.friends.discard(target_char_name)
+            self.add_memory(f"I now consider {target_char_name} a rival.")
+            world.add_event_log_message(f"{self.name} and {target_char_name} are now rivals.")
+        elif score > config.RIVALRY_END_THRESHOLD and is_rival:
+            self.rivals.remove(target_char_name)
+            self.add_memory(f"My rivalry with {target_char_name} has cooled down.")
+
     def set_supervisor(self, s: Optional[str]): self.supervisor_name=s
     def add_subordinate(self, s: str): self.subordinates_names.append(s) if s not in self.subordinates_names else None
     def remove_subordinate(self, s: str): self.subordinates_names.remove(s) if s in self.subordinates_names else None
     def get_inventory_load(self) -> int: return sum(self.inventory.values())
     def add_memory(self, e: str): self.memory.append(e); self.memory=self.memory[-20:]
+
+    def _analyze_recent_dialogue(self, other_char_name: str, lookback_days: int = 3) -> Dict[str, Any]:
+        """Analyzes recent dialogue with a character to extract topics and sentiment."""
+        recent_interactions = []
+        # world is not directly available, so we can't get current_day. This is a limitation to address.
+        # For now, we'll just look at the last few entries regardless of day.
+        for entry in reversed(self.dialogue_history):
+            if len(recent_interactions) >= 5: # Limit to last 5 interactions for performance
+                break
+            if entry.get("target") == other_char_name or entry.get("initiator") == other_char_name:
+                recent_interactions.append(entry)
+
+        topics_discussed = set()
+        positive_outcomes = 0
+        negative_outcomes = 0
+
+        for interaction in recent_interactions:
+            topic = interaction.get("topic")
+            if topic:
+                topics_discussed.add(topic)
+
+            outcome = interaction.get("outcome")
+            if outcome == "positive":
+                positive_outcomes += 1
+            elif outcome == "negative":
+                negative_outcomes += 1
+
+        return {
+            "topics_discussed": list(topics_discussed),
+            "positive_outcomes": positive_outcomes,
+            "negative_outcomes": negative_outcomes,
+            "interaction_count": len(recent_interactions)
+        }
 
     def _summarize_recent_memory(self) -> Dict[str, Any]:
         lookback = getattr(config, "DECISION_MEMORY_LOOKBACK", 20)
@@ -5601,6 +5668,79 @@ class Character:
         self.current_goal.set_completed()
         self.current_goal = self.get_default_goal()
 
+    def _execute_spend_time_with_family(self, world: 'World'):
+        if not self.current_goal:
+            return
+
+        target_name = self.current_goal.parameters.get("target_char_name")
+        target_char = None
+
+        if target_name:
+            target_char = world.get_character_by_name(target_name)
+        else:
+            # Find a family member to spend time with
+            available_family = []
+            family_names = self.family_members or []
+            # Also consider romantic partners and children who might not be in the initial list
+            family_names = list(set(family_names) | self.romantic_partners | self.children_names)
+
+            for member_name in family_names:
+                if member_name == self.name:
+                    continue
+                member_char = world.get_character_by_name(member_name)
+                if member_char:
+                    available_family.append(member_char)
+
+            if available_family:
+                # Prioritize closer family members
+                available_family.sort(key=lambda char: abs(self.x - char.x) + abs(self.y - char.y))
+                target_char = available_family[0]
+                self.current_goal.parameters["target_char_name"] = target_char.name
+            else:
+                self.add_memory("I wanted to spend time with family, but no one is around.")
+                self.current_goal.set_failed(reason="No available family members found.")
+                self.current_goal = self.get_default_goal()
+                return
+
+        if not target_char:
+            self.add_memory(f"Could not find my family member {target_name} to spend time with.")
+            self.current_goal.set_failed(reason="Target family member not found.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        distance = abs(self.x - target_char.x) + abs(self.y - target_char.y)
+        if distance > 2:
+            self.add_memory(f"Heading to spend time with my family member, {target_char.name}.")
+            self.move_towards(target_char.x, target_char.y, world)
+            return
+
+        # At location, spend time together
+        self.add_memory(f"Spent some quality time with my family member, {target_char.name}.")
+        target_char.add_memory(f"Spent some nice time with my family member, {self.name}.")
+
+        # Relationship boost
+        relationship_boost = 10 # More significant than small talk
+        self.modify_relationship(target_char.name, relationship_boost, world, reason="Spent quality family time together.")
+        target_char.modify_relationship(self.name, relationship_boost, world, reason="Spent quality family time together.")
+
+        # Belonging Need Fulfillment
+        belonging_increase = 15 # A strong boost
+        self.needs['Belonging'] = min(config.NEED_SCORE_MAX, self.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) + belonging_increase)
+        target_char.needs['Belonging'] = min(config.NEED_SCORE_MAX, target_char.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) + belonging_increase)
+
+        self.add_memory(f"Spending time with {target_char.name} really boosted my sense of belonging. Belonging: {self.needs['Belonging']:.0f}")
+        target_char.add_memory(f"Spending time with {self.name} made me feel so connected. Belonging: {target_char.needs['Belonging']:.0f}")
+
+        # Mood boost for both
+        mood_boost = 8
+        self.update_mood_score(mood_boost, f"Spent time with family member {target_char.name}")
+        target_char.update_mood_score(mood_boost, f"Spent time with family member {self.name}")
+
+        world.add_event_log_message(f"{self.name} and {target_char.name} spent some quality family time together.")
+
+        self.current_goal.set_completed()
+        self.current_goal = self.get_default_goal()
+
     def _execute_manage_estate(self, world: 'World'):
         if not self.job or self.job.title != "Reeve":
             self.current_goal = self.get_default_goal()
@@ -6275,6 +6415,12 @@ class Character:
              if self.current_goal is None or self.current_goal.type != new_default_goal.type:
                 self.current_goal = new_default_goal
 
+        if self.needs.get('Belonging', 100) < config.BELONGING_THRESHOLD_FAMILY and self.current_goal.type not in [GoalType.SPEND_TIME_WITH_FAMILY,]:
+            if self.family_members or self.romantic_partners or self.children_names:
+                self.add_memory("Feeling a strong need to connect with family.")
+                self.current_goal = Goal(GoalType.SPEND_TIME_WITH_FAMILY, assignee_id=self.name, originator_id=self.name, priority=4)
+
+
         # --- Goal Execution Dispatcher ---
         # Note: Order matters. More specific/interrupting goals should be checked before generic ones.
         # Example: SEEK_MEDICAL_ATTENTION already handled above.
@@ -6294,6 +6440,7 @@ class Character:
 
         # Specific Action Goals
         elif self.current_goal.type == GoalType.EXECUTE_BUILD_ORDER: self._execute_build_order(world) # Already handled above too
+        elif self.current_goal.type == GoalType.SPEND_TIME_WITH_FAMILY: self._execute_spend_time_with_family(world)
         elif self.current_goal.type == GoalType.EXECUTE_CRAFT_ORDER: self._execute_craft_order(world)
         elif self.current_goal.type == GoalType.FETCH_TOOL: self._execute_fetch_tool(world)
         elif self.current_goal.type == GoalType.GATHER_RESOURCE:
@@ -6457,6 +6604,14 @@ class Character:
                                 # Direct relationship score influence (can be strong)
                                 if relationship_score > 75 : weight *= 1.5 # Very high relationship
                                 elif relationship_score < -75 : weight *= 0.1 # Very low relationship
+
+                                # Analyze recent dialogue to adjust weight
+                                dialogue_summary = self._analyze_recent_dialogue(other_char.name)
+                                if dialogue_summary["interaction_count"] > 0:
+                                    if dialogue_summary["negative_outcomes"] > 0:
+                                        weight *= 0.5 ** dialogue_summary["negative_outcomes"] # Exponential backoff
+                                    if dialogue_summary["positive_outcomes"] > 0:
+                                        weight *= 1.2 ** dialogue_summary["positive_outcomes"]
 
                                 # Belonging need bias: Prefer positive relationships more strongly if Belonging is low
                                 if self.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) < config.NEED_BELONGING_CRITICAL_THRESHOLD:
@@ -6941,7 +7096,6 @@ class Character:
 
         self.current_goal = self.get_default_goal()
 
-
     # --- Management Actions ---
     def conduct_performance_review(self, subordinate_char_name: str, world: 'World'):
         if self.name == subordinate_char_name:
@@ -7375,6 +7529,8 @@ class Character:
         # Example: If a supervisor reviews poorly, supervisor's relationship to subordinate might not change much,
         # but subordinate's relationship to supervisor likely worsens. This would be handled by the calling function.
 
+        self._update_friend_rival_status(target_char_name, world)
+
     def _apply_family_splash_effect(self, target_char: 'Character', original_change: int, world: 'World', reason: str):
         """
         Applies a smaller, 'splashed' relationship change to the target's family members
@@ -7552,7 +7708,9 @@ class Character:
 
         # Store dialogue
         dialogue_entry = {
-            "type": "greeting", # Or "introduction" if it's a first meeting
+            "type": "greeting",
+            "topic": "greeting",
+            "outcome": "neutral",
             "initiator": self.name,
             "target": target_name,
             "day": world.game_time.current_day if world.game_time else -1,
@@ -7660,8 +7818,10 @@ class Character:
         dialogue_line_self = f"I've been thinking, {target_name}, and I wanted to sincerely apologize for my behavior earlier."
         dialogue_line_target = ""
         relationship_change = 0
+        outcome = "neutral"
 
         if random.random() < final_acceptance_chance:
+            outcome = "positive"
             self.add_memory(f"My apology to {target_name} was accepted.")
             target_char.add_memory(f"{self.name} apologized, and I've accepted it.")
             dialogue_line_target = random.choice([f"Thank you, {self.name}. I appreciate that.", "It takes courage to apologize. Accepted.", "Alright. Let's move past it."])
@@ -7729,9 +7889,15 @@ class Character:
         if relationship_change > 5: # Threshold for a "successful" apology
             self._apply_family_splash_effect(target_char, relationship_change, world, reason="successfully apologized to")
 
-        dialogue_entry = { "type": "formal_apology", "initiator": self.name, "target": target_name,
-                           "day": world.game_time.current_day if world.game_time else -1,
-                           "dialogue_exchanges": [{"speaker": self.name, "line": dialogue_line_self}, {"speaker": target_name, "line": dialogue_line_target}] }
+        dialogue_entry = {
+            "type": "formal_apology",
+            "topic": "apology",
+            "outcome": outcome,
+            "initiator": self.name,
+            "target": target_name,
+            "day": world.game_time.current_day if world.game_time else -1,
+            "dialogue_exchanges": [{"speaker": self.name, "line": dialogue_line_self}, {"speaker": target_name, "line": dialogue_line_target}]
+        }
         self.dialogue_history.append(dialogue_entry); target_char.dialogue_history.append(dialogue_entry)
         world.add_event_log_message(f"{self.name} formally apologized to {target_name}.")
 
@@ -7780,12 +7946,18 @@ class Character:
         target_char.add_memory(f"Being trusted with a secret by {self.name} made me feel very connected. Belonging: {target_char.needs['Belonging']}")
 
         # Log dialogue (simplified)
-        dialogue_entry = { "type": "share_secret", "initiator": self.name, "target": target_name,
-                           "day": world.game_time.current_day if world.game_time else -1,
-                           "dialogue_exchanges": [{"speaker": self.name, "line": f"(Whispering) Psst, {target_name}, can I tell you something?"},
-                                                  {"speaker": target_name, "line": "(Leans in) Of course, what is it?"},
-                                                  {"speaker": self.name, "line": f"(Whispers) {secret_content}."},
-                                                  {"speaker": target_name, "line": "(Gasps softly) Your secret is safe with me!"}] }
+        dialogue_entry = {
+            "type": "share_secret",
+            "topic": "personal",
+            "outcome": "positive",
+            "initiator": self.name,
+            "target": target_name,
+            "day": world.game_time.current_day if world.game_time else -1,
+            "dialogue_exchanges": [{"speaker": self.name, "line": f"(Whispering) Psst, {target_name}, can I tell you something?"},
+                                   {"speaker": target_name, "line": "(Leans in) Of course, what is it?"},
+                                   {"speaker": self.name, "line": f"(Whispers) {secret_content}."},
+                                   {"speaker": target_name, "line": "(Gasps softly) Your secret is safe with me!"}]
+        }
         self.dialogue_history.append(dialogue_entry); target_char.dialogue_history.append(dialogue_entry)
         world.add_event_log_message(f"{self.name} shared a secret with {target_name}.")
 
@@ -7859,7 +8031,11 @@ class Character:
             dialogue_line_target = "No! What happened?"
 
         dialogue_entry = {
-            "type": "share_rumor", "initiator": self.name, "target": target_name,
+            "type": "share_rumor",
+            "topic": "gossip",
+            "outcome": "neutral",
+            "initiator": self.name,
+            "target": target_name,
             "day": world.game_time.current_day if world.game_time else -1,
             "dialogue_exchanges": [
                 {"speaker": self.name, "line": dialogue_line_self},
@@ -8118,7 +8294,11 @@ class Character:
         dialogue_line_target = random.choice(arg_lines_target)
 
         dialogue_entry = {
-            "type": "argue", "initiator": self.name, "target": target_name,
+            "type": "argue",
+            "topic": "disagreement",
+            "outcome": "negative",
+            "initiator": self.name,
+            "target": target_name,
             "day": world.game_time.current_day if world.game_time else -1,
             "dialogue_exchanges": [ {"speaker": self.name, "line": dialogue_line_self}, {"speaker": target_name, "line": dialogue_line_target} ]
         }
@@ -8270,8 +8450,10 @@ class Character:
 
         dialogue_line_target = ""
         outcome_message = ""
+        outcome = "negative"
 
         if willing_to_help and can_help:
+            outcome = "positive"
             # --- Help is given ---
             if help_type == "resource" and item_name_needed:
                 target_char.inventory[item_name_needed] -= quantity_needed
@@ -8363,7 +8545,11 @@ class Character:
 
         # Log dialogue and outcome
         dialogue_entry = {
-            "type": "ask_for_help", "initiator": self.name, "target": target_name,
+            "type": "ask_for_help",
+            "topic": "help",
+            "outcome": outcome,
+            "initiator": self.name,
+            "target": target_name,
             "day": world.game_time.current_day if world.game_time else -1,
             "details_of_request": {"type": help_type, "item": item_name_needed, "qty": quantity_needed},
             "dialogue_exchanges": [ {"speaker": self.name, "line": dialogue_line_self}, {"speaker": target_name, "line": dialogue_line_target} ]
@@ -8468,6 +8654,8 @@ class Character:
 
         dialogue_entry = {
             "type": "offer_comfort",
+            "topic": "comfort",
+            "outcome": "positive",
             "initiator": self.name,
             "target": target_name,
             "day": world.game_time.current_day if world.game_time else -1,
@@ -8641,7 +8829,9 @@ class Character:
             dialogue_line_target = random.choice(replies_target_generic)
 
         dialogue_entry = {
-            "type": "share_positive_news", # Could be "share_event_news" if shared_event_id is not None
+            "type": "share_positive_news",
+            "topic": "news",
+            "outcome": "positive",
             "initiator": self.name,
             "target": target_name,
             "day": world.game_time.current_day if world.game_time else -1,
@@ -8814,26 +9004,30 @@ class Character:
             target_char.modify_relationship(self.name, rel_change, world, reason=f"Had some small talk with {self.name}.")
 
         # 2. Dialogue Snippets for Small Talk
-        # Initiator's line (topics: weather, work, general observation)
-        small_talk_topics_initiator = [
-            f"The weather's been something else lately, hasn't it, {target_name}?",
-            "Keeping busy with work, I imagine?",
-            "Anything interesting happen around here lately?",
-            "Just taking a moment. How are things with you?"
-        ]
-        if initiator_friendly:
-            small_talk_topics_initiator.extend([
-                f"Lovely day, {target_name}!",
-                f"Hope you're doing well, {target_name}."
-            ])
-        elif initiator_grumpy:
-            small_talk_topics_initiator = [ # Grumpy small talk is more like a statement
-                "Weather's terrible.",
-                "Work never ends.",
-                "Quiet around here... too quiet."
-            ]
-        dialogue_line_self = random.choice(small_talk_topics_initiator)
+        dialogue_summary = self._analyze_recent_dialogue(target_name)
+        recent_topics = dialogue_summary.get("topics_discussed", [])
 
+        potential_topics = {
+            "weather": [f"The weather's been something else lately, hasn't it, {target_name}?"],
+            "work": ["Keeping busy with work, I imagine?"],
+            "community": ["Anything interesting happen around here lately?"],
+            "personal": ["Just taking a moment. How are things with you?"]
+        }
+
+        # Trait-based topic preferences
+        if "Optimist" in self.traits:
+            potential_topics.setdefault("future", []).append("I'm feeling really hopeful about the future.")
+        if "Pessimist" in self.traits:
+            potential_topics.setdefault("complaint", []).append("I swear, things just keep getting worse.")
+        if self.job:
+            potential_topics["work"].append(f"Things in {self.job.title} are particularly challenging right now.")
+
+        # Avoid repeating recent topics
+        available_topics = [topic for topic in potential_topics if topic not in recent_topics]
+        if not available_topics:
+            available_topics = list(potential_topics.keys()) # Fallback to all topics if all have been discussed
+
+        chosen_topic = random.choice(available_topics)
         # Target's reply
         small_talk_replies_target = [
             "Indeed it has.", "Same old, same old.", "Not much to report.", "Doing alright, thanks."
@@ -8850,6 +9044,8 @@ class Character:
 
         dialogue_entry = {
             "type": "small_talk",
+            "topic": chosen_topic,
+            "outcome": "neutral",
             "initiator": self.name,
             "target": target_name,
             "day": world.game_time.current_day if world.game_time else -1,
@@ -9133,6 +9329,8 @@ class Character:
 
         dialogue_entry = {
             "type": "introduction",
+            "topic": "introduction",
+            "outcome": "neutral",
             "initiator": self.name,
             "target": target_name,
             "day": world.game_time.current_day if world.game_time else -1,
