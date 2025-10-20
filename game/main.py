@@ -138,6 +138,35 @@ def initialize_game_world():
     test_characters_list.append(bailiff)
     initial_setup_messages.append(f"  Added: {bailiff.name} (Job: {bailiff.job}, Rank: {bailiff.rank}) at ({bailiff.x},{bailiff.y})")
 
+    # Procedurally generate additional characters
+    jobs = ["Farmer", "Woodcutter", "Stonemason", "Hunter", "Herbalist", "Builder", "Blacksmith"]
+    personalities = ["Optimistic", "Wise", "Stern", "Charming", "Pragmatic", "Gruff", "Brave", "Shy", "Friendly"]
+    traits = ["Diligent", "Intelligent", "Forgiving", "Authoritative", "Just", "Diplomatic", "Ambitious", "Organized", "Tough", "Kind", "Lazy"]
+
+    for i in range(94):
+        name = f"Bot_{i+1}"
+        job = random.choice(jobs)
+        personality = random.choice(personalities)
+        trait_list = random.sample(traits, k=random.randint(1, 3))
+        x = random.randint(0, default_size[0] - 1)
+        y = random.randint(0, default_size[1] - 1)
+
+        # Ensure the spawn location is walkable
+        while not game_world.is_walkable(x, y):
+            x = random.randint(0, default_size[0] - 1)
+            y = random.randint(0, default_size[1] - 1)
+
+        skills = {}
+        profession_info = config.PROFESSION_TRACK_DEFINITIONS.get(job, {})
+        job_skill = profession_info.get("skill")
+        if job_skill:
+            skills[job_skill] = random.randint(1, 3)
+
+        char = Character(name=name, personality=personality, traits=trait_list, job=job, x=x, y=y, skills=skills,
+                         needs={"Hunger": 80, "Thirst": 70, "Energy": 100})
+        game_world.add_character(char)
+        test_characters_list.append(char)
+        initial_setup_messages.append(f"  Added: {char.name} (Job: {char.job}) at ({char.x},{char.y})")
 
     # Initial Build Order (Optional, can be removed if Mayor initiates projects)
     # hut_bp_key = "wooden_hut" ... (rest of build order setup from original main_simulation_logic)
