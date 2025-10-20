@@ -59,6 +59,7 @@ class World:
         self.stockpiles: List[Stockpile] = []
         self.stockpile_tiles: Dict[Tuple[int, int], str] = {}
         self.buildings: List[Building] = [] # Re-added
+        self._buildings_by_tile: Dict[Tuple[int, int], Building] = {}
         # self.furniture: List[Furniture] = [] # Re-added, but keep commented if not used by this test
         self.ledger: Ledger = Ledger()
         self.game_time: Optional[Time] = game_time_ref
@@ -915,26 +916,28 @@ class World:
                 if not (0 <= tile_coord[0] < self.grid_size[0] and 0 <= tile_coord[1] < self.grid_size[1]):
                     print(f"Error: Building '{building.display_name}' at {building.location} is out of bounds.")
                     return
-                for existing_b in self.buildings:
-                    if tile_coord in existing_b.get_tiles_occupied():
-                        print(f"Error: Building '{building.display_name}' overlaps with '{existing_b.display_name}' at {tile_coord}.")
-                        return
+                if self._buildings_by_tile.get(tile_coord):
+                    existing_b = self._buildings_by_tile[tile_coord]
+                    print(f"Error: Building '{building.display_name}' overlaps with '{existing_b.display_name}' at {tile_coord}.")
+                    return
             self.buildings.append(building)
+            for tile_coord in new_building_tiles:
+                self._buildings_by_tile[tile_coord] = building
             print(f"Building: {building.display_name} added at {building.location} to world model.")
             self.map_revision += 1
 
 
     def remove_building(self, building: Building):
-        if building in self.buildings:
-            self.buildings.remove(building)
-            print(f"Removed building: {building.display_name} from {building.location}.")
-            self.map_revision += 1
+        if building not in self.buildings:
+            return
+        self.buildings.remove(building)
+        for tile in building.get_tiles_occupied():
+            if self._buildings_by_tile.get(tile) == building:
+                del self._buildings_by_tile[tile]
+        self.map_revision += 1
 
     def get_building_at(self, x: int, y: int) -> Optional[Building]:
-        for building in self.buildings:
-            if (x,y) in building.get_tiles_occupied():
-                return building
-        return None
+        return self._buildings_by_tile.get((x, y))
 
     def get_building_by_location(self, location: Tuple[int, int]) -> Optional[Building]:
         for building in self.buildings:
@@ -1123,7 +1126,7 @@ class World:
                 if self._characters_by_tile.get((tx, ty)):
                     return False
                 tile_type = self.grid[tx][ty]
-                if tile_type in getattr(config, "IMPASSABLE_TERRAINS", set()):
+                if tile_type in config.IMPASSABLE_TERRAINS:
                     return False
         return True
 

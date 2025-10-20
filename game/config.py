@@ -6,9 +6,9 @@ LLM_MODEL = "llama2"  # Specify the model you want to use with Ollama
 LLM_HAS_THINKING_TAGS = False # Set to True if your model uses <thinking>...</thinking> tags
 
 # General Game Settings
-TICKS_PER_DAY = 10
+TICKS_PER_DAY = 1
 DAYS_PER_SEASON = 10 # Example, can be adjusted
-MAX_SIMULATION_DAYS = 20 # Max days the simulation runs for in headless/test mode.
+MAX_SIMULATION_DAYS = 1 # Max days the simulation runs for in headless/test mode.
 
 # Navigation & movement
 IMPASSABLE_TERRAINS = {"Mountain", "Water", "DeepWater", "Chasm", "Void"}
