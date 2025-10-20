@@ -338,6 +338,16 @@ class World:
                 "base_tiles": ["Rocks", "Stone"],
             },
             {
+                "resource": "Iron Ore",
+                "tile": "Iron Ore",
+                "clusters": (2, 3),
+                "radius": (1, 1),
+                "scatter": 1,
+                "density": (2, 4),
+                "prefer_feature": "rockfield",
+                "base_tiles": ["Rocks", "Stone"],
+            },
+            {
                 "resource": "Herbs",
                 "tile": "Herbs",
                 "clusters": (2, 3),

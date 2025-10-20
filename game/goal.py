@@ -111,6 +111,8 @@ class GoalType(Enum):
     PERFORM_FLETCHER_DUTIES = auto()
     PERFORM_SAWYER_DUTIES = auto()
     PERFORM_CARPENTER_DUTIES = auto()
+    PERFORM_SMELTER_DUTIES = auto()
+    PERFORM_BLACKSMITH_DUTIES = auto()
 
     GO_TO_WORK = auto()
 

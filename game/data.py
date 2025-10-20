@@ -68,8 +68,27 @@ BLUEPRINTS = {
         "type": "Consumable",
         "description": "Stored drinking water drawn from nearby wells and streams.",
         "thirst_satisfaction": 45
+    },
+    "Iron Ore": {
+        "type": "Resource",
+        "description": "Raw iron ore, needs to be smelted."
+    },
+    "Iron Ingot": {
+        "required_resources": {"Iron Ore": 2},
+        "job_skill_needed": "Smelting",
+        "type": "Resource",
+        "description": "A bar of refined iron.",
+        "craft_time_per_unit": 7
+    },
+    "Iron Axe": {
+        "required_resources": {"Iron Ingot": 2, "Wood": 1},
+        "job_skill_needed": "Blacksmithing",
+        "type": "Tool",
+        "tool_type": "Axe",
+        "max_durability": 120,
+        "description": "A sturdy iron axe for efficient woodcutting.",
+        "craft_time_per_unit": 12
     }
-    # Add other items as needed, e.g., "Wooden Shield", "Stone Hammer"
 }
 
 # --- Demographic Pools & Archetypes ---
@@ -161,6 +180,22 @@ JOB_TASK_DEFINITIONS = {
         "resource_produced": "Iron Ore", # A new raw material
         "base_yield": 1,
         "base_time_per_yield": 6
+    },
+    "Smelt Iron Ingot": {
+        "required_tool_type": None, # Requires a forge/smelter building, not a hand tool
+        "required_building": "smelting",
+        "skill_used": "Smelting",
+        "resource_produced": "Iron Ingot",
+        "base_yield": 1,
+        "base_time_per_yield": 8
+    },
+    "Smith Iron Axe": {
+        "required_tool_type": "Hammer", # Blacksmith hammer
+        "required_building": "blacksmithing",
+        "skill_used": "Blacksmithing",
+        "resource_produced": "Iron Axe",
+        "base_yield": 1,
+        "base_time_per_yield": 15
     },
     "Saw Lumber": {
         "required_tool_type": "Saw",
@@ -463,7 +498,7 @@ STRUCTURE_BLUEPRINTS = {
             {"name": "Walls & Basic Setup", "work_required": 50, "map_char_during": "w"},
             {"name": "Tool Racks & Finishing", "work_required": 25, "map_char_during": "W"}
         ],
-        "functionality": {"allows_crafting_category": ["Basic Tools", "Simple Furniture"], "tags": ["indoor", "workshop", "crafting_general"]},
+        "functionality": {"allows_crafting_category": ["Basic Tools", "Simple Furniture", "smelting", "blacksmithing"], "tags": ["indoor", "workshop", "crafting_general"]},
         "required_skill": {"Construction": 3},
         "map_char_initial": ".",
         "map_char_complete": "W"
@@ -505,7 +540,9 @@ ROLE_HIERARCHY = {
     "Builder": "Manager",
     "Woodcutter": "Manager",
     "Stonemason": "Manager",
-    "Miner": "Manager", # Assuming Miner reports to Manager
+    "Miner": "Manager",
+    "Smelter": "Manager",
+    "Blacksmith": "Manager",
     "Farmer": "Manager",
     "Hunter": "Manager",
     "Fletcher": "Master Craftsman",
@@ -845,7 +882,9 @@ ROLE_DETAILS = {
     "Builder": {"reports_to": "Manager", "job_default_goal": "Perform Builder Duties"},
     "Woodcutter": {"reports_to": "Manager", "job_default_goal": "Perform Woodcutter Duties"},
     "Stonemason": {"reports_to": "Manager", "job_default_goal": "Perform Stonemason Duties"},
-    "Miner": {"reports_to": "Manager", "job_default_goal": "Perform Miner Duties"}, # Assuming a "Perform Miner Duties" goal
+    "Miner": {"reports_to": "Manager", "job_default_goal": "Perform Miner Duties"},
+    "Smelter": {"reports_to": "Manager", "job_default_goal": "Perform Smelter Duties"},
+    "Blacksmith": {"reports_to": "Manager", "job_default_goal": "Perform Blacksmith Duties"},
     "Farmer": {
         "description": "Cultivates crops and keeps granaries stocked for the settlement.",
         "reports_to": "Manager",
@@ -977,6 +1016,9 @@ class Job:
 JOB_SALARIES = {
     "Perform Woodcutter Duties": 5,
     "Perform Stonemason Duties": 5,
+    "Perform Miner Duties": 6,
+    "Perform Smelter Duties": 7,
+    "Perform Blacksmith Duties": 8,
     "Perform Farmer Duties": 5,
     "Perform Hunter Duties": 6,
     "Perform Fletcher Duties": 7,
@@ -996,6 +1038,8 @@ MARKET_PRICES = {
     "Wood": 2, # Price to buy 1 unit of wood
     "Stone": 3, # Price to buy 1 unit of stone
     "Iron Ore": 6,
+    "Iron Ingot": 15,
+    "Iron Axe": 40,
     "Lumber": 5,
     "Furniture": 18,
     "Food": 4, # Price to buy 1 unit of food
