@@ -192,8 +192,16 @@ DEFAULT_WANDER_GOAL = Goal(GoalType.WANDER, originator_id="System", priority=9)
 
 def create_goal_from_job(job_name: str, char_name: str) -> Goal:
     """
-    Creates a default Goal object based on a character's job title.
+    Creates a default Goal object based on a character's job title or a goal string.
     """
+    # Handle direct goal strings first
+    goal_str_upper = job_name.replace(" ", "_").upper()
+    try:
+        goal_type_enum = GoalType[goal_str_upper]
+        return Goal(goal_type_enum, originator_id="SystemAssignment", assignee_id=char_name)
+    except KeyError:
+        pass  # If not a direct match, fall through to ROLE_DETAILS lookup
+
     from .data import ROLE_DETAILS # Local import to avoid circularity at module load time
 
     role_detail = ROLE_DETAILS.get(job_name)
@@ -218,6 +226,8 @@ def create_goal_from_job(job_name: str, char_name: str) -> Goal:
                 "Perform Fletcher Duties": GoalType.PERFORM_FLETCHER_DUTIES,
                 "Perform Sawyer Duties": GoalType.PERFORM_SAWYER_DUTIES,
                 "Perform Carpenter Duties": GoalType.PERFORM_CARPENTER_DUTIES,
+                "Perform Smelter Duties": GoalType.PERFORM_SMELTER_DUTIES,
+                "Perform Blacksmith Duties": GoalType.PERFORM_BLACKSMITH_DUTIES,
                 "Assess Production Needs": GoalType.ASSESS_PRODUCTION_NEEDS,
                 "Manage Subordinates": GoalType.MANAGE_SUBORDINATES,
                 "Maintain Ledger": GoalType.MAINTAIN_LEDGER,

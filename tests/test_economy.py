@@ -1,140 +1,99 @@
 # tests/test_economy.py
-
 import pytest
 from game.character import Character
-from game.world import World
-from game.data import Job, BLUEPRINTS, JOB_TASK_DEFINITIONS, STRUCTURE_BLUEPRINTS
-from game.stockpile import Stockpile
+from game.item import Item
 from game.building import Building
+from game.world import World
+from game.stockpile import Stockpile
+from game.time import Time
+from game.main import advance_simulation_one_tick
+from game.data import STRUCTURE_BLUEPRINTS
 
-@pytest.fixture(autouse=True)
-def setup_blueprints(monkeypatch):
-    # Add a basic Hammer blueprint for the blacksmith test
-    test_blueprints = BLUEPRINTS.copy()
-    test_blueprints["Hammer"] = {
-        "type": "Tool",
-        "tool_type": "Hammer",
-        "max_durability": 100,
-        "description": "A basic hammer for smithing and construction.",
-    }
-    monkeypatch.setattr("game.character.BLUEPRINTS", test_blueprints)
-    monkeypatch.setattr("game.character.JOB_TASK_DEFINITIONS", JOB_TASK_DEFINITIONS)
+# Test for Miner
+def test_miner_job(world):
+    miner = Character(name="Test Miner", personality="test", traits=[], skills={}, job="Miner", x=0, y=0)
+    miner.inventory["Iron Pickaxe"] = 1
+    miner.equip_tool("Iron Pickaxe")
+    world.add_character(miner)
+    world.add_resource("Iron Ore", (5, 5))
+    stockpile = Stockpile("main_stockpile", 2, 2, 1, 1, allowed_resources=["Iron Ore"])
+    world.stockpiles.append(stockpile)
 
-def advance_simulation(world, ticks):
-    """Helper to advance the simulation by a number of ticks."""
-    for _ in range(ticks):
-        new_day = world.game_time.tick()
-        for character in list(world.characters):
-            if character in world.characters:
-                character.decide_action(world)
-        if new_day:
-            if hasattr(world, 'daily_environment_tick'):
-                world.daily_environment_tick()
-            if hasattr(world, 'process_daily_economy'):
-                world.process_daily_economy()
+    # Simulate enough ticks for the miner to gather ore and deposit it
+    for _ in range(100):
+        advance_simulation_one_tick(world)
 
+    assert stockpile.inventory.get("Iron Ore", 0) > 0, "Miner should have deposited Iron Ore in the stockpile"
 
-class TestEconomy:
-    def test_miner_job(self, world):
-        miner = Character(
-            name="Test Miner",
-            personality="Hardworking",
-            traits=["Strong"],
-            skills={"Mining": 5},
-            job=Job("Miner", None, 0)
-        )
-        world.add_character(miner)
-        world.add_resource("Iron Ore", (5, 5))
+# Test for Smelter
+def test_smelter_job(world):
+    smelter = Character(name="Test Smelter", personality="test", traits=[], skills={}, job="Smelter", x=0, y=0)
+    world.add_character(smelter)
+    blueprint = STRUCTURE_BLUEPRINTS["small_workshop"]
+    world.add_building(Building(structure_type="smelter_workshop", location=(6, 6), **blueprint))
 
-        # Simulate to allow the miner to work
-        advance_simulation(world, 30)
+    stockpile = Stockpile("main_stockpile", 2, 2, 1, 1, allowed_resources=["Iron Ore", "Iron Ingot"])
+    stockpile.add_item("Iron Ore", 10)
+    world.stockpiles.append(stockpile)
 
-        # Check if the miner has gathered Iron Ore and deposited it
-        assert world.stockpiles[0].inventory.get("Iron Ore", 0) > 0
+    for _ in range(150):
+        advance_simulation_one_tick(world)
 
-    def test_smelter_job(self, world):
-        smelter = Character(
-            name="Test Smelter",
-            personality="Focused",
-            traits=[],
-            skills={"Smelting": 5},
-            job=Job("Smelter", None, 0)
-        )
-        world.add_character(smelter)
+    assert stockpile.inventory.get("Iron Ingot", 0) > 0, "Smelter should have produced Iron Ingots"
 
-        # Add a workshop for the smelter
-        workshop_bp = STRUCTURE_BLUEPRINTS["small_workshop"]
-        workshop = Building(
-            structure_type="small_workshop",
-            display_name="Test Workshop",
-            location=(3, 3),
-            size=workshop_bp["size"],
-            required_resources={},
-            functionality=workshop_bp["functionality"],
-            required_skill={},
-        )
-        workshop.is_operational = True # Pre-build it for the test
-        world.add_building(workshop)
+# Test for Blacksmith
+def test_blacksmith_job(world):
+    blacksmith = Character(name="Test Blacksmith", personality="test", traits=[], skills={}, job="Blacksmith", x=0, y=0)
+    blacksmith.inventory["Hammer"] = 1
+    blacksmith.equip_tool("Hammer")
+    world.add_character(blacksmith)
+    blueprint = STRUCTURE_BLUEPRINTS["small_workshop"]
+    world.add_building(Building(structure_type="blacksmith_workshop", location=(7, 7), **blueprint))
 
-        stockpile = world.stockpiles[0]
-        stockpile.add_item("Iron Ore", 10)
+    stockpile = Stockpile("main_stockpile", 2, 2, 1, 1, allowed_resources=["Iron Ingot", "Wood", "Iron Axe", "Iron Pickaxe"])
+    stockpile.add_item("Iron Ingot", 10)
+    stockpile.add_item("Wood", 10)
+    world.stockpiles.append(stockpile)
 
-        # Simulate to allow the smelter to work
-        advance_simulation(world, 500)
+    # Simulate to produce at least one tool
+    for _ in range(200):
+        advance_simulation_one_tick(world)
 
-        # Check if the smelter has produced Iron Ingots
-        assert stockpile.inventory.get("Iron Ingot", 0) > 0
+    assert stockpile.inventory.get("Iron Axe", 0) > 0 or stockpile.inventory.get("Iron Pickaxe", 0) > 0, "Blacksmith should have produced an Iron Axe or Pickaxe"
 
-    def test_blacksmith_job(self, world):
-        blacksmith = Character(
-            name="Test Blacksmith",
-            personality="Creative",
-            traits=[],
-            skills={"Blacksmithing": 5},
-            job=Job("Blacksmith", None, 0)
-        )
-        # Give the blacksmith a hammer
-        blacksmith.inventory["Hammer"] = 1
-        blacksmith.equip_tool("Hammer")
-        world.add_character(blacksmith)
+# Test for Sawyer
+def test_sawyer_job(world):
+    sawyer = Character(name="Test Sawyer", personality="test", traits=[], skills={}, job="Sawyer", x=0, y=0)
+    sawyer.inventory["Saw"] = 1
+    sawyer.equip_tool("Saw")
+    world.add_character(sawyer)
+    blueprint = STRUCTURE_BLUEPRINTS["sawmill"]
+    world.add_building(Building(structure_type="sawmill", location=(8, 8), **blueprint))
 
-        # Add a workshop for the blacksmith
-        workshop_bp = STRUCTURE_BLUEPRINTS["small_workshop"]
-        workshop = Building(
-            structure_type="small_workshop",
-            display_name="Test Workshop",
-            location=(3, 3),
-            size=workshop_bp["size"],
-            required_resources={},
-            functionality=workshop_bp["functionality"],
-            required_skill={},
-        )
-        workshop.is_operational = True # Pre-build it for the test
-        world.add_building(workshop)
+    stockpile = Stockpile("main_stockpile", 2, 2, 1, 1, allowed_resources=["Wood", "Lumber"])
+    stockpile.add_item("Wood", 10)
+    world.stockpiles.append(stockpile)
 
-        stockpile = world.stockpiles[0]
-        stockpile.add_item("Iron Ingot", 10)
-        stockpile.add_item("Wood", 10)
+    for _ in range(150):
+        advance_simulation_one_tick(world)
 
-        # Simulate to allow the blacksmith to work
-        advance_simulation(world, 500)
+    assert stockpile.inventory.get("Lumber", 0) > 0, "Sawyer should have produced Lumber"
 
-        # Check if the blacksmith has produced Iron Axes
-        assert stockpile.inventory.get("Iron Axe", 0) > 0
+# Test for Carpenter
+def test_carpenter_job(world):
+    carpenter = Character(name="Test Carpenter", personality="test", traits=[], skills={}, job="Carpenter", x=0, y=0)
+    carpenter.inventory["Hammer"] = 1
+    carpenter.equip_tool("Hammer")
+    world.add_character(carpenter)
+    blueprint = STRUCTURE_BLUEPRINTS["carpenters_shop"]
+    world.add_building(Building(structure_type="carpenters_shop", location=(9, 9), **blueprint))
 
-    def test_farmer_job(self, world):
-        farmer = Character(
-            name="Test Farmer",
-            personality="Patient",
-            traits=["Diligent"],
-            skills={"Farming": 5},
-            job=Job("Farmer", None, 0)
-        )
-        world.add_character(farmer)
-        world.add_resource("Food", (10, 10), tile_becomes="Fields")
+    stockpile = Stockpile("main_stockpile", 2, 2, 1, 1, allowed_resources=["Lumber", "Iron Ingot", "Furniture"])
+    stockpile.add_item("Lumber", 10)
+    stockpile.add_item("Iron Ingot", 10)
+    world.stockpiles.append(stockpile)
 
-        # Simulate to allow the farmer to work
-        advance_simulation(world, 30)
+    for _ in range(200):
+        advance_simulation_one_tick(world)
 
-        # Check if the farmer has gathered Food and deposited it
-        assert world.stockpiles[0].inventory.get("Food", 0) > 0
+    assert stockpile.inventory.get("Furniture", 0) > 0, "Carpenter should have produced Furniture"

@@ -88,6 +88,38 @@ BLUEPRINTS = {
         "max_durability": 120,
         "description": "A sturdy iron axe for efficient woodcutting.",
         "craft_time_per_unit": 12
+    },
+    "Lumber": {
+        "required_resources": {"Wood": 2},
+        "job_skill_needed": "Carpentry",
+        "type": "Resource",
+        "description": "Processed wood, ready for building and crafting.",
+        "craft_time_per_unit": 4
+    },
+    "Furniture": {
+        "required_resources": {"Lumber": 3},
+        "job_skill_needed": "Carpentry",
+        "type": "Furniture",
+        "description": "Basic furniture for a home.",
+        "craft_time_per_unit": 10
+    },
+    "Hammer": {
+        "required_resources": {"Iron Ingot": 2, "Wood": 1},
+        "job_skill_needed": "Blacksmithing",
+        "type": "Tool",
+        "tool_type": "Hammer",
+        "max_durability": 150,
+        "description": "A blacksmith's hammer for shaping metal.",
+        "craft_time_per_unit": 12
+    },
+    "Saw": {
+        "required_resources": {"Iron Ingot": 1, "Wood": 1},
+        "job_skill_needed": "Blacksmithing",
+        "type": "Tool",
+        "tool_type": "Saw",
+        "max_durability": 100,
+        "description": "A tool for sawing wood into lumber.",
+        "craft_time_per_unit": 10
     }
 }
 
@@ -189,7 +221,7 @@ JOB_TASK_DEFINITIONS = {
         "base_yield": 1,
         "base_time_per_yield": 8
     },
-    "Smith Iron Axe": {
+    "Forge Iron Axe": {
         "required_tool_type": "Hammer", # Blacksmith hammer
         "required_building": "blacksmithing",
         "skill_used": "Blacksmithing",
@@ -197,19 +229,29 @@ JOB_TASK_DEFINITIONS = {
         "base_yield": 1,
         "base_time_per_yield": 15
     },
+    "Forge Iron Pickaxe": {
+        "required_tool_type": "Hammer", # Blacksmith hammer
+        "required_building": "blacksmithing",
+        "skill_used": "Blacksmithing",
+        "resource_produced": "Iron Pickaxe",
+        "base_yield": 1,
+        "base_time_per_yield": 15
+    },
     "Saw Lumber": {
         "required_tool_type": "Saw",
+        "required_building": "sawmill",
         "skill_used": "Carpentry",
         "resource_produced": "Lumber",
         "base_yield": 1,
-        "base_time_per_yield": 3,
+        "base_time_per_yield": 5,
     },
-    "Assemble Furniture": {
+    "Craft Furniture": {
         "required_tool_type": "Hammer",
+        "required_building": "carpentry",
         "skill_used": "Carpentry",
         "resource_produced": "Furniture",
         "base_yield": 1,
-        "base_time_per_yield": 4,
+        "base_time_per_yield": 12,
     },
     "Construct Building": { # Generic task for working on any building
         "required_tool_type": None,
@@ -503,6 +545,62 @@ STRUCTURE_BLUEPRINTS = {
         "map_char_initial": ".",
         "map_char_complete": "W"
     },
+    "sawmill": {
+        "display_name": "Sawmill",
+        "size": (3, 3),
+        "required_resources": {"Wood": 60, "Stone": 20},
+        "construction_phases": [
+            {"name": "Foundation", "work_required": 30, "map_char_during": "_"},
+            {"name": "Main Saw Assembly", "work_required": 60, "map_char_during": "s"},
+            {"name": "Roofing", "work_required": 30, "map_char_during": "^"}
+        ],
+        "functionality": {"allows_crafting_category": ["sawmill"], "tags": ["indoor", "workshop", "woodworking"]},
+        "required_skill": {"Construction": 2},
+        "map_char_initial": ".",
+        "map_char_complete": "S"
+    },
+    "smelter_workshop": {
+        "display_name": "Smelter Workshop",
+        "size": (3, 2),
+        "required_resources": {"Stone": 40, "Wood": 20},
+        "construction_phases": [
+            {"name": "Foundation", "work_required": 25, "map_char_during": "_"},
+            {"name": "Furnace Construction", "work_required": 50, "map_char_during": "s"},
+            {"name": "Finishing Touches", "work_required": 25, "map_char_during": "S"}
+        ],
+        "functionality": {"allows_crafting_category": ["smelting"], "tags": ["indoor", "workshop", "metalworking"]},
+        "required_skill": {"Construction": 3},
+        "map_char_initial": ".",
+        "map_char_complete": "S"
+    },
+    "blacksmith_workshop": {
+        "display_name": "Blacksmith Workshop",
+        "size": (3, 2),
+        "required_resources": {"Stone": 50, "Wood": 30},
+        "construction_phases": [
+            {"name": "Foundation", "work_required": 30, "map_char_during": "_"},
+            {"name": "Forge and Anvil Setup", "work_required": 60, "map_char_during": "b"},
+            {"name": "Finishing Touches", "work_required": 30, "map_char_during": "B"}
+        ],
+        "functionality": {"allows_crafting_category": ["blacksmithing"], "tags": ["indoor", "workshop", "metalworking"]},
+        "required_skill": {"Construction": 4},
+        "map_char_initial": ".",
+        "map_char_complete": "B"
+    },
+    "carpenters_shop": {
+        "display_name": "Carpenter's Shop",
+        "size": (3, 2),
+        "required_resources": {"Wood": 40, "Lumber": 20},
+        "construction_phases": [
+            {"name": "Foundation", "work_required": 25, "map_char_during": "_"},
+            {"name": "Workshop Setup", "work_required": 50, "map_char_during": "c"},
+            {"name": "Finishing Touches", "work_required": 25, "map_char_during": "C"}
+        ],
+        "functionality": {"allows_crafting_category": ["carpentry"], "tags": ["indoor", "workshop", "woodworking"]},
+        "required_skill": {"Construction": 3},
+        "map_char_initial": ".",
+        "map_char_complete": "C"
+    },
     "construction_site": {
         "display_name": "Construction Site",
         "size": (1,1),
@@ -545,6 +643,8 @@ ROLE_HIERARCHY = {
     "Blacksmith": "Manager",
     "Farmer": "Manager",
     "Hunter": "Manager",
+    "Sawyer": "Manager",
+    "Carpenter": "Manager",
     "Fletcher": "Master Craftsman",
     "Expedition Leader": "Militia Commander",
 
@@ -974,6 +1074,20 @@ ROLE_DETAILS = {
         "responsibilities": ["Assisting the Reeve.", "Collecting fines and rents.", "Maintaining order among the local peasants."],
         "capabilities": ["CollectRent(peasant_name, amount)", "EnforceManorRule(rule_details, peasant_name)"],
         "job_default_goal": "Assist Reeve"
+    },
+    "Sawyer": {
+        "description": "Processes raw wood into usable lumber.",
+        "reports_to": "Manager",
+        "responsibilities": ["Operating a sawmill.", "Fulfilling lumber production orders.", "Maintaining saw blades and equipment."],
+        "capabilities": ["SawLogs(quantity)", "RequestWoodDelivery(quantity)"],
+        "job_default_goal": "Perform Sawyer Duties"
+    },
+    "Carpenter": {
+        "description": "Constructs furniture and other wooden items.",
+        "reports_to": "Manager",
+        "responsibilities": ["Crafting furniture.", "Repairing wooden structures.", "Fulfilling carpentry work orders."],
+        "capabilities": ["CraftFurniture(item_name, quantity)", "RequestLumberDelivery(quantity)"],
+        "job_default_goal": "Perform Carpenter Duties"
     }
 }
 
@@ -1028,6 +1142,8 @@ JOB_SALARIES = {
     "Provide Medical Care": 8, # Medic treating a patient
     "Execute Craft Order": 10, # Generic payment for completing a craft WO
     "Execute Build Order": 25, # Generic payment for completing a build WO
+    "Perform Sawyer Duties": 6,
+    "Perform Carpenter Duties": 8,
 }
 
 MARKET_PRICES = {

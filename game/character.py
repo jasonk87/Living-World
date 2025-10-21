@@ -238,6 +238,7 @@ class Character:
         self._last_phase_key: Optional[str] = None
         self._phase_social_bias: float = 0.0
         self._phase_rest_threshold_bonus: int = 0
+        self.job_duty_params: Dict[str, Any] = {}
 
         if 'Social' not in self.needs: self.needs['Social'] = 70 # Will be reframed as Belonging later or coexist
         if 'Energy' not in self.needs: self.needs['Energy'] = 100
@@ -3367,7 +3368,6 @@ class Character:
             target_stockpile.access_points,
             key=lambda loc: abs(loc[0] - self.x) + abs(loc[1] - self.y),
         )
-
         if (self.x, self.y) != access_point:
             self.move_towards(access_point[0], access_point[1], world)
             return False
@@ -3383,7 +3383,6 @@ class Character:
             self.inventory[resource_name] = remaining
         else:
             self.inventory.pop(resource_name, None)
-
         world.add_event_log_message(
             f"{self.name} stores {added} {resource_name} in {target_stockpile.name}."
         )
@@ -3435,7 +3434,8 @@ class Character:
 
         if quota is not None and self.inventory.get(resource_name, 0) >= quota:
             self.add_memory(f"Gathered the requested {quota} {resource_name}.")
-            self.current_goal = self.get_default_goal()
+            new_goal = self.get_default_goal()
+            self.current_goal = new_goal
 
         return True
     def build(self, structure_type: str, world: 'World') -> bool: return False
@@ -3446,9 +3446,6 @@ class Character:
         job_title = self.job.title
         if job_title == "Woodcutter": return "Perform Woodcutter Duties"
         if job_title == "Stonemason": return "Perform Stonemason Duties"
-        if job_title == "Miner": return "Perform Miner Duties"
-        if job_title == "Smelter": return "Perform Smelter Duties"
-        if job_title == "Blacksmith": return "Perform Blacksmith Duties"
         if job_title == "Farmer": return "Perform Farmer Duties"
         if job_title == "Hunter": return "Perform Hunter Duties"
         if job_title == "Fletcher": return "Perform Fletcher Duties"
@@ -3473,6 +3470,11 @@ class Character:
             return "Oversee Domain"
         elif self.rank in ["Noble Lord", "Baron"]:
             return "Manage Subordinates"
+        if job_title == "Sawyer": return "Perform Sawyer Duties"
+        if job_title == "Carpenter": return "Perform Carpenter Duties"
+        if job_title == "Miner": return "Perform Miner Duties"
+        if job_title == "Smelter": return "Perform Smelter Duties"
+        if job_title == "Blacksmith": return "Perform Blacksmith Duties"
         return "Idle" # Corresponds to GoalType.IDLE
 
     def get_default_goal(self) -> Goal:
@@ -3540,10 +3542,27 @@ class Character:
         return chance, oversight_bonus_applied
 
     def _execute_fetch_tool(self, world: 'World') -> bool: # True if still fetching, False if done/failed
+        print(f"DEBUG FETCH_TOOL: {self.name} is fetching a {self.tool_to_fetch_type}.")
         if not self.tool_to_fetch_type:
             self.current_goal = self.goal_before_fetching_tool or self.get_default_goal()
             self.goal_before_fetching_tool = None
             return False
+
+        # First, check own inventory for a suitable tool
+        for item_name, quantity in self.inventory.items():
+            if quantity > 0 and item_name in BLUEPRINTS and BLUEPRINTS[item_name].get("tool_type") == self.tool_to_fetch_type:
+                if self.equip_tool(item_name):
+                    print(f"DEBUG FETCH_TOOL: {self.name} found and equipped {item_name} from inventory.")
+                    # self.inventory[item_name] -= 1 # This was causing issues - equip_tool doesn't consume
+                    # if self.inventory[item_name] <= 0:
+                    #     del self.inventory[item_name]
+                    self.add_memory(f"Found and equipped {item_name} from my inventory.")
+                    self.current_goal = self.goal_before_fetching_tool or self.get_default_goal()
+                    self.tool_to_fetch_type = None
+                    self.fetching_tool_info = None
+                    self.goal_before_fetching_tool = None
+                    return False # Tool equipped, fetching is done.
+
         target_tool_name, stockpile_to_search = None, None
         if self.fetching_tool_info:
             target_tool_name = self.fetching_tool_info.get("name_to_fetch"); sp_name = self.fetching_tool_info.get("stockpile_name")
@@ -3561,6 +3580,7 @@ class Character:
                 self.tool_to_fetch_type = None; self.goal_before_fetching_tool = None
                 return False
         if not stockpile_to_search or not target_tool_name:
+            print(f"DEBUG FETCH_TOOL: {self.name} could not find a tool in any stockpile.")
             # NEW: Check market if no tool is available
             # Find a tool of the required type from the market prices
             tool_to_buy = None
@@ -3584,6 +3604,8 @@ class Character:
         if (self.x, self.y) == spot:
             s, qr = stockpile_to_search.remove_item(target_tool_name, 1)
             if s and qr > 0:
+                print(f"DEBUG FETCH_TOOL: {self.name} took {target_tool_name} from {stockpile_to_search.name}.")
+                self.inventory[target_tool_name] = self.inventory.get(target_tool_name, 0) + qr # Add to inventory
                 if self.equip_tool(target_tool_name):
                     self.current_goal = self.goal_before_fetching_tool or self.get_default_goal()
                     self.tool_to_fetch_type = None; self.fetching_tool_info = None; self.goal_before_fetching_tool = None
@@ -3600,59 +3622,20 @@ class Character:
             return True
 
     def _execute_generic_task(self, world: 'World', task_name: str) -> bool: # True if task action taken, False if tool fetch needed
+        print(f"DEBUG GENERIC_TASK: {self.name} is executing task '{task_name}'.")
         if task_name not in JOB_TASK_DEFINITIONS:
             self.current_goal = self.get_default_goal()
             return False
         task_def = JOB_TASK_DEFINITIONS[task_name]; tool_type = task_def.get("required_tool_type")
         # self.current_task_def_name = task_name # This is already set by the calling gather function
         if tool_type and (not self.equipped_tool or self.equipped_tool.get("tool_type") != tool_type):
+            print(f"DEBUG GENERIC_TASK: {self.name} needs a {tool_type} for '{task_name}'. Current tool: {self.equipped_tool}")
             if not self.goal_before_fetching_tool : self.goal_before_fetching_tool = self.current_goal
             # self.current_goal = "Fetch Tool"
             self.current_goal = Goal(GoalType.FETCH_TOOL, assignee_id=self.name, originator_id=self.name, parameters={"tool_type": tool_type})
             self.tool_to_fetch_type = tool_type # Still needed by _execute_fetch_tool internal logic
             self.task_work_progress = 0
             return False
-
-        # --- Building Check ---
-        required_building_functionality = task_def.get("required_building")
-        if required_building_functionality:
-            current_building = world.get_building_at(self.x, self.y)
-
-            # Check if the building has the required functionality
-            has_functionality = False
-            if current_building and current_building.functionality:
-                if isinstance(current_building.functionality, dict):
-                    if required_building_functionality in current_building.functionality.get("allows_crafting_category", []):
-                        has_functionality = True
-                elif isinstance(current_building.functionality, list):
-                    if required_building_functionality in current_building.functionality:
-                        has_functionality = True
-
-            if not has_functionality:
-                # Find the nearest suitable building
-                suitable_buildings = []
-                for b in world.buildings:
-                    if b.is_operational and b.functionality:
-                        if isinstance(b.functionality, dict):
-                            if required_building_functionality in b.functionality.get("allows_crafting_category", []):
-                                suitable_buildings.append(b)
-                        elif isinstance(b.functionality, list):
-                            if required_building_functionality in b.functionality:
-                                suitable_buildings.append(b)
-
-                if not suitable_buildings:
-                    self.add_memory(f"Cannot perform '{task_name}' because no suitable workshop is available.")
-                    self.current_goal = self.get_default_goal()
-                    return False
-
-                closest_building = min(
-                    suitable_buildings,
-                    key=lambda b: abs(b.location[0] - self.x) + abs(b.location[1] - self.y)
-                )
-
-                self.add_memory(f"Heading to {closest_building.display_name} to perform '{task_name}'.")
-                self.move_towards(closest_building.location[0], closest_building.location[1], world)
-                return False # Task action not taken, character is moving
 
         # --- Mood, Trait & Health Effects on Progress ---
         base_progress_per_tick = 1.0
@@ -4137,25 +4120,21 @@ class Character:
             return
         # self.counting_target_stockpile_name=target_sp.name # Removed
         self.current_goal = Goal(GoalType.COUNT_STOCKPILE, assignee_id=self.name, originator_id=self.name, parameters={"stockpile_name": target_sp.name})
-        self.decide_action(world) # To immediately process the new goal if possible
 
     def _execute_count_stockpile(self, world: 'World'):
         if not self.current_goal or not self.current_goal.parameters or not self.current_goal.parameters.get("stockpile_name"): # Ensure goal and params exist
             self.current_goal = create_goal_from_job("Maintain Ledger", self.name) or self.get_default_goal()
-            self.decide_action(world)
             return
 
         target_stockpile_name = self.current_goal.parameters.get("stockpile_name")
         if not self.job or self.job.title != "Bookkeeper" or not target_stockpile_name : # Check job and if name is actually there
             self.current_goal = create_goal_from_job("Maintain Ledger", self.name) or self.get_default_goal()
-            self.decide_action(world)
             return
 
         stockpile_obj=world.get_stockpile_by_name(target_stockpile_name)
 
         if not stockpile_obj:
             self.current_goal = create_goal_from_job("Maintain Ledger", self.name) or self.get_default_goal()
-            self.decide_action(world)
             return
         spot=stockpile_obj.deposit_tiles[0] if stockpile_obj.deposit_tiles else (stockpile_obj.rect[0],stockpile_obj.rect[1])
         if(self.x,self.y)==spot:
@@ -4179,7 +4158,6 @@ class Character:
             self.add_memory(f"Counted {target_stockpile_name}"); print(f"{self.name} (Bookkeeper) finished counting {target_stockpile_name}. Ledger updated with: {recorded_inventory}. Day: {world.game_time.current_day}.")
             self._receive_payment(JOB_SALARIES.get("Maintain Ledger", 4), f"counting {target_stockpile_name}", world)
             self.current_goal = create_goal_from_job("Maintain Ledger", self.name) or self.get_default_goal()
-            self.decide_action(world)
             return
         else:self.move_towards(spot[0],spot[1],world)
 
@@ -4206,7 +4184,6 @@ class Character:
 
         if next_goal_type:
             self.current_goal = Goal(next_goal_type, assignee_id=self.name, originator_id=self.name, parameters=params_for_next_goal)
-            self.decide_action(world) # Process new goal
         # If no next_goal_type, means current logic is fine, or it's already Idle/Wander
     def _execute_perform_stonemason_duties(self, world: 'World'):
         if not self.job or self.job.title != "Stonemason":
@@ -4229,8 +4206,6 @@ class Character:
 
         if next_goal_type:
             self.current_goal = Goal(next_goal_type, assignee_id=self.name, originator_id=self.name, parameters=params_for_next_goal)
-            # self.current_goal = self.get_default_goal() # This line was an error and removed
-            self.decide_action(world) # Process new goal
         # If no next_goal_type, means current logic is fine, or it's already Idle/Wander - or if the above didn't set a new goal, it implies current one continues or becomes default via decide_action
 
     def _execute_perform_miner_duties(self, world: 'World'):
@@ -4254,170 +4229,6 @@ class Character:
 
         if next_goal_type:
             self.current_goal = Goal(next_goal_type, assignee_id=self.name, originator_id=self.name, parameters=params_for_next_goal)
-            self.decide_action(world)
-
-    def _execute_perform_smelter_duties(self, world: 'World'):
-        if not self.job or self.job.title != "Smelter":
-            self.current_goal = self.get_default_goal()
-            return
-
-        params = self.current_goal.parameters
-        params.setdefault("phase", "smelt")
-        ingot_threshold = max(2, min(self.max_inventory_items, 5))
-
-        if params.get("phase") == "deliver" or self.inventory.get("Iron Ingot", 0) >= ingot_threshold:
-            params["phase"] = "deliver"
-            if self._deposit_resource_to_nearest_stockpile("Iron Ingot", world):
-                params["phase"] = "smelt"
-                self.current_goal = self.get_default_goal()
-            return
-
-        required_ore = BLUEPRINTS["Iron Ingot"]["required_resources"]["Iron Ore"]
-        if self.inventory.get("Iron Ore", 0) < required_ore:
-            stockpiles = [sp for sp in world.get_stockpiles_for_resource("Iron Ore") if sp.inventory.get("Iron Ore", 0) > 0]
-            if not stockpiles:
-                self.add_memory("No Iron Ore available for smelting.")
-                self.current_goal = self.get_default_goal()
-                return
-            target_stockpile = min(
-                stockpiles,
-                key=lambda sp: min(abs(pt[0] - self.x) + abs(pt[1] - self.y) for pt in sp.access_points),
-            )
-            access_point = min(
-                target_stockpile.access_points,
-                key=lambda loc: abs(loc[0] - self.x) + abs(loc[1] - self.y),
-            )
-            if (self.x, self.y) != access_point:
-                self.move_towards(access_point[0], access_point[1], world)
-                return
-            success, removed = target_stockpile.remove_item("Iron Ore", self.max_inventory_items - self.get_inventory_load())
-            if not success or removed <= 0:
-                self.add_memory(f"{target_stockpile.name} had no Iron Ore for smelting today.")
-                return
-            self.inventory["Iron Ore"] = self.inventory.get("Iron Ore", 0) + removed
-            if world.game_time:
-                world.ledger.update_stockpile_record(
-                    target_stockpile.name, target_stockpile.inventory, world.game_time.current_day
-                )
-            world.add_event_log_message(
-                f"{self.name} withdrew {removed} Iron Ore from {target_stockpile.name} for smelting."
-            )
-            return
-
-        starting_ingots = self.inventory.get("Iron Ingot", 0)
-        if not self._execute_generic_task(world, "Smelt Iron Ingot"):
-            return
-        produced = self.inventory.get("Iron Ingot", 0) - starting_ingots
-        if produced > 0:
-            ore_used = produced * BLUEPRINTS["Iron Ingot"]["required_resources"]["Iron Ore"]
-            current_ore = self.inventory.get("Iron Ore", 0)
-            if current_ore >= ore_used:
-                current_ore -= ore_used
-                if current_ore > 0:
-                    self.inventory["Iron Ore"] = current_ore
-                else:
-                    self.inventory.pop("Iron Ore", None)
-            else:
-                self.inventory.pop("Iron Ore", None)
-            self.add_memory(f"Smelted {produced} iron ingots.")
-            self.update_mood_score(config.MOOD_CHANGE_SUCCESSFUL_TASK_MINOR, "Finished a batch of ingots")
-
-        if self.inventory.get("Iron Ingot", 0) >= ingot_threshold:
-            params["phase"] = "deliver"
-
-    def _execute_perform_blacksmith_duties(self, world: 'World'):
-        if not self.job or self.job.title != "Blacksmith":
-            self.current_goal = self.get_default_goal()
-            return
-
-        params = self.current_goal.parameters
-        params.setdefault("phase", "craft")
-        item_to_craft = "Iron Axe"  # Simple for now, could be dynamic later
-        blueprint = BLUEPRINTS.get(item_to_craft)
-        if not blueprint:
-            self.add_memory(f"Do not know how to craft {item_to_craft}.")
-            self.current_goal = self.get_default_goal()
-            return
-
-        item_threshold = max(1, min(self.max_inventory_items, 2))
-
-        if params.get("phase") == "deliver" or self.inventory.get(item_to_craft, 0) >= item_threshold:
-            params["phase"] = "deliver"
-            if self._deposit_resource_to_nearest_stockpile(item_to_craft, world):
-                params["phase"] = "craft"
-                self.current_goal = self.get_default_goal()
-            return
-
-        # Check for all required resources
-        for resource, amount_needed in blueprint["required_resources"].items():
-            if self.inventory.get(resource, 0) < amount_needed:
-                # Need to fetch this resource
-                stockpiles = [sp for sp in world.get_stockpiles_for_resource(resource) if sp.inventory.get(resource, 0) > 0]
-                if not stockpiles:
-                    self.add_memory(f"No {resource} available for smithing.")
-                    self.current_goal = self.get_default_goal()
-                    return
-                target_stockpile = min(
-                    stockpiles,
-                    key=lambda sp: min(abs(pt[0] - self.x) + abs(pt[1] - self.y) for pt in sp.access_points),
-                )
-                access_point = min(
-                    target_stockpile.access_points,
-                    key=lambda loc: abs(loc[0] - self.x) + abs(loc[1] - self.y),
-                )
-                if (self.x, self.y) != access_point:
-                    self.move_towards(access_point[0], access_point[1], world)
-                    return
-
-                # Try to take enough for one craft, up to inventory limit
-                needed_for_one = blueprint["required_resources"][resource]
-                can_carry = self.max_inventory_items - self.get_inventory_load()
-                qty_to_take = min(needed_for_one, can_carry)
-
-                if qty_to_take <=0:
-                    self.add_memory(f"Inventory full, cannot fetch {resource}.")
-                    # Maybe should haul existing items
-                    return
-
-                success, removed = target_stockpile.remove_item(resource, qty_to_take)
-
-                if not success or removed <= 0:
-                    self.add_memory(f"{target_stockpile.name} had no {resource} for smithing.")
-                    return
-                self.inventory[resource] = self.inventory.get(resource, 0) + removed
-                if world.game_time:
-                    world.ledger.update_stockpile_record(
-                        target_stockpile.name, target_stockpile.inventory, world.game_time.current_day
-                    )
-                world.add_event_log_message(
-                    f"{self.name} withdrew {removed} {resource} from {target_stockpile.name} for smithing."
-                )
-                return # Return to re-evaluate needs next tick
-
-        # If we have all resources for at least one item
-        task_name = f"Smith {item_to_craft}"
-        starting_item_count = self.inventory.get(item_to_craft, 0)
-        if not self._execute_generic_task(world, task_name):
-            return
-
-        produced = self.inventory.get(item_to_craft, 0) - starting_item_count
-        if produced > 0:
-            for resource, amount_needed in blueprint["required_resources"].items():
-                res_used = produced * amount_needed
-                current_res = self.inventory.get(resource, 0)
-                if current_res >= res_used:
-                    current_res -= res_used
-                    if current_res > 0:
-                        self.inventory[resource] = current_res
-                    else:
-                        self.inventory.pop(resource, None)
-                else:
-                    self.inventory.pop(resource, None)
-            self.add_memory(f"Crafted {produced} {item_to_craft}.")
-            self.update_mood_score(config.MOOD_CHANGE_SUCCESSFUL_TASK_MINOR, f"Finished a {item_to_craft}")
-
-        if self.inventory.get(item_to_craft, 0) >= item_threshold:
-            params["phase"] = "deliver"
 
     def _execute_perform_farmer_duties(self, world: 'World'):
         if not self.job or self.job.title != "Farmer":
@@ -4425,6 +4236,79 @@ class Character:
             return
 
         params = self.current_goal.parameters
+    def _handle_gathering_and_crafting_logic(self, world: 'World', item_to_craft: str, task_name: str, workshop_type: str, item_threshold: int):
+        params = self.job_duty_params
+        params.setdefault("phase", "gathering")
+        blueprint = BLUEPRINTS[item_to_craft]
+
+        # Determine all required resources and amounts
+        required_resources = blueprint["required_resources"]
+
+        if self.inventory.get(item_to_craft, 0) >= item_threshold:
+            params["phase"] = "delivering"
+
+        if params["phase"] == "delivering":
+            if self._deposit_resource_to_nearest_stockpile(item_to_craft, world):
+                params["phase"] = "gathering"
+                params.pop(f"_last_{item_to_craft}_count", None)
+                self.current_goal = self.get_default_goal()
+            return
+
+        # Check if all resources are present
+        all_resources_present = True
+        for resource, amount_needed in required_resources.items():
+            if self.inventory.get(resource, 0) < amount_needed:
+                all_resources_present = False
+                params["resource_to_gather"] = resource
+                break
+
+        if all_resources_present:
+            params["phase"] = "crafting"
+        else:
+            params["phase"] = "gathering"
+
+        if params["phase"] == "gathering":
+            resource_needed = params.get("resource_to_gather")
+            if not resource_needed:
+                self.current_goal = self.get_default_goal(); return
+
+            stockpiles = [sp for sp in world.get_stockpiles_for_resource(resource_needed) if sp.inventory.get(resource_needed, 0) > 0]
+            if not stockpiles:
+                self.add_memory(f"No {resource_needed} to make {item_to_craft}."); self.current_goal = self.get_default_goal(); return
+
+            target_sp = min(stockpiles, key=lambda sp: abs(sp.rect[0] - self.x) + abs(sp.rect[1] - self.y))
+            access_point = min(target_sp.access_points, key=lambda loc: abs(loc[0] - self.x) + abs(loc[1] - self.y))
+
+            if (self.x, self.y) != access_point:
+                self.move_towards(access_point[0], access_point[1], world); return
+            else:
+                can_carry = self.max_inventory_items - self.get_inventory_load()
+                amount_needed = required_resources[resource_needed]
+                # Gather enough for a few crafts to minimize trips
+                to_take = min(can_carry, amount_needed * 2)
+                if to_take > 0:
+                    _, taken = target_sp.remove_item(resource_needed, to_take)
+                    self.inventory[resource_needed] = self.inventory.get(resource_needed, 0) + taken
+            return
+
+        if params["phase"] == "crafting":
+            workshop = next((b for b in world.buildings if b.structure_type == workshop_type), None)
+            if not workshop:
+                self.add_memory(f"No {workshop_type} to work at."); self.current_goal = self.get_default_goal(); return
+
+            if (self.x, self.y) != workshop.location:
+                self.move_towards(workshop.location[0], workshop.location[1], world); return
+
+            if self._execute_generic_task(world, task_name):
+                last_count_key = f"_last_{item_to_craft}_count"
+                produced = self.inventory.get(item_to_craft, 0) - params.get(last_count_key, 0)
+                if produced > 0:
+                    for resource, amount_needed in required_resources.items():
+                        res_used = produced * amount_needed
+                        self.inventory[resource] = self.inventory.get(resource, 0) - res_used
+                        if self.inventory[resource] <= 0: del self.inventory[resource]
+                params[last_count_key] = self.inventory.get(item_to_craft, 0)
+            return
         params.setdefault("phase", "gather")
         deliver_threshold = max(3, min(self.max_inventory_items, 6))
 
@@ -4551,6 +4435,38 @@ class Character:
         if self.inventory.get("Arrow Bundle", 0) >= bundle_threshold:
             params["phase"] = "deliver"
 
+    def _execute_perform_sawyer_duties(self, world: 'World'):
+        if not self.job or self.job.title != "Sawyer":
+            self.current_goal = self.get_default_goal(); return
+        self._handle_gathering_and_crafting_logic(world, "Lumber", "Saw Lumber", "sawmill", 4)
+
+    def _execute_perform_carpenter_duties(self, world: 'World'):
+        if not self.job or self.job.title != "Carpenter":
+            self.current_goal = self.get_default_goal(); return
+        self._handle_gathering_and_crafting_logic(world, "Furniture", "Craft Furniture", "carpenters_shop", 2)
+
+    def _execute_perform_smelter_duties(self, world: 'World'):
+        if not self.job or self.job.title != "Smelter":
+            self.current_goal = self.get_default_goal(); return
+        self._handle_gathering_and_crafting_logic(world, "Iron Ingot", "Smelt Iron Ingot", "smelter_workshop", 4)
+
+    def _execute_perform_blacksmith_duties(self, world: 'World'):
+        if not self.job or self.job.title != "Blacksmith":
+            self.current_goal = self.get_default_goal(); return
+
+        params = self.job_duty_params
+
+        # Blacksmith can craft multiple items, choose one for this cycle
+        craftable_items = ["Iron Axe", "Iron Pickaxe"]
+        item_to_craft = params.get("item_to_craft")
+        if not item_to_craft or item_to_craft not in craftable_items:
+            item_to_craft = random.choice(craftable_items)
+            params["item_to_craft"] = item_to_craft
+
+        task_name = "Forge Iron Axe" if item_to_craft == "Iron Axe" else "Forge Iron Pickaxe"
+
+        self._handle_gathering_and_crafting_logic(world, item_to_craft, task_name, "blacksmith_workshop", 2)
+
     def _execute_initiate_hauling(self, world: 'World'):
         # Parameters should be in self.current_goal.parameters
         if not self.current_goal or not self.current_goal.parameters:
@@ -4562,7 +4478,6 @@ class Character:
 
         if not res or self.inventory.get(res,0) == 0:
             self.current_goal = self.get_default_goal()
-            self.decide_action(world)
             return
 
         qty = self.inventory.get(res,0)
@@ -4576,7 +4491,6 @@ class Character:
         new_params["target_stockpile_name"] = sp_chosen.name
         new_params["quantity_to_haul"] = qty
         self.current_goal = Goal(GoalType.HAUL_RESOURCE_TO_STOCKPILE, assignee_id=self.name, originator_id=self.name, parameters=new_params)
-        self.decide_action(world)
 
     def _execute_haul_resource(self, world: 'World'):
         if not self.current_goal or not self.current_goal.parameters:
@@ -4589,7 +4503,6 @@ class Character:
 
         if not res or self.inventory.get(res,0) == 0:
             self.current_goal = self.get_default_goal()
-            self.decide_action(world)
             return
 
         sp_obj = world.get_stockpile_by_name(sp_name)
@@ -4659,7 +4572,7 @@ class Character:
 
         if self.get_inventory_load()>=self.max_inventory_items or inv_wood >= job_quota :
             # self.current_goal = "Perform Woodcutter Duties" # old
-            self.current_goal = create_goal_from_job("Perform Woodcutter Duties", self.name) or self.get_default_goal()
+            self.current_goal = Goal(GoalType.INITIATE_HAULING, assignee_id=self.name, originator_id=self.name, parameters={"resource": "Wood"})
 
 
     def _execute_gather_stone(self, world: 'World'): # Assumes current_goal is GATHER_RESOURCE for Stone
@@ -4688,7 +4601,7 @@ class Character:
 
         if self.get_inventory_load()>=self.max_inventory_items or inv_stone >= job_quota:
             # self.current_goal = "Perform Stonemason Duties" # old
-            self.current_goal = create_goal_from_job("Perform Stonemason Duties", self.name) or self.get_default_goal()
+            self.current_goal = Goal(GoalType.INITIATE_HAULING, assignee_id=self.name, originator_id=self.name, parameters={"resource": "Stone"})
 
 
     def _execute_gather_herbs(self, world: 'World'): # Assumes current_goal is GATHER_RESOURCE for Herbs
@@ -6500,7 +6413,8 @@ class Character:
                 self.current_goal = self.get_default_goal() # Revert to job default
 
         # Fallback to job default goal if current goal is None or explicitly Idle/Wander (string check for now, will be GoalType)
-        if self.current_goal is None or self.current_goal.type in [GoalType.IDLE, GoalType.WANDER]:
+        is_default_job_goal = self.current_goal and "PERFORM" in self.current_goal.type.name and "DUTIES" in self.current_goal.type.name
+        if self.current_goal is None or (self.current_goal.type in [GoalType.IDLE, GoalType.WANDER] and not is_default_job_goal):
              new_default_goal = self.get_default_goal()
              if self.current_goal is None or self.current_goal.type != new_default_goal.type:
                 self.current_goal = new_default_goal
@@ -6518,11 +6432,13 @@ class Character:
         elif self.current_goal.type == GoalType.PERFORM_WOODCUTTER_DUTIES: self._execute_perform_woodcutter_duties(world)
         elif self.current_goal.type == GoalType.PERFORM_STONEMASON_DUTIES: self._execute_perform_stonemason_duties(world)
         elif self.current_goal.type == GoalType.PERFORM_MINER_DUTIES: self._execute_perform_miner_duties(world)
-        elif self.current_goal.type == GoalType.PERFORM_SMELTER_DUTIES: self._execute_perform_smelter_duties(world)
-        elif self.current_goal.type == GoalType.PERFORM_BLACKSMITH_DUTIES: self._execute_perform_blacksmith_duties(world)
         elif self.current_goal.type == GoalType.PERFORM_FARMER_DUTIES: self._execute_perform_farmer_duties(world)
         elif self.current_goal.type == GoalType.PERFORM_HUNTER_DUTIES: self._execute_perform_hunter_duties(world)
         elif self.current_goal.type == GoalType.PERFORM_FLETCHER_DUTIES: self._execute_perform_fletcher_duties(world)
+        elif self.current_goal.type == GoalType.PERFORM_SAWYER_DUTIES: self._execute_perform_sawyer_duties(world)
+        elif self.current_goal.type == GoalType.PERFORM_CARPENTER_DUTIES: self._execute_perform_carpenter_duties(world)
+        elif self.current_goal.type == GoalType.PERFORM_SMELTER_DUTIES: self._execute_perform_smelter_duties(world)
+        elif self.current_goal.type == GoalType.PERFORM_BLACKSMITH_DUTIES: self._execute_perform_blacksmith_duties(world)
         # Add other "Perform <Job> Duties" here, they typically set a more specific goal and call decide_action or return
 
         # Specific Action Goals
@@ -6531,11 +6447,10 @@ class Character:
         elif self.current_goal.type == GoalType.FETCH_TOOL: self._execute_fetch_tool(world)
         elif self.current_goal.type == GoalType.GATHER_RESOURCE:
             resource_name = self.current_goal.parameters.get("resource_name")
-            if resource_name == "Wood": self._execute_gather_wood(world)
-            elif resource_name == "Stone": self._execute_gather_stone(world)
-            elif resource_name == "Herbs": self._execute_gather_herbs(world)
-            elif resource_name == "Water": self._execute_gather_water(world)
-            else: self.current_goal = self.get_default_goal() # Unknown resource
+            if resource_name:
+                self.gather_resource(resource_name, world)
+            else:
+                self.current_goal = self.get_default_goal()
         elif self.current_goal.type == GoalType.INITIATE_HAULING: self._execute_initiate_hauling(world)
         elif self.current_goal.type == GoalType.HAUL_RESOURCE_TO_STOCKPILE: self._execute_haul_resource(world)
         elif self.current_goal.type == GoalType.COUNT_STOCKPILE: self._execute_count_stockpile(world)
