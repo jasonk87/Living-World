@@ -1,12 +1,16 @@
 # tests/test_economy.py
 import pytest
+import threading
+import time
+import urllib.request
+import json
 from game.character import Character
 from game.item import Item
 from game.building import Building
 from game.world import World
 from game.stockpile import Stockpile
 from game.time import Time
-from game.main import advance_simulation_one_tick
+from game.main import advance_simulation_one_tick, run_server as start_server
 from game.data import STRUCTURE_BLUEPRINTS
 
 # Test for Miner
@@ -97,3 +101,74 @@ def test_carpenter_job(world):
         advance_simulation_one_tick(world)
 
     assert stockpile.inventory.get("Furniture", 0) > 0, "Carpenter should have produced Furniture"
+
+def test_work_order_creation_and_assignment(world):
+    from game.work_order import WorkOrder
+    # Add a Carpenter to the world
+    carpenter = Character(name="Test Carpenter", personality="test", traits=[], skills={}, job="Carpenter", x=0, y=0)
+    carpenter.inventory["Hammer"] = 1
+    carpenter.equip_tool("Hammer")
+    world.add_character(carpenter)
+
+    # Add a Carpenter's shop
+    blueprint = STRUCTURE_BLUEPRINTS["carpenters_shop"]
+    world.add_building(Building(structure_type="carpenters_shop", location=(9, 9), **blueprint))
+
+    # Add a stockpile with the necessary resources
+    stockpile = Stockpile("main_stockpile", 2, 2, 1, 1, allowed_resources=["Lumber", "Iron Ingot", "Furniture"])
+    stockpile.add_item("Lumber", 10)
+    stockpile.add_item("Iron Ingot", 10)
+    world.stockpiles.append(stockpile)
+
+    # Create and add a work order
+    work_order = WorkOrder(order_type="CraftItem", details={"item_name": "Furniture", "quantity": 1})
+    work_order.status = "Approved"
+    world.add_work_order(work_order)
+
+    # Simulate for a few ticks to allow the character to be assigned the work order
+    for _ in range(10):
+        advance_simulation_one_tick(world)
+
+    # Check that the Carpenter has been assigned the work order
+    assert carpenter.active_work_order_id == work_order.order_id, "Carpenter should have been assigned the work order"
+def test_end_to_end_work_order_creation_and_completion(world):
+    from game.work_order import WorkOrder
+    # Add a Manager, Carpenter, and necessary buildings/resources
+    manager = Character(name="Test Manager", personality="test", traits=[], skills={}, job="Manager", x=0, y=0)
+    world.add_character(manager)
+    carpenter = Character(name="Test Carpenter", personality="test", traits=[], skills={}, job="Carpenter", x=0, y=0)
+    carpenter.inventory["Hammer"] = 1
+    carpenter.equip_tool("Hammer")
+    world.add_character(carpenter)
+    manager.add_subordinate(carpenter.name)
+    carpenter.set_supervisor(manager.name)
+    blueprint = STRUCTURE_BLUEPRINTS["carpenters_shop"]
+    world.add_building(Building(structure_type="carpenters_shop", location=(9, 9), **blueprint))
+    stockpile = Stockpile("main_stockpile", 2, 2, 1, 1, allowed_resources=["Lumber", "Iron Ingot", "Furniture"])
+    stockpile.add_item("Lumber", 10)
+    stockpile.add_item("Iron Ingot", 10)
+    world.stockpiles.append(stockpile)
+
+    # Manually update the ledger to reflect the initial stockpile state,
+    # as there's no Bookkeeper in this test to do it automatically.
+    world.ledger.update_stockpile_record("main_stockpile", stockpile.inventory, world.game_time.current_day)
+
+    # Manually create and add a work order (simulating an API call's effect)
+    work_order = WorkOrder(order_type="CraftItem", details={"item_name": "Furniture", "quantity": 1})
+    world.add_work_order(work_order)
+
+    # Simulate until the order is approved and assigned
+    for _ in range(50):
+        advance_simulation_one_tick(world)
+        if carpenter.active_work_order_id == work_order.order_id:
+            break
+
+    assert carpenter.active_work_order_id == work_order.order_id, "Carpenter should have been assigned the work order"
+
+    # Continue simulation until the order is completed
+    for _ in range(200):
+        advance_simulation_one_tick(world)
+        if work_order.status == "Completed":
+            break
+
+    assert work_order.status == "Completed", "Work order should be completed"

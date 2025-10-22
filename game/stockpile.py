@@ -95,18 +95,18 @@ class Stockpile:
 
     def has_space_for(self, resource_name: str, quantity: int = 1) -> bool:
         if not self.is_allowed(resource_name):
-            # print(f"Debug: {resource_name} not allowed in {self.name}")
+
             return False
 
         current_resource_qty = self.inventory.get(resource_name, 0)
         if self.capacity_per_resource is not None and \
            current_resource_qty + quantity > self.capacity_per_resource:
-            # print(f"Debug: {resource_name} over per-resource capacity in {self.name}")
+
             return False
 
         if self.total_capacity is not None and \
            self.get_current_load() + quantity > self.total_capacity:
-            # print(f"Debug: {resource_name} over total capacity in {self.name}")
+
             return False
 
         return True
@@ -118,7 +118,7 @@ class Stockpile:
 
     def add_item(self, resource_name: str, quantity: int = 1) -> Tuple[bool, int]:
         if not self.is_allowed(resource_name): # Double check, though has_space_for should catch it
-            # print(f"Stockpile Error: {self.name} cannot accept {resource_name} (not allowed).")
+
             return False, 0
 
         # Calculate how much can actually be added based on available space
@@ -130,23 +130,23 @@ class Stockpile:
 
         if actual_add_qty > 0:
             self.inventory[resource_name] = self.inventory.get(resource_name, 0) + actual_add_qty
-            # print(f"Added {actual_add_qty}/{quantity} {resource_name} to {self.name}. Inv: {self.inventory}")
+
             return True, actual_add_qty
         else:
-            # print(f"Stockpile Full/Error: {self.name} could not add any {resource_name} (wanted {quantity}).")
+
             return False, 0
 
 
     def remove_item(self, resource_name: str, quantity: int = 1) -> Tuple[bool, int]:
         if resource_name not in self.inventory or self.inventory[resource_name] == 0:
-            # print(f"Stockpile Empty/Error: {self.name} has no {resource_name} to remove.")
+
             return False, 0
 
         can_remove = min(quantity, self.inventory[resource_name])
         self.inventory[resource_name] -= can_remove
         if self.inventory[resource_name] == 0:
             del self.inventory[resource_name]
-        # print(f"Removed {can_remove} {resource_name} from {self.name}. Inv: {self.inventory}")
+
         return True, can_remove
 
     def __str__(self):

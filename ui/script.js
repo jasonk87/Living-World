@@ -3825,4 +3825,56 @@ function buildCareerContent(character) {
     // --- Initial Load & Interval ---
     updateUI();
     setInterval(updateUI, 2000);
+
+    // --- Work Order Form ---
+    const workOrderForm = document.getElementById('work-order-form');
+    const workOrderStatus = document.getElementById('work-order-status');
+
+    if (workOrderForm) {
+        workOrderForm.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            if (workOrderStatus) workOrderStatus.textContent = 'Submitting...';
+
+            const formData = new FormData(workOrderForm);
+            const itemName = formData.get('item');
+            const quantity = parseInt(formData.get('quantity'), 10);
+
+            const workOrderData = {
+                order_type: 'CraftItem',
+                details: {
+                    item_name: itemName,
+                    quantity: quantity,
+                },
+                priority: 1, // Default priority
+            };
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/create_work_order`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(workOrderData),
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`Server responded with ${response.status}: ${errorText}`);
+                }
+
+                const result = await response.json();
+                if (workOrderStatus) {
+                    workOrderStatus.textContent = `Success! Order ID: ${result.order_id}`;
+                    workOrderStatus.style.color = 'var(--success-color)';
+                }
+                workOrderForm.reset();
+            } catch (error) {
+                console.error('Error submitting work order:', error);
+                if (workOrderStatus) {
+                    workOrderStatus.textContent = `Error: ${error.message}`;
+                    workOrderStatus.style.color = 'var(--danger-color)';
+                }
+            }
+        });
+    }
 });

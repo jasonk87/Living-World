@@ -293,7 +293,7 @@ class Character:
         if reason and old_score != self.reputation_score:
             log_message = f"Reputation score changed by {change} to {self.reputation_score}. Reason: {reason}"
             self.add_memory(log_message)
-            print(f"LOG: {self.name}'s {log_message}")
+            # print(f"LOG: {self.name}'s {log_message}")
             if world and abs(change) >= config.REPUTATION_FOR_RUMOR_THRESHOLD:
                 self._try_generate_rumor_from_reputation(change, reason, world)
 
@@ -3191,7 +3191,7 @@ class Character:
                 return True
 
         return moved and (self.x, self.y) == target
-        # print(f"DEBUG {self.name}: move_towards ({target_x},{target_y}) FAILED all attempts from ({self.x},{self.y}).")
+        # # print(f"DEBUG {self.name}: move_towards ({target_x},{target_y}) FAILED all attempts from ({self.x},{self.y}).")
 
 
     def advance_age(self, world: 'World') -> None:
@@ -3292,10 +3292,14 @@ class Character:
         tool_type = blueprint.get("tool_type"); max_durability = blueprint.get("max_durability")
         if not tool_type or max_durability is None: return False
         self.equipped_tool = {"name": tool_item_name, "durability": max_durability, "max_durability": max_durability, "tool_type": tool_type}
-        self.add_memory(f"Equipped {tool_item_name}"); print(f"{self.name} equipped {tool_item_name} (Dur: {max_durability}).")
+        self.add_memory(f"Equipped {tool_item_name}")
+        # print(f"{self.name} equipped {tool_item_name} (Dur: {max_durability}).")
         return True
     def unequip_tool(self):
-        if self.equipped_tool: self.add_memory(f"Unequipped {self.equipped_tool['name']}."); print(f"{self.name} unequipped {self.equipped_tool['name']}."); self.equipped_tool = None
+        if self.equipped_tool:
+            self.add_memory(f"Unequipped {self.equipped_tool['name']}.")
+            # print(f"{self.name} unequipped {self.equipped_tool['name']}.")
+            self.equipped_tool = None
 
     def find_task_location(self, task_name: str, world: 'World') -> Optional[Tuple[int,int]]:
         task_def = JOB_TASK_DEFINITIONS.get(task_name)
@@ -3542,7 +3546,7 @@ class Character:
         return chance, oversight_bonus_applied
 
     def _execute_fetch_tool(self, world: 'World') -> bool: # True if still fetching, False if done/failed
-        print(f"DEBUG FETCH_TOOL: {self.name} is fetching a {self.tool_to_fetch_type}.")
+        # print(f"DEBUG FETCH_TOOL: {self.name} is fetching a {self.tool_to_fetch_type}.")
         if not self.tool_to_fetch_type:
             self.current_goal = self.goal_before_fetching_tool or self.get_default_goal()
             self.goal_before_fetching_tool = None
@@ -3552,7 +3556,7 @@ class Character:
         for item_name, quantity in self.inventory.items():
             if quantity > 0 and item_name in BLUEPRINTS and BLUEPRINTS[item_name].get("tool_type") == self.tool_to_fetch_type:
                 if self.equip_tool(item_name):
-                    print(f"DEBUG FETCH_TOOL: {self.name} found and equipped {item_name} from inventory.")
+                    # print(f"DEBUG FETCH_TOOL: {self.name} found and equipped {item_name} from inventory.")
                     # self.inventory[item_name] -= 1 # This was causing issues - equip_tool doesn't consume
                     # if self.inventory[item_name] <= 0:
                     #     del self.inventory[item_name]
@@ -3575,12 +3579,12 @@ class Character:
                         self.fetching_tool_info = {"name_to_fetch": item, "stockpile_name": sp.name}; stockpile_to_search, target_tool_name = sp, item; break
                 if self.fetching_tool_info: break
             if not self.fetching_tool_info:
-                print(f"{self.name} needs a {self.tool_to_fetch_type} but none are available!")
+                # print(f"{self.name} needs a {self.tool_to_fetch_type} but none are available!")
                 self.current_goal = self.goal_before_fetching_tool or self.get_default_goal()
                 self.tool_to_fetch_type = None; self.goal_before_fetching_tool = None
                 return False
         if not stockpile_to_search or not target_tool_name:
-            print(f"DEBUG FETCH_TOOL: {self.name} could not find a tool in any stockpile.")
+            # print(f"DEBUG FETCH_TOOL: {self.name} could not find a tool in any stockpile.")
             # NEW: Check market if no tool is available
             # Find a tool of the required type from the market prices
             tool_to_buy = None
@@ -3604,7 +3608,7 @@ class Character:
         if (self.x, self.y) == spot:
             s, qr = stockpile_to_search.remove_item(target_tool_name, 1)
             if s and qr > 0:
-                print(f"DEBUG FETCH_TOOL: {self.name} took {target_tool_name} from {stockpile_to_search.name}.")
+                # print(f"DEBUG FETCH_TOOL: {self.name} took {target_tool_name} from {stockpile_to_search.name}.")
                 self.inventory[target_tool_name] = self.inventory.get(target_tool_name, 0) + qr # Add to inventory
                 if self.equip_tool(target_tool_name):
                     self.current_goal = self.goal_before_fetching_tool or self.get_default_goal()
@@ -3622,14 +3626,14 @@ class Character:
             return True
 
     def _execute_generic_task(self, world: 'World', task_name: str) -> bool: # True if task action taken, False if tool fetch needed
-        print(f"DEBUG GENERIC_TASK: {self.name} is executing task '{task_name}'.")
+        # print(f"DEBUG GENERIC_TASK: {self.name} is executing task '{task_name}'.")
         if task_name not in JOB_TASK_DEFINITIONS:
             self.current_goal = self.get_default_goal()
             return False
         task_def = JOB_TASK_DEFINITIONS[task_name]; tool_type = task_def.get("required_tool_type")
         # self.current_task_def_name = task_name # This is already set by the calling gather function
         if tool_type and (not self.equipped_tool or self.equipped_tool.get("tool_type") != tool_type):
-            print(f"DEBUG GENERIC_TASK: {self.name} needs a {tool_type} for '{task_name}'. Current tool: {self.equipped_tool}")
+            # print(f"DEBUG GENERIC_TASK: {self.name} needs a {tool_type} for '{task_name}'. Current tool: {self.equipped_tool}")
             if not self.goal_before_fetching_tool : self.goal_before_fetching_tool = self.current_goal
             # self.current_goal = "Fetch Tool"
             self.current_goal = Goal(GoalType.FETCH_TOOL, assignee_id=self.name, originator_id=self.name, parameters={"tool_type": tool_type})
@@ -3729,13 +3733,14 @@ class Character:
 
             if actual_yield_taken <= 0:
                 if final_yield_amount > 0: # Tried to yield something but inventory was full
-                    print(f"{self.name} inventory full for {task_name} (tried to yield {final_yield_amount} {res_prod}).")
+                    # print(f"{self.name} inventory full for {task_name} (tried to yield {final_yield_amount} {res_prod}).")
+                    pass
                 break # Exit the while loop if inventory is full
 
             self.inventory[res_prod] = self.inventory.get(res_prod,0) + actual_yield_taken
             tool_name_mem = self.equipped_tool['name'] if self.equipped_tool else 'hands'
             self.add_memory(f"Task '{task_name}': got {actual_yield_taken} {res_prod} (base: {base_yield_amount}) with {tool_name_mem}.")
-            print(f"{self.name} task '{task_name}' yielded {actual_yield_taken} {res_prod} (base: {base_yield_amount}).")
+            # print(f"{self.name} task '{task_name}' yielded {actual_yield_taken} {res_prod} (base: {base_yield_amount}).")
 
             if hasattr(world, "record_resource_harvest") and world.is_resource_node(res_prod, (self.x, self.y)):
                 world.record_resource_harvest(res_prod, (self.x, self.y), actual_yield_taken)
@@ -3753,7 +3758,8 @@ class Character:
 
                 self.equipped_tool["durability"] -= durability_loss
                 if self.equipped_tool["durability"] <= 0:
-                    self.add_memory(f"{self.equipped_tool['name']} broke!"); print(f"Oh no! {self.name}'s {self.equipped_tool['name']} BROKE!")
+                    self.add_memory(f"{self.equipped_tool['name']} broke!")
+                    # print(f"Oh no! {self.name}'s {self.equipped_tool['name']} BROKE!")
                     self.update_mood_score(config.MOOD_CHANGE_TOOL_BROKE, f"My {self.equipped_tool['name']} broke during task '{task_name}'")
                     self.needs['Safety'] = max(config.NEED_SCORE_MIN, self.needs.get('Safety', config.NEED_SAFETY_DEFAULT) - 10) # Tool breaking is startling/unsafe
                     self.add_memory(f"Tool breaking made me feel less safe. Safety: {self.needs['Safety']}")
@@ -3852,7 +3858,7 @@ class Character:
 
                 self.inventory[item_name] = self.inventory.get(item_name, 0) + 1
                 self.add_memory(f"Crafted 1 {item_name} for WO {order.order_id}.")
-                print(f"{self.name} CRAFTED 1 {item_name}. Inv has: {self.inventory.get(item_name,0)}/{item_qty_total} for WO {order.order_id}.")
+                # print(f"{self.name} CRAFTED 1 {item_name}. Inv has: {self.inventory.get(item_name,0)}/{item_qty_total} for WO {order.order_id}.")
                 self.update_mood_score(config.MOOD_CHANGE_SUCCESSFUL_TASK_MINOR, f"Crafted a {item_name}")
                 self.needs['Esteem'] = min(config.NEED_SCORE_MAX, self.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) + 3)
                 self.add_memory(f"Crafting {item_name} boosted my esteem. Esteem: {self.needs['Esteem']}")
@@ -3889,7 +3895,7 @@ class Character:
             else: # All items crafted AND all items hauled (inventory of this item is 0)
                 order.status = "Completed"
                 self.add_memory(f"Completed and Stocked all items for WO {order.order_id} ({item_name}).")
-                print(f"{self.name} COMPLETED/STOCKED WO {order.order_id} ({item_name}).")
+                # print(f"{self.name} COMPLETED/STOCKED WO {order.order_id} ({item_name}).")
                 self.update_mood_score(config.MOOD_CHANGE_SUCCESSFUL_TASK_MAJOR, f"Fully completed WO {order.order_id}")
                 self.needs['Esteem'] = min(config.NEED_SCORE_MAX, self.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) + 8) # Fully completing a WO is a major esteem boost
                 self.add_memory(f"Fully completing and stocking WO {order.order_id} gave a major boost to my esteem. Esteem: {self.needs['Esteem']}")
@@ -3906,7 +3912,9 @@ class Character:
         sp_to_fetch = world.get_stockpile_by_name(target_sp_name) if target_sp_name else None
         if not sp_to_fetch or sp_to_fetch.inventory.get(res_name, 0) == 0:
             suitable_sps = [sp for sp in world.get_stockpiles_for_resource(res_name) if sp.inventory.get(res_name, 0) > 0]
-            if not suitable_sps: print(f"{self.name} needs {res_name}, but none in stockpiles. Waiting."); return
+            if not suitable_sps:
+                # print(f"{self.name} needs {res_name}, but none in stockpiles. Waiting.")
+                return
             sp_to_fetch = suitable_sps[0]; self.resource_to_fetch["target_stockpile_name"] = sp_to_fetch.name
         spot = (sp_to_fetch.rect[0], sp_to_fetch.rect[1])
         if (self.x, self.y) == spot:
@@ -3945,13 +3953,16 @@ class Character:
             effective_available = stock_from_ledger + pending_or_approved_count
             if effective_available < target_qty:
                 blueprint = BLUEPRINTS.get(item_name);
-                if not blueprint: print(f"Error: MC {self.name} - No blueprint for {item_name}."); continue
+                if not blueprint:
+                    # print(f"Error: MC {self.name} - No blueprint for {item_name}.")
+                    continue
                 qty_to_order = target_qty - effective_available
                 total_req_res_for_order = {res: qty * qty_to_order for res, qty in blueprint["required_resources"].items()}
                 order_details = {"item_name": item_name, "quantity": qty_to_order, "required_resources": total_req_res_for_order}
                 new_order = WorkOrder(order_type="CraftItem", details=order_details, creation_day=world.game_time.current_day, priority=2)
                 world.add_work_order(new_order); self.order_cooldown[item_name] = world.game_time.current_day
-                self.add_memory(f"Generated WO for {qty_to_order} {item_name}."); print(f"{self.name} (MC) generated WO for {qty_to_order} {item_name}(s).")
+                self.add_memory(f"Generated WO for {qty_to_order} {item_name}.")
+                # print(f"{self.name} (MC) generated WO for {qty_to_order} {item_name}(s).")
                 self._receive_payment(JOB_SALARIES.get("Assess Production Needs", 10), f"creating WO for {item_name}", world)
                 item_processed_this_tick = True; self._mc_item_check_idx = (current_idx + 1) % len(target_item_names); break
         if not item_processed_this_tick:
@@ -4085,14 +4096,18 @@ class Character:
                     if last_update is not None and world.game_time.current_day - last_update > config.STALE_THRESHOLD_DAYS: stale_concerns = True; break
                 if stale_concerns: self.add_memory(f"Stale data for WO {order_to_process.order_id}, res {resource}");
                 if avail < req_qty: can_approve = False; missing_notes.append(f"{resource} (need {req_qty}, has {avail})")
-        if stale_concerns and not can_approve: print(f"{self.name} (Manager) notes stale data for {order_to_process.order_id}, and resources confirmed insufficient.")
-        elif stale_concerns: print(f"{self.name} (Manager) notes stale data for {order_to_process.order_id}, proceeding with caution.")
+        if stale_concerns and not can_approve:
+            # print(f"{self.name} (Manager) notes stale data for {order_to_process.order_id}, and resources confirmed insufficient.")
+            pass
+        elif stale_concerns:
+            # print(f"{self.name} (Manager) notes stale data for {order_to_process.order_id}, proceeding with caution.")
+            pass
         if can_approve:
             order_to_process.status = "Approved"
             order_to_process.approved_by = self.name
             order_to_process.approval_day = world.game_time.current_day
             self.add_memory(f"Approved WO {order_to_process.order_id}")
-            print(f"{self.name} (Manager) APPROVED {order_to_process.order_id[:8]}.")
+            # print(f"{self.name} (Manager) APPROVED {order_to_process.order_id[:8]}.")
             self._receive_payment(JOB_SALARIES.get("Manage Subordinates", 3), f"reviewing WO {order_to_process.order_id[:4]}", world)
             self._record_management_activity(world, f"order_approve:{order_to_process.order_id[:4]}", weight=0.5)
         else:
@@ -4100,7 +4115,7 @@ class Character:
             order_to_process.denied_by = self.name
             order_to_process.denial_reason = f"Insuff: {', '.join(missing_notes) or 'stale data'}"
             self.add_memory(f"Denied WO {order_to_process.order_id}")
-            print(f"{self.name} (Manager) DENIED {order_to_process.order_id[:8]}. Reason: {order_to_process.denial_reason}")
+            # print(f"{self.name} (Manager) DENIED {order_to_process.order_id[:8]}. Reason: {order_to_process.denial_reason}")
             self._receive_payment(JOB_SALARIES.get("Manage Subordinates", 3), f"reviewing WO {order_to_process.order_id[:4]}", world)
             self._record_management_activity(world, f"order_deny:{order_to_process.order_id[:4]}", weight=0.5)
     def _execute_maintain_ledger(self, world: 'World'):
@@ -4152,10 +4167,11 @@ class Character:
                              miscounted_items.append(f"{item_name} (actual: {actual_qty}, recorded: {recorded_inventory[item_name]})")
                 if miscounted_items:
                     self.add_memory(f"Careless counting {target_stockpile_name}. Miscounted: {', '.join(miscounted_items)}.")
-                    # print(f"{self.name} (Bookkeeper, Careless) may have miscounted {target_stockpile_name}. Actual: {actual_inventory}, Recorded for Ledger: {recorded_inventory}")
+                    # # print(f"{self.name} (Bookkeeper, Careless) may have miscounted {target_stockpile_name}. Actual: {actual_inventory}, Recorded for Ledger: {recorded_inventory}")
 
             world.ledger.update_stockpile_record(target_stockpile_name, recorded_inventory, world.game_time.current_day)
-            self.add_memory(f"Counted {target_stockpile_name}"); print(f"{self.name} (Bookkeeper) finished counting {target_stockpile_name}. Ledger updated with: {recorded_inventory}. Day: {world.game_time.current_day}.")
+            self.add_memory(f"Counted {target_stockpile_name}")
+            # print(f"{self.name} (Bookkeeper) finished counting {target_stockpile_name}. Ledger updated with: {recorded_inventory}. Day: {world.game_time.current_day}.")
             self._receive_payment(JOB_SALARIES.get("Maintain Ledger", 4), f"counting {target_stockpile_name}", world)
             self.current_goal = create_goal_from_job("Maintain Ledger", self.name) or self.get_default_goal()
             return
@@ -4548,7 +4564,7 @@ class Character:
     def _execute_gather_wood(self, world: 'World'): # Assumes current_goal is GATHER_RESOURCE for Wood
         task_loc = self.find_task_location("Chop Wood", world)
         if not task_loc :
-            print(f"{self.name} can't find Forest for Chop Wood.")
+            # print(f"{self.name} can't find Forest for Chop Wood.")
             self.current_goal = self.get_default_goal()
             return
         if (self.x, self.y) != task_loc:
@@ -4578,7 +4594,7 @@ class Character:
     def _execute_gather_stone(self, world: 'World'): # Assumes current_goal is GATHER_RESOURCE for Stone
         task_loc = self.find_task_location("Mine Stone", world)
         if not task_loc :
-            print(f"{self.name} can't find Rocks for Mine Stone.")
+            # print(f"{self.name} can't find Rocks for Mine Stone.")
             self.current_goal = self.get_default_goal()
             return
         if (self.x, self.y) != task_loc:
@@ -6412,6 +6428,52 @@ class Character:
                 self._reset_building_state()
                 self.current_goal = self.get_default_goal() # Revert to job default
 
+        # Check for approved work orders if character has a crafting job and is idle/default
+        if self.job and self.job.title in ["Blacksmith", "Carpenter", "Smelter", "Sawyer"] and \
+           self.current_goal.type in [GoalType.IDLE, GoalType.WANDER, GoalType.PERFORM_BLACKSMITH_DUTIES, GoalType.PERFORM_CARPENTER_DUTIES, GoalType.PERFORM_SMELTER_DUTIES, GoalType.PERFORM_SAWYER_DUTIES]:
+            # print(f"DEBUG: {self.name} ({self.job.title}) with goal {self.current_goal.type.name} is checking for work orders.")
+
+            approved_orders = world.get_approved_craft_orders()
+            if approved_orders:
+                # print(f"DEBUG: Found {len(approved_orders)} approved orders.")
+                order_to_take = None
+                for order in approved_orders:
+                    item_name = order.details.get("item_name")
+                    if not item_name: continue
+
+                    blueprint = BLUEPRINTS.get(item_name)
+                    if not blueprint: continue
+
+                    required_skill = blueprint.get("required_skill")
+                    job_skill_map = {
+                        "Blacksmith": "Blacksmithing",
+                        "Carpenter": "Woodworking",
+                        "Smelter": "Metallurgy",
+                        "Sawyer": "Woodworking"
+                    }
+                    # print(f"DEBUG: Checking order for {item_name}. Required skill: {required_skill}. My job skill: {job_skill_map.get(self.job.title)}")
+                    if self.job.title in job_skill_map and job_skill_map[self.job.title] == required_skill:
+                        order_to_take = order
+                        # print(f"DEBUG: Found suitable order: {order.order_id}")
+                        break
+
+                if order_to_take:
+                    # print(f"DEBUG: Assigning order {order_to_take.order_id} to {self.name}")
+                    order_to_take.status = "InProgress"
+                    order_to_take.assigned_to = self.name
+
+                    self._reset_crafting_state()
+                    self.active_work_order_id = order_to_take.order_id
+
+                    self.current_goal = Goal(
+                        GoalType.EXECUTE_CRAFT_ORDER,
+                        assignee_id=self.name,
+                        originator_id="WorkOrder",
+                        parameters={"order_id": order_to_take.order_id}
+                    )
+                    self.add_memory(f"Claimed Craft WO {order_to_take.order_id} for {order_to_take.details.get('item_name')}.")
+                    # print(f"DEBUG: State after assignment: active_work_order_id={self.active_work_order_id}, goal={self.current_goal.type.name}")
+
         # Fallback to job default goal if current goal is None or explicitly Idle/Wander (string check for now, will be GoalType)
         is_default_job_goal = self.current_goal and "PERFORM" in self.current_goal.type.name and "DUTIES" in self.current_goal.type.name
         if self.current_goal is None or (self.current_goal.type in [GoalType.IDLE, GoalType.WANDER] and not is_default_job_goal):
@@ -6513,7 +6575,7 @@ class Character:
             goal_executed_this_tick = True
         else:
             # This case means a GoalType exists but has no corresponding _execute method in the dispatcher
-            print(f"Warning: {self.name} has unhandled GoalType '{self.current_goal.type}'. Setting to Idle.")
+            # print(f"Warning: {self.name} has unhandled GoalType '{self.current_goal.type}'. Setting to Idle.")
             self.current_goal = self.get_default_goal()
             self._execute_wander(world) # Wander if unhandled goal
             goal_executed_this_tick = True
@@ -7215,7 +7277,7 @@ class Character:
 
         review_summary = f"Performance review for {subordinate.name}: {final_rating}. Notes: {'; '.join(review_notes) or 'General review.'}"
         self.add_memory(review_summary)
-        print(f"{self.name} ({self.personality}) reviewed {subordinate.name}. Objective: {objective_rating}, Final: {final_rating}. Rel: {relationship_to_sub}.")
+        # print(f"{self.name} ({self.personality}) reviewed {subordinate.name}. Objective: {objective_rating}, Final: {final_rating}. Rel: {relationship_to_sub}.")
         subordinate.add_memory(f"Had performance review with {self.name} ({self.personality}). Rated: {final_rating}. My rel with them: {subordinate.get_relationship_score(self.name)}")
         self._record_management_activity(world, f"review:{subordinate.name}")
 
@@ -7237,7 +7299,7 @@ class Character:
         subordinate.warning_count += 1
         warning_memory = f"Issued warning to {subordinate.name} for: {reason_message}. Total warnings: {subordinate.warning_count}."
         self.add_memory(warning_memory)
-        print(f"{self.name} issued WARNING to {subordinate.name} for '{reason_message}'. Total warnings: {subordinate.warning_count}.")
+        # print(f"{self.name} issued WARNING to {subordinate.name} for '{reason_message}'. Total warnings: {subordinate.warning_count}.")
 
         subordinate.add_memory(f"Received warning from {self.name} regarding: {reason_message}. Current warnings: {subordinate.warning_count}.")
         subordinate.update_mood_score(config.MOOD_CHANGE_RECEIVED_WARNING, f"Received warning: {reason_message}")
@@ -7260,7 +7322,7 @@ class Character:
                 subordinate.performance_rating = "Poor"
                 self.add_memory(f"{subordinate.name}'s performance set to Poor due to {subordinate.warning_count} warnings (Threshold: {config.FIRING_WARNING_THRESHOLD}).")
                 subordinate.add_memory(f"Performance automatically set to Poor due to reaching {subordinate.warning_count} warnings.")
-                print(f"{subordinate.name}'s performance automatically set to Poor due to {subordinate.warning_count} warnings.")
+                # print(f"{subordinate.name}'s performance automatically set to Poor due to {subordinate.warning_count} warnings.")
                 subordinate.update_mood_score(-10, "Performance set to Poor due to warnings")
                 subordinate.needs['Esteem'] = max(config.NEED_SCORE_MIN, subordinate.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) - 10) # Further esteem hit
                 subordinate.add_memory(f"Performance being set to Poor further damaged my esteem. Esteem: {subordinate.needs['Esteem']}")
@@ -7336,13 +7398,13 @@ class Character:
                 wo.status = "Pending" # Re-queue it
                 wo.assigned_to = None
                 subordinate.add_memory(f"Work order {subordinate.active_work_order_id} unassigned due to termination.")
-                print(f"Work order {subordinate.active_work_order_id} unassigned from {subordinate.name} due to termination.")
+                # print(f"Work order {subordinate.active_work_order_id} unassigned from {subordinate.name} due to termination.")
             subordinate._reset_crafting_state()
 
 
         fire_memory = f"Fired {subordinate.name} from their job as {original_job}."
         self.add_memory(fire_memory)
-        print(f"{self.name} FIRED {subordinate.name} who was a {original_job}.")
+        # print(f"{self.name} FIRED {subordinate.name} who was a {original_job}.")
 
         subordinate.add_memory(f"Was fired by {self.name} from job {original_job}. Now Unemployed.")
         self._apply_family_splash_effect(subordinate, -50, world, reason=f"fired") # Use a large, but not extreme, base for splash
@@ -7351,7 +7413,7 @@ class Character:
         # Optional: Remove from world or mark inactive. For now, they become "Unemployed".
         # If you want to remove them from the simulation entirely:
         # world.characters.pop(sub_idx)
-        # print(f"{subordinate.name} has been removed from the world.")
+        # # print(f"{subordinate.name} has been removed from the world.")
         # However, this could cause issues if other parts of the code expect the character to exist.
         # Keeping them as "Unemployed" is safer for now.
 
@@ -7484,7 +7546,7 @@ class Character:
 
         if reason:
             self.add_memory(f"My relationship with {target_char_name} changed by {value_change} to {new_score}. Reason: {reason}")
-            # print(f"DEBUG: {self.name}'s relationship with {target_char_name} changed by {value_change} to {new_score}. Reason: {reason}")
+            # # print(f"DEBUG: {self.name}'s relationship with {target_char_name} changed by {value_change} to {new_score}. Reason: {reason}")
 
         new_tier = self.get_relationship_tier(target_char_name)
         if new_tier != previous_tier:

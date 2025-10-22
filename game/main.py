@@ -153,7 +153,7 @@ def initialize_game_world():
     # For now, let's assume the Mayor will initiate projects.
 
     for msg in initial_setup_messages:
-        print(msg)
+        # print(msg)
         if game_world: game_world.add_event_log_message(msg)
 
     if game_world: game_world.add_event_log_message("--- Simulation Server Initialized ---")
@@ -163,7 +163,7 @@ def tick_simulation():
     global game_world, game_time_obj, simulation_running, game_paused, test_characters_list
 
     if not game_world or not game_time_obj:
-        print("Error: Game world or time object not initialized.")
+        # print("Error: Game world or time object not initialized.")
         simulation_running = False
         return
 
@@ -180,7 +180,8 @@ def tick_simulation():
 
         if new_day:
             day_msg = f"*** NEW DAY: Day {game_time_obj.current_day}. Weather: {game_world.weather}, Season: {game_world.season} ***"
-            print(day_msg); game_world.add_event_log_message(day_msg)
+            # print(day_msg);
+            game_world.add_event_log_message(day_msg)
 
             if hasattr(game_world, "daily_environment_tick"):
                 game_world.daily_environment_tick()
@@ -266,12 +267,14 @@ def tick_simulation():
 
         max_simulation_days = config.MAX_SIMULATION_DAYS if hasattr(config, 'MAX_SIMULATION_DAYS') else 20
         if game_time_obj.current_day > max_simulation_days:
-            msg = f"Simulation reached max days ({max_simulation_days}). Stopping simulation thread."; print(msg); game_world.add_event_log_message(msg)
+            msg = f"Simulation reached max days ({max_simulation_days}). Stopping simulation thread."
+            # print(msg)
+            game_world.add_event_log_message(msg)
             simulation_running = False # Stop the simulation thread
 
 def simulation_thread_func():
     global simulation_running
-    print("Simulation thread started.")
+    # print("Simulation thread started.")
     while simulation_running:
         if not game_paused:
             tick_simulation()
@@ -282,19 +285,19 @@ def simulation_thread_func():
 
         py_time.sleep(max(0.01, current_sleep_duration)) # Ensure a minimum sleep to prevent overly tight loops
 
-    print("Simulation thread finished.")
-    # Print final character states after simulation stops
-    if game_world and test_characters_list:
-        print(f"Final Time: {game_time_obj}")
-        for char_final in test_characters_list:
-            if char_final in game_world.characters: # Check if still in world
-                print(f"\n{char_final}")
-                print(f"  Final Needs: {char_final.needs}")
-                print(f"  Inventory: {char_final.inventory}")
-                print(f"  Recent Memories (last 10):")
-                for mem in char_final.memory[-10:]: print(f"    - {mem}")
-        print("\n--- World Event Log (Last 50) ---")
-        for log_entry in game_world.event_log[-50:]: print(log_entry)
+    # print("Simulation thread finished.")
+    # # Print final character states after simulation stops
+    # if game_world and test_characters_list:
+    #     print(f"Final Time: {game_time_obj}")
+    #     for char_final in test_characters_list:
+    #         if char_final in game_world.characters: # Check if still in world
+    #             print(f"\n{char_final}")
+    #             print(f"  Final Needs: {char_final.needs}")
+    #             print(f"  Inventory: {char_final.inventory}")
+    #             print(f"  Recent Memories (last 10):")
+    #             for mem in char_final.memory[-10:]: print(f"    - {mem}")
+    #     print("\n--- World Event Log (Last 50) ---")
+    #     for log_entry in game_world.event_log[-50:]: print(log_entry)
 
 
 # --- HTTP Server Logic ---
@@ -309,24 +312,25 @@ def trigger_initial_ui_fetch(port: int, delay: float = 0.5, attempts: int = 5) -
         for attempt in range(attempts):
             try:
                 with urllib.request.urlopen(url):
-                    print(f"Initial UI fetch succeeded for {url}")
+                    # print(f"Initial UI fetch succeeded for {url}")
                     return
             except Exception as exc:  # noqa: BLE001 - log and continue retries
-                print(f"Attempt {attempt + 1} to fetch {url} failed: {exc}")
+                # print(f"Attempt {attempt + 1} to fetch {url} failed: {exc}")
                 py_time.sleep(delay)
 
         try:
             webbrowser.open(url)
-            print(f"Opened default browser for {url}")
+            # print(f"Opened default browser for {url}")
         except Exception as exc:  # noqa: BLE001 - best-effort browser launch
-            print(f"Unable to launch browser automatically for {url}: {exc}")
+            # print(f"Unable to launch browser automatically for {url}: {exc}")
+            pass
 
     threading.Thread(target=_fetch, daemon=True).start()
 
 def signal_handler(sig, frame):
     """Gracefully shut down the server and simulation."""
     global simulation_running, httpd
-    print(f"\nSignal {sig} received. Shutting down...")
+    # print(f"\nSignal {sig} received. Shutting down...")
     simulation_running = False
     if httpd:
         # Shutdown httpd in a separate thread to avoid deadlocks
@@ -493,7 +497,7 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
             if game_world: game_world.add_event_log_message(f"SIMULATION TOGGLED: {'PAUSED' if game_paused else 'RESUMED'}")
             # Duplicated log line below, removing it.
             # if game_world: game_world.add_event_log_message(f"SIMULATION TOGGLED: {'PAUSED' if game_paused else 'RESUMED'}")
-            print(f"Game state toggled. Paused: {game_paused}")
+            # print(f"Game state toggled. Paused: {game_paused}")
 
         elif self.path.startswith('/set_speed'):
             # global SIMULATION_SPEED_MULTIPLIER # This was the problematic line if misplaced
@@ -526,7 +530,7 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(json.dumps({"status": "success", "new_speed_multiplier": SIMULATION_SPEED_MULTIPLIER}).encode('utf-8'))
                 if game_world: game_world.add_event_log_message(f"Simulation speed set to {SIMULATION_SPEED_MULTIPLIER}x")
-                print(f"Simulation speed set to {SIMULATION_SPEED_MULTIPLIER}x")
+                # print(f"Simulation speed set to {SIMULATION_SPEED_MULTIPLIER}x")
             except ValueError:
                 self.send_error(400, "Invalid 'multiplier' value for set_speed")
             except Exception as e:
@@ -732,16 +736,67 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
             # fall back to the default handler.
             super().do_GET()
 
+    def do_POST(self):
+        if self.path == '/create_work_order':
+            if not game_world or not game_time_obj:
+                self.send_error(503, "Game world not initialized")
+                return
+
+            try:
+                content_length = int(self.headers['Content-Length'])
+                post_data = self.rfile.read(content_length)
+                order_data = json.loads(post_data)
+
+                order_type = order_data.get('order_type')
+                details = order_data.get('details')
+                priority = order_data.get('priority', 1)
+
+                if not order_type or not details:
+                    self.send_error(400, "Missing 'order_type' or 'details' in request body")
+                    return
+
+                new_order = WorkOrder(
+                    order_type=order_type,
+                    details=details,
+                    priority=priority,
+                    creation_day=game_time_obj.current_day
+                )
+                game_world.add_work_order(new_order)
+
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                response = {
+                    "status": "success",
+                    "message": "Work order created successfully",
+                    "order_id": new_order.order_id
+                }
+                self.wfile.write(json.dumps(response).encode('utf-8'))
+
+            except json.JSONDecodeError:
+                self.send_error(400, "Invalid JSON in request body")
+            except Exception as e:
+                self.send_error(500, f"Error creating work order: {e}")
+        else:
+            self.send_error(404, "Endpoint not found")
+
 # --- Main Execution ---
 import sys
 
-def run_server(port: int = PORT) -> None:
+def run_server(port: int = PORT, set_signals: bool = True, world_instance: Optional[World] = None) -> None:
     """Start the simulation loop and HTTP server on the requested port."""
-    global httpd
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+    global httpd, game_world, game_time_obj
+    if set_signals:
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
 
-    initialize_game_world()
+    if world_instance:
+        game_world = world_instance
+        if game_world.game_time:
+            game_time_obj = game_world.game_time
+    else:
+        initialize_game_world()
 
     sim_thread = threading.Thread(target=simulation_thread_func, daemon=True)
     sim_thread.start()
@@ -755,13 +810,13 @@ def run_server(port: int = PORT) -> None:
     socketserver.TCPServer.allow_reuse_address = True
     with socketserver.TCPServer(("", port), Handler) as httpd_instance:
         httpd = httpd_instance
-        print(f"Serving HTTP on port {port} from '{ui_dir}'...")
-        print(f"Game simulation running in background. Access UI at http://localhost:{port}/")
-        print("Press Ctrl+C to stop server and simulation.")
+        # print(f"Serving HTTP on port {port} from '{ui_dir}'...")
+        # print(f"Game simulation running in background. Access UI at http://localhost:{port}/")
+        # print("Press Ctrl+C to stop server and simulation.")
         trigger_initial_ui_fetch(port)
         httpd.serve_forever()
 
-    print("Server has shut down.")
+    # print("Server has shut down.")
 
 
 if __name__ == "__main__":

@@ -767,7 +767,7 @@ class World:
 
         if self.rumors:
             self._propagate_rumors_daily()
-        # print(f"DEBUG: Daily rumor update complete. {len(self.rumors)} rumors remaining.")
+
 
 
     def __str__(self):
@@ -783,7 +783,7 @@ class World:
             timestamp = f"D{self.game_time.current_day} T{self.game_time.current_tick}"
         full_message = f"[{timestamp}] {message}"
         self.event_log.append(full_message)
-        # print(full_message) # Console print handled by main loop if needed
+
 
     def set_game_time(self, game_time_obj: Time):
         if not self.game_time: self.game_time = game_time_obj
@@ -923,21 +923,21 @@ class World:
             new_building_tiles = building.get_tiles_occupied()
             for tile_coord in new_building_tiles:
                 if not (0 <= tile_coord[0] < self.grid_size[0] and 0 <= tile_coord[1] < self.grid_size[1]):
-                    print(f"Error: Building '{building.display_name}' at {building.location} is out of bounds.")
+                    # print(f"Error: Building '{building.display_name}' at {building.location} is out of bounds.")
                     return
                 for existing_b in self.buildings:
                     if tile_coord in existing_b.get_tiles_occupied():
-                        print(f"Error: Building '{building.display_name}' overlaps with '{existing_b.display_name}' at {tile_coord}.")
+                        # print(f"Error: Building '{building.display_name}' overlaps with '{existing_b.display_name}' at {tile_coord}.")
                         return
             self.buildings.append(building)
-            print(f"Building: {building.display_name} added at {building.location} to world model.")
+            # print(f"Building: {building.display_name} added at {building.location} to world model.")
             self.map_revision += 1
 
 
     def remove_building(self, building: Building):
         if building in self.buildings:
             self.buildings.remove(building)
-            print(f"Removed building: {building.display_name} from {building.location}.")
+            # print(f"Removed building: {building.display_name} from {building.location}.")
             self.map_revision += 1
 
     def get_building_at(self, x: int, y: int) -> Optional[Building]:
@@ -1287,7 +1287,7 @@ class World:
                 for building in buildings_by_tier.get(tier, [])
             )
             while capacity < resident_count:
-                new_building = self._place_structure_from_blueprint(config_entry.get("blueprint"))
+                new_building = self._place_structure_from_blueprint(config_entry.get("blueprint")) # type: ignore
                 if not new_building:
                     if tier not in shortage_logged:
                         shortage_logged.add(tier)
@@ -2233,7 +2233,7 @@ class World:
     def advance_season(self):
         self.season_index = (self.season_index + 1) % len(World.SEASONS)
         self.season = World.SEASONS[self.season_index]
-        print(f"The season has changed to {self.season}.")
+        # print(f"The season has changed to {self.season}.")
         if self.season == "Winter": self.update_weather("Snowy")
         elif self.season == "Spring": self.update_weather("Rainy")
         elif self.season == "Summer": self.update_weather("Sunny")
@@ -3071,7 +3071,7 @@ class World:
     def add_notable_event(self, event_type: str, details: Dict[str, Any], max_events: int = 10):
         """Adds a notable event to the world's recent memory, used for rumor spreading."""
         if not self.game_time:
-            print("Warning: Cannot add notable event, game_time not set in world.")
+            # print("Warning: Cannot add notable event, game_time not set in world.")
             return
 
         event_id = f"{event_type}_{self.game_time.current_day}_{random.randint(1000,9999)}" # Simple unique enough ID
@@ -4805,7 +4805,7 @@ class World:
                 "strength": rumor.initial_strength,
             },
         )
-        # print(f"DEBUG: World added rumor: {rumor}")
+
 
     def get_rumor_by_id(self, rumor_id: str) -> Optional[Rumor]:
         """Finds a rumor in the world by its unique ID."""

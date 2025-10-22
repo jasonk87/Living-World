@@ -92,7 +92,7 @@ class Building:
         while amount > 0 and not self.is_operational:
             if self.current_phase_index >= len(self.phases): # Should not happen if is_operational is set correctly
                 self.is_operational = True # Ensure it's set if phases are exhausted
-                print(f"Warning: {self.display_name} at {self.location} ran out of phases but wasn't operational. Marking operational.")
+                # print(f"Warning: {self.display_name} at {self.location} ran out of phases but wasn't operational. Marking operational.")
                 break
 
             current_phase_def = self.phases[self.current_phase_index]

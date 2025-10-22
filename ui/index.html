@@ -223,6 +223,28 @@
                                 <li class="empty">No rumors circulating.</li>
                             </ul>
                         </section>
+                        <section>
+                            <h4>Create Work Order</h4>
+                            <form id="work-order-form" class="work-order-form">
+                                <div class="form-group">
+                                    <label for="work-order-item">Item:</label>
+                                    <select id="work-order-item" name="item">
+                                        <option value="Wooden_Chair">Wooden Chair</option>
+                                        <option value="Iron_Axe">Iron Axe</option>
+                                        <option value="Stone_Axe">Stone Axe</option>
+                                        <option value="Lumber">Lumber</option>
+                                        <option value="Iron_Ingot">Iron Ingot</option>
+                                        <option value="Furniture">Furniture</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label for="work-order-quantity">Quantity:</label>
+                                    <input type="number" id="work-order-quantity" name="quantity" min="1" value="1">
+                                </div>
+                                <button type="submit" class="button-primary">Create Order</button>
+                            </form>
+                            <div id="work-order-status" class="work-order-status" aria-live="polite"></div>
+                        </section>
                     </div>
                 </section>
                 <section id="hud-popover-economy" class="hud-popover" aria-hidden="true" role="dialog" aria-label="Economy and logistics intel">

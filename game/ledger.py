@@ -26,7 +26,7 @@ class Ledger:
                 self.records[resource_name][stockpile_name] = count
 
         self.stockpile_last_updated_day[stockpile_name] = current_day
-        # print(f"Ledger: Updated {stockpile_name} on day {current_day}. Current records: {self.records}")
+
 
 
     def get_total_resource_count(self, resource_name: str) -> int:

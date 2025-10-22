@@ -1,14 +1,14 @@
 BLUEPRINTS = {
     "Wooden Chair": {
         "required_resources": {"Wood": 5},
-        "job_skill_needed": "Carpentry",
+        "required_skill": "Woodworking",
         "type": "Furniture",
         "description": "A simple wooden chair for basic comfort.",
         "craft_time_per_unit": 5
     },
     "Stone Axe": {
         "required_resources": {"Stone": 2, "Wood": 1}, # Cost to make a Stone Axe
-        "job_skill_needed": "Stonemasonry", # Skill to make the axe
+        "required_skill": "Stonemasonry", # Skill to make the axe
         "type": "Tool",
         "tool_type": "Axe",       # What category of tool it is
         "max_durability": 50,     # How many primary uses it has
@@ -17,7 +17,7 @@ BLUEPRINTS = {
     },
     "Stone Pickaxe": {
         "required_resources": {"Stone": 3, "Wood": 1}, # Cost to make a Stone Pickaxe
-        "job_skill_needed": "Stonemasonry",
+        "required_skill": "Stonemasonry",
         "type": "Tool",
         "tool_type": "Pickaxe",   # What category of tool it is
         "max_durability": 60,
@@ -26,21 +26,21 @@ BLUEPRINTS = {
     },
     "Arrow Bundle": {
         "required_resources": {"Wood": 2},
-        "job_skill_needed": "Fletching",
+        "required_skill": "Fletching",
         "type": "Ammunition",
         "description": "A bundle of arrows ready for archers and hunters.",
         "craft_time_per_unit": 4
     },
     "Wooden Bed": {
         "required_resources": {"Wood": 15},
-        "job_skill_needed": "Carpentry",
+        "required_skill": "Woodworking",
         "type": "Furniture",
         "description": "A basic wooden bed for improved rest.",
         "craft_time_per_unit": 20
     },
     "Iron Pickaxe": { # Example of a more advanced item
         "required_resources": {"Iron Ingot": 3, "Wood": 1}, # Assuming "Iron Ingot" is a processed resource
-        "job_skill_needed": "Blacksmithing",
+        "required_skill": "Blacksmithing",
         "type": "Tool",
         "tool_type": "Pickaxe",
         "max_durability": 150,
@@ -54,7 +54,7 @@ BLUEPRINTS = {
     },
     "Bandages": {
         "required_resources": {"Herbs": 2},
-        "job_skill_needed": "Medicine", # New skill for crafting/using medical items
+        "required_skill": "Medicine", # New skill for crafting/using medical items
         "type": "MedicalSupply", # A more specific type for medical items
         "description": "Simple bandages for treating injuries.",
         "craft_time_per_unit": 3
@@ -75,14 +75,14 @@ BLUEPRINTS = {
     },
     "Iron Ingot": {
         "required_resources": {"Iron Ore": 2},
-        "job_skill_needed": "Smelting",
+        "required_skill": "Metallurgy",
         "type": "Resource",
         "description": "A bar of refined iron.",
         "craft_time_per_unit": 7
     },
     "Iron Axe": {
         "required_resources": {"Iron Ingot": 2, "Wood": 1},
-        "job_skill_needed": "Blacksmithing",
+        "required_skill": "Blacksmithing",
         "type": "Tool",
         "tool_type": "Axe",
         "max_durability": 120,
@@ -91,21 +91,21 @@ BLUEPRINTS = {
     },
     "Lumber": {
         "required_resources": {"Wood": 2},
-        "job_skill_needed": "Carpentry",
+        "required_skill": "Woodworking",
         "type": "Resource",
         "description": "Processed wood, ready for building and crafting.",
         "craft_time_per_unit": 4
     },
     "Furniture": {
         "required_resources": {"Lumber": 3},
-        "job_skill_needed": "Carpentry",
+        "required_skill": "Woodworking",
         "type": "Furniture",
         "description": "Basic furniture for a home.",
         "craft_time_per_unit": 10
     },
     "Hammer": {
         "required_resources": {"Iron Ingot": 2, "Wood": 1},
-        "job_skill_needed": "Blacksmithing",
+        "required_skill": "Blacksmithing",
         "type": "Tool",
         "tool_type": "Hammer",
         "max_durability": 150,
@@ -114,7 +114,7 @@ BLUEPRINTS = {
     },
     "Saw": {
         "required_resources": {"Iron Ingot": 1, "Wood": 1},
-        "job_skill_needed": "Blacksmithing",
+        "required_skill": "Blacksmithing",
         "type": "Tool",
         "tool_type": "Saw",
         "max_durability": 100,
