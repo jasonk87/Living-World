@@ -3525,7 +3525,8 @@ class Character:
         if job_title == "Spymaster": return "Maintain Peace in Settlement"
         if job_title == "Deputy": return "Patrol Area"
         if job_title == "Scout": return "Patrol Area"
-        if job_title == "Militia Soldier": return "Patrol Area"
+        if job_title == "Militia Commander": return "Perform Militia Commander Duties"
+        if job_title == "Militia Soldier": return "Perform Militia Soldier Duties"
         if job_title == "Reeve": return "Manage Estate"
         if job_title == "Steward": return "Manage Estate"
         if job_title == "Bailiff": return "Assist Reeve"
@@ -5552,6 +5553,128 @@ class Character:
             self.add_memory("Patrolling... observing the area.")
         return
 
+    def _execute_train_combat(self, world: 'World'):
+        """
+        Executes the goal of training combat skills. This involves increasing the
+        'Security' skill and contributing to the settlement's militia readiness.
+        """
+        self.add_memory("Beginning combat training.")
+
+        # Increase Security skill
+        self._grant_skill_experience("Security", 2.0, world)
+
+        # Increase world's militia readiness
+        if hasattr(world, 'increase_militia_readiness'):
+            world.increase_militia_readiness(0.1)
+
+        self.add_memory("Completed a session of combat training. My security skill has improved.")
+
+        # This goal is completed after one tick of training.
+        # A more complex implementation could have it last for a certain duration.
+        self.current_goal = self.get_default_goal()
+
+
+    def _execute_guard_location(self, world: 'World'):
+        """
+        Executes the goal of guarding a specific location. The character will move
+        to the location and remain there until the goal is changed.
+        """
+        if not self.current_goal or not self.current_goal.parameters or "location" not in self.current_goal.parameters:
+            self.add_memory("Told to guard a location, but no location was specified.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        target_location = self.current_goal.parameters["location"]
+        if (self.x, self.y) != target_location:
+            self.add_memory(f"Moving to guard location: {target_location}.")
+            self.move_towards(target_location[0], target_location[1], world)
+        else:
+            self.add_memory(f"Guarding my post at {target_location}.")
+            # Character stays put. They might get a small perception bonus or
+            # be more likely to spot intruders in a more advanced implementation.
+            # For now, they just wait. Goal is not completed until changed by an external event.
+
+    def _execute_perform_militia_commander_duties(self, world: 'World'):
+        if not self.job or self.job.title != "Militia Commander":
+            self.current_goal = self.get_default_goal()
+            return
+
+        self.add_memory("Assessing the settlement's defense readiness.")
+        readiness = world.get_militia_readiness()
+
+        militia_members = [char for char in world.characters if char.job and char.job.title == "Militia Soldier"]
+
+        if not militia_members:
+            self.add_memory("There are no militia soldiers to command.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        if readiness < 0.5:
+            # Prioritize training
+            self.add_memory("Militia readiness is low. Ordering soldiers to train.")
+            for soldier in militia_members:
+                if soldier.current_goal.type in [GoalType.IDLE, GoalType.WANDER, GoalType.PATROL_AREA]:
+                    soldier.current_goal = Goal(GoalType.TRAIN_COMBAT,
+                                                assignee_id=soldier.name,
+                                                originator_id=self.name)
+        else:
+            # Assign patrols
+            self.add_memory("Militia readiness is adequate. Assigning patrol routes.")
+            # Simple patrol assignment for now: guard the market.
+            # A more complex system could define multiple patrol points.
+            patrol_point = world.market_location
+            for soldier in militia_members:
+                if soldier.current_goal.type in [GoalType.IDLE, GoalType.WANDER]:
+                    soldier.current_goal = Goal(GoalType.GUARD_LOCATION,
+                                                assignee_id=soldier.name,
+                                                originator_id=self.name,
+                                                parameters={"location": patrol_point})
+
+        # Commander's goal is ongoing, so it doesn't complete. It just re-evaluates.
+        # For now, we set to default and it will be re-triggered next tick.
+        self.current_goal = self.get_default_goal()
+
+    def _execute_perform_militia_soldier_duties(self, world: 'World'):
+        if not self.job or self.job.title != "Militia Soldier":
+            self.current_goal = self.get_default_goal()
+            return
+
+        # If idle, default to patrolling. Commander's orders will override this.
+        if self.current_goal.type in [GoalType.IDLE, GoalType.WANDER, GoalType.PERFORM_MILITIA_SOLDIER_DUTIES]:
+            self.add_memory("Awaiting orders or beginning patrol.")
+            self.current_goal = Goal(GoalType.PATROL_AREA,
+                                     assignee_id=self.name,
+                                     originator_id=self.name)
+
+        # The decide_action dispatcher will handle the execution of the specific goal
+        # like PATROL_AREA, TRAIN_COMBAT, etc. This function just ensures the soldier
+        # has an active goal.
+
+    def _execute_construct_defenses(self, world: 'World'):
+        """
+        Executes the goal of constructing defenses. This is a placeholder for now.
+        Future implementation will be similar to _execute_build_order but for
+        defense-specific structures like walls or watchtowers.
+        """
+        self.add_memory("Starting construction of defenses.")
+        # Placeholder: In the future, this would trigger a build process for a 'Wall' or 'Watchtower'
+        self.add_memory("Construction of defenses not yet implemented. Task complete for now.")
+        self.current_goal = self.get_default_goal()
+
+
+    def _execute_repair_defenses(self, world: 'World'):
+        """
+        Executes the goal of repairing defenses. This is a placeholder for now.
+        Future implementation would involve finding damaged defensive structures
+        and using resources to repair them.
+        """
+        self.add_memory("Looking for defenses to repair.")
+        # Placeholder: In the future, this would involve finding a damaged 'Wall', etc.
+        # and using 'Wood' or 'Stone' to repair it.
+        self.add_memory("Repairing defenses not yet implemented. Task complete for now.")
+        self.current_goal = self.get_default_goal()
+
+
     def _execute_conduct_witness_interview(self, world: 'World'):
         if not self.job or self.job.title not in {"Sheriff", "Deputy"}:
             self.current_goal = self.get_default_goal()
@@ -6717,6 +6840,14 @@ class Character:
         elif self.current_goal.type == GoalType.ASSIST_REEVE: self._execute_assist_reeve(world)
         elif self.current_goal.type == GoalType.HOLD_HIGH_COURT: self._execute_hold_high_court(world)
         elif self.current_goal.type == GoalType.ATTEND_HIGH_COURT: self._execute_attend_high_court(world)
+
+        # Militia Goals
+        elif self.current_goal.type == GoalType.TRAIN_COMBAT: self._execute_train_combat(world)
+        elif self.current_goal.type == GoalType.GUARD_LOCATION: self._execute_guard_location(world)
+        elif self.current_goal.type == GoalType.CONSTRUCT_DEFENSES: self._execute_construct_defenses(world)
+        elif self.current_goal.type == GoalType.REPAIR_DEFENSES: self._execute_repair_defenses(world)
+        elif self.current_goal.type == GoalType.PERFORM_MILITIA_COMMANDER_DUTIES: self._execute_perform_militia_commander_duties(world)
+        elif self.current_goal.type == GoalType.PERFORM_MILITIA_SOLDIER_DUTIES: self._execute_perform_militia_soldier_duties(world)
 
         # Ambition Goals
         elif self.current_goal.type == GoalType.INCREASE_REPUTATION: self._execute_increase_reputation(world)

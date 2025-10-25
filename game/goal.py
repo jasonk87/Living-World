@@ -55,6 +55,10 @@ class GoalType(Enum):
     LEAD_FORCE = auto() # Militia Commander
     MAINTAIN_PEACE_IN_SETTLEMENT = auto() # Sheriff
     PATROL_AREA = auto() # Deputy, Militia Captain
+    TRAIN_COMBAT = auto() # Militia
+    GUARD_LOCATION = auto() # Militia
+    CONSTRUCT_DEFENSES = auto() # Militia
+    REPAIR_DEFENSES = auto() # Militia
     INVESTIGATE_DISTURBANCE = auto() # Sheriff
     PREPARE_TRIAL_CASE = auto() # Sheriff legal prep
     CONDUCT_WITNESS_INTERVIEW = auto() # Sheriff & Deputies
@@ -121,6 +125,8 @@ class GoalType(Enum):
     PERFORM_CARPENTER_DUTIES = auto()
     PERFORM_SMELTER_DUTIES = auto()
     PERFORM_BLACKSMITH_DUTIES = auto()
+    PERFORM_MILITIA_COMMANDER_DUTIES = auto()
+    PERFORM_MILITIA_SOLDIER_DUTIES = auto()
 
     GO_TO_WORK = auto()
 

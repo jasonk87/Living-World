@@ -206,6 +206,7 @@ class World:
         self.natural_features: Dict[str, Set[Tuple[int, int]]] = defaultdict(set)
         self.landscape_profile: Dict[str, Any] = {}
         self._feature_margin = max(1, int(getattr(config, "MAP_FEATURE_MARGIN", 2)))
+        self._military_rng = random.Random(map_seed)
 
 
     def add_object(self, x, y, obj):
@@ -8113,6 +8114,10 @@ class World:
         if not self.game_time:
             return
 
+        # Initialize military-related random number generator if it doesn't exist
+        if not hasattr(self, '_military_rng'):
+            self._military_rng = random.Random()
+
         defaults = getattr(config, "MILITIA_STRUCTURE_DEFAULTS", {})
         baseline = float(defaults.get("readiness_baseline", 0.3))
         skill_weight = float(defaults.get("skill_weight", 0.08))
@@ -8124,6 +8129,18 @@ class World:
         alert_threshold = float(defaults.get("alert_threshold", 0.45))
         critical_threshold = float(defaults.get("critical_threshold", 0.25))
         max_skill_benchmark = max(1.0, float(defaults.get("max_skill_benchmark", 6.0)))
+
+        # --- Defensive Structures Bonus Calculation ---
+        total_defense_bonus = 0.0
+        total_training_speed_bonus = 0.0
+
+        watchtowers = self.get_operational_buildings_of_type("watchtower")
+        for tower in watchtowers:
+            total_defense_bonus += tower.functionality.get("defense_bonus", 0.0)
+
+        training_yards = self.get_operational_buildings_of_type("training_yard")
+        for yard in training_yards:
+            total_training_speed_bonus += yard.functionality.get("training_speed_bonus", 0.0)
 
         commander_candidates = [
             char for char in self.characters if char.job and getattr(char.job, "title", None) == "Militia Commander"
@@ -8222,6 +8239,10 @@ class World:
             base_component = baseline + (normalized_security * skill_weight) + (captain_security * captain_weight)
             oversight_component = (commander_oversight * oversight_weight * 0.6) + (captain_oversight * oversight_weight * 0.4)
             fresh_score = base_component + oversight_component
+
+            # Apply training speed bonus from structures
+            fresh_score *= (1.0 + total_training_speed_bonus)
+
             previous = self._militia_readiness.get(squad_id, baseline)
             readiness = previous * persistence + fresh_score * (1.0 - persistence)
             readiness = max(0.0, min(1.0, readiness))
@@ -8315,7 +8336,7 @@ class World:
                 )
             )
             severity_pressure = severity_difficulty.get(severity_pick, 1.0)
-            defending_strength = overall_readiness * max(1, len(squads))
+            defending_strength = (overall_readiness * max(1, len(squads))) * (1.0 + total_defense_bonus)
             raid_threshold = severity_pressure * raid_difficulty
             outcome = "repelled" if defending_strength >= raid_threshold else "breached"
             plundered: Dict[str, int] = {}
@@ -8392,6 +8413,14 @@ class World:
 
     def get_military_snapshot(self) -> Dict[str, Any]:
         return deepcopy(self.military_structure)
+
+    def get_militia_readiness(self) -> float:
+        """Returns the overall militia readiness of the settlement."""
+        if self.military_structure and isinstance(self.military_structure, dict):
+            return float(self.military_structure.get("readiness", 0.0) or 0.0)
+        elif self._militia_readiness:
+            return sum(self._militia_readiness.values()) / len(self._militia_readiness)
+        return 0.0
 
     def manage_economy(self):
         if not self.game_time:

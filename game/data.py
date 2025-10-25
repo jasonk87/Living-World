@@ -679,6 +679,39 @@ STRUCTURE_BLUEPRINTS = {
         "functionality": {"tags": ["construction", "progress_marker"]},
         "required_resources": {},
         "construction_phases": [{"name": "Site Preparation", "work_required": 1, "map_char_during": "X"}]
+    },
+    "watchtower": {
+        "display_name": "Watchtower",
+        "size": (2, 2),
+        "required_resources": {"Wood": 50, "Stone": 20},
+        "construction_phases": [
+            {"name": "Foundation", "work_required": 20, "map_char_during": "_"},
+            {"name": "Framing", "work_required": 40, "map_char_during": "|"},
+            {"name": "Roofing", "work_required": 20, "map_char_during": "^"}
+        ],
+        "functionality": {
+            "defense_bonus": 10,
+            "tags": ["military", "defensive", "watchpost"]
+        },
+        "required_skill": {"Construction": 2},
+        "map_char_initial": ".",
+        "map_char_complete": "T"
+    },
+    "training_yard": {
+        "display_name": "Training Yard",
+        "size": (4, 4),
+        "required_resources": {"Wood": 40, "Stone": 10},
+        "construction_phases": [
+            {"name": "Grounds Clearing", "work_required": 30, "map_char_during": "."},
+            {"name": "Equipment Setup", "work_required": 50, "map_char_during": "Y"}
+        ],
+        "functionality": {
+            "training_speed_bonus": 0.2,
+            "tags": ["military", "training"]
+        },
+        "required_skill": {"Construction": 1},
+        "map_char_initial": ".",
+        "map_char_complete": "Y"
     }
 }
 
