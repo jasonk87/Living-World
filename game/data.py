@@ -135,6 +135,32 @@ BLUEPRINTS = {
     "Leather": {
         "type": "Resource",
         "description": "Tanned leather, useful for crafting."
+    },
+    "Wheat": {
+        "type": "Resource",
+        "description": "Raw wheat grain, can be processed into food."
+    },
+    "Hoe": {
+        "required_resources": {"Wood": 2, "Iron Ingot": 1},
+        "required_skill": "Blacksmithing",
+        "type": "Tool",
+        "tool_type": "Hoe",
+        "max_durability": 80,
+        "description": "A tool for tilling soil to prepare it for planting.",
+        "craft_time_per_unit": 10
+    },
+    "Scythe": {
+        "required_resources": {"Wood": 2, "Iron Ingot": 2},
+        "required_skill": "Blacksmithing",
+        "type": "Tool",
+        "tool_type": "Scythe",
+        "max_durability": 100,
+        "description": "A tool for harvesting crops like wheat.",
+        "craft_time_per_unit": 12
+    },
+    "Wheat Seeds": {
+        "type": "Resource",
+        "description": "Seeds for planting wheat."
     }
 }
 
@@ -441,6 +467,27 @@ JOB_TASK_DEFINITIONS = {
         "resource_produced": None, # Results in relationship/opinion changes
         "base_yield": 0,
         "base_time_per_yield": 0 # Short, impactful interaction
+    },
+    "Till Soil": {
+        "required_tool_type": "Hoe",
+        "skill_used": "Farming",
+        "resource_produced": None, # This action modifies the world tile
+        "base_yield": 1,
+        "base_time_per_yield": 5
+    },
+    "Plant Seeds": {
+        "required_tool_type": None,
+        "skill_used": "Farming",
+        "resource_produced": None, # This action modifies the world tile
+        "base_yield": 1,
+        "base_time_per_yield": 2
+    },
+    "Harvest Crop": {
+        "required_tool_type": "Scythe",
+        "skill_used": "Farming",
+        "resource_produced": "Wheat",
+        "base_yield": 2, # Example: 1 harvest action yields 2 wheat
+        "base_time_per_yield": 4
     },
 }
 

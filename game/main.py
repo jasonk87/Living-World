@@ -174,6 +174,7 @@ def tick_simulation():
         # current_total_ticks +=1 # This was local, can be re-added if needed for other metrics
 
         game_world.update_animals()
+        game_world.update_crops()
 
         for char_to_act in list(game_world.characters): # Iterate over a copy if list might change
             if char_to_act not in game_world.characters: continue # If character was removed (e.g. fired and despawned)

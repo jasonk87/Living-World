@@ -65,6 +65,12 @@ class Character:
                     "experience": 0.0,
                     "exp_to_next_level": self._calculate_exp_for_level(level_val)
                 }
+        if "Farming" not in self.skills:
+            self.skills["Farming"] = {
+                "level": 0,
+                "experience": 0.0,
+                "exp_to_next_level": self._calculate_exp_for_level(0)
+            }
 
         self.x = x; self.y = y; self.inventory = {}; self.memory = [];
         self.needs = needs if needs else {};
@@ -4324,12 +4330,65 @@ class Character:
         if next_goal_type:
             self.current_goal = Goal(next_goal_type, assignee_id=self.name, originator_id=self.name, parameters=params_for_next_goal)
 
-    def _execute_perform_farmer_duties(self, world: 'World'):
+    def _execute_till_soil(self, world: 'World', params: Dict[str, Any]):
+        self.add_memory(f"Tilling soil at ({self.x},{self.y})")
+        world.set_tile_type(self.x, self.y, "Tilled Soil")
+        return True
+
+    def _execute_plant_seeds(self, world: 'World', params: Dict[str, Any]):
+        self.add_memory(f"Planting seeds at ({self.x},{self.y})")
+        from .crop import Crop # Local import to avoid circular dependency
+        new_crop = Crop("Wheat", self.x, self.y)
+        world.crops.append(new_crop)
+        return True
+
+    def _execute_harvest_crop(self, world: 'World', params: Dict[str, Any]):
+        self.add_memory(f"Harvesting crop at ({self.x},{self.y})")
+        crop_to_harvest = world.get_crop_at(self.x, self.y)
+        if crop_to_harvest:
+            world.crops.remove(crop_to_harvest)
+            self.inventory["Wheat"] = self.inventory.get("Wheat", 0) + 1
+        return True
+
+    def _scan_surroundings(self, world: 'World', radius: int):
+        for dx in range(-radius, radius + 1):
+            for dy in range(-radius, radius + 1):
+                if dx == 0 and dy == 0:
+                    continue
+                x, y = self.x + dx, self.y + dy
+                if 0 <= x < world.grid_size[0] and 0 <= y < world.grid_size[1]:
+                    yield x, y
+
+    def _execute_perform_farmer_duties(self, world: 'World') -> bool:
         if not self.job or self.job.title != "Farmer":
             self.current_goal = self.get_default_goal()
-            return
+            return False
 
-        params = self.current_goal.parameters
+        radius = 5
+
+        # Priority 1: Harvest ripe crops
+        for crop in world.crops:
+            if crop.growth >= 1.0:
+                 distance = abs(self.x - crop.x) + abs(self.y - crop.y)
+                 if distance <= radius:
+                    self.current_goal = Goal(GoalType.HARVEST_CROP, self.name, self.name, parameters={"target_location": (crop.x, crop.y)})
+                    return True
+
+        # Priority 2: Plant on tilled soil
+        for x, y in self._scan_surroundings(world, radius):
+            if world.get_tile(x, y) == "Tilled Soil" and not world.get_crop_at(x, y):
+                self.current_goal = Goal(GoalType.PLANT_SEEDS, self.name, self.name, parameters={"target_location": (x, y)})
+                return True
+
+        # Priority 3: Till grass
+        for x, y in self._scan_surroundings(world, radius):
+            if world.get_tile(x, y) == "Grass":
+                self.current_goal = Goal(GoalType.TILL_SOIL, self.name, self.name, parameters={"target_location": (x, y)})
+                return True
+
+        # If no tasks, wander
+        self.current_goal = Goal(GoalType.WANDER, self.name, self.name)
+        return False
     def _handle_gathering_and_crafting_logic(self, world: 'World', item_to_craft: str, task_name: str, workshop_type: str, item_threshold: int):
         params = self.job_duty_params
         params.setdefault("phase", "gathering")
@@ -6558,6 +6617,7 @@ class Character:
         # --- Goal Execution Dispatcher ---
         # Note: Order matters. More specific/interrupting goals should be checked before generic ones.
         # Example: SEEK_MEDICAL_ATTENTION already handled above.
+        original_goal_type = self.current_goal.type
 
         goal_executed_this_tick = True # Assume a goal will be handled unless specified otherwise
         # Perform <Job> Duties goals often break down into other goals.
@@ -6565,20 +6625,61 @@ class Character:
             if not self._process_builder_routine(world):
                 self._execute_wander(world)
             return
-        elif self.current_goal.type == GoalType.PERFORM_WOODCUTTER_DUTIES: self._execute_perform_woodcutter_duties(world)
-        elif self.current_goal.type == GoalType.PERFORM_STONEMASON_DUTIES: self._execute_perform_stonemason_duties(world)
-        elif self.current_goal.type == GoalType.PERFORM_MINER_DUTIES: self._execute_perform_miner_duties(world)
-        elif self.current_goal.type == GoalType.PERFORM_FARMER_DUTIES: self._execute_perform_farmer_duties(world)
-        elif self.current_goal.type == GoalType.PERFORM_HUNTER_DUTIES: self._execute_perform_hunter_duties(world)
-        elif self.current_goal.type == GoalType.PERFORM_FLETCHER_DUTIES: self._execute_perform_fletcher_duties(world)
-        elif self.current_goal.type == GoalType.PERFORM_SAWYER_DUTIES: self._execute_perform_sawyer_duties(world)
-        elif self.current_goal.type == GoalType.PERFORM_CARPENTER_DUTIES: self._execute_perform_carpenter_duties(world)
-        elif self.current_goal.type == GoalType.PERFORM_SMELTER_DUTIES: self._execute_perform_smelter_duties(world)
-        elif self.current_goal.type == GoalType.PERFORM_BLACKSMITH_DUTIES: self._execute_perform_blacksmith_duties(world)
+        elif self.current_goal.type == GoalType.PERFORM_WOODCUTTER_DUTIES:
+            self._execute_perform_woodcutter_duties(world)
+            if self.current_goal.type != original_goal_type: return
+        elif self.current_goal.type == GoalType.PERFORM_STONEMASON_DUTIES:
+            self._execute_perform_stonemason_duties(world)
+            if self.current_goal.type != original_goal_type: return
+        elif self.current_goal.type == GoalType.PERFORM_MINER_DUTIES:
+            self._execute_perform_miner_duties(world)
+            if self.current_goal.type != original_goal_type: return
+        elif self.current_goal.type == GoalType.PERFORM_FARMER_DUTIES:
+            if self._execute_perform_farmer_duties(world):
+                return
+        elif self.current_goal.type == GoalType.PERFORM_HUNTER_DUTIES:
+            self._execute_perform_hunter_duties(world)
+            if self.current_goal.type != original_goal_type: return
+        elif self.current_goal.type == GoalType.PERFORM_FLETCHER_DUTIES:
+            self._execute_perform_fletcher_duties(world)
+            if self.current_goal.type != original_goal_type: return
+        elif self.current_goal.type == GoalType.PERFORM_SAWYER_DUTIES:
+            self._execute_perform_sawyer_duties(world)
+            if self.current_goal.type != original_goal_type: return
+        elif self.current_goal.type == GoalType.PERFORM_CARPENTER_DUTIES:
+            self._execute_perform_carpenter_duties(world)
+            if self.current_goal.type != original_goal_type: return
+        elif self.current_goal.type == GoalType.PERFORM_SMELTER_DUTIES:
+            self._execute_perform_smelter_duties(world)
+            if self.current_goal.type != original_goal_type: return
+        elif self.current_goal.type == GoalType.PERFORM_BLACKSMITH_DUTIES:
+            self._execute_perform_blacksmith_duties(world)
+            if self.current_goal.type != original_goal_type: return
         # Add other "Perform <Job> Duties" here, they typically set a more specific goal and call decide_action or return
 
         # Specific Action Goals
         elif self.current_goal.type == GoalType.EXECUTE_BUILD_ORDER: self._execute_build_order(world) # Already handled above too
+        elif self.current_goal.type == GoalType.TILL_SOIL:
+            target_location = self.current_goal.parameters.get("target_location")
+            if target_location and (self.x, self.y) != target_location:
+                self.move_towards(target_location[0], target_location[1], world)
+            else:
+                self._execute_till_soil(world, self.current_goal.parameters)
+                self.current_goal = self.get_default_goal()
+        elif self.current_goal.type == GoalType.PLANT_SEEDS:
+            target_location = self.current_goal.parameters.get("target_location")
+            if target_location and (self.x, self.y) != target_location:
+                self.move_towards(target_location[0], target_location[1], world)
+            else:
+                self._execute_plant_seeds(world, self.current_goal.parameters)
+                self.current_goal = self.get_default_goal()
+        elif self.current_goal.type == GoalType.HARVEST_CROP:
+            target_location = self.current_goal.parameters.get("target_location")
+            if target_location and (self.x, self.y) != target_location:
+                self.move_towards(target_location[0], target_location[1], world)
+            else:
+                self._execute_harvest_crop(world, self.current_goal.parameters)
+                self.current_goal = self.get_default_goal()
         elif self.current_goal.type == GoalType.HUNT: self._execute_hunt(world)
         elif self.current_goal.type == GoalType.EXECUTE_CRAFT_ORDER: self._execute_craft_order(world)
         elif self.current_goal.type == GoalType.FETCH_TOOL: self._execute_fetch_tool(world)

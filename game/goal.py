@@ -29,6 +29,11 @@ class GoalType(Enum):
     FETCH_RESOURCE_FOR_WO = auto() # For crafting
     FETCH_RESOURCE_FOR_BUILD = auto() # For building
 
+    # Farming
+    TILL_SOIL = auto()
+    PLANT_SEEDS = auto()
+    HARVEST_CROP = auto()
+
     # Management & Leadership (Higher Level)
     OVERSEE_SETTLEMENT = auto() # Mayor
     MANAGE_SUBORDINATES = auto() # Manager, Noble Lord, etc.

@@ -29,6 +29,7 @@ from . import config
 from .goal import Goal, GoalType
 from .animal import Animal
 from .pathfinding import Pathfinder
+from .crop import Crop
 
 if TYPE_CHECKING:
     from .character import Character
@@ -51,6 +52,8 @@ class World:
             grid_size = (int(default_size[0]), int(default_size[1]))
         self.grid_size = (int(grid_size[0]), int(grid_size[1]))
         self.grid = [["Grass" for _ in range(self.grid_size[1])] for _ in range(self.grid_size[0])]
+        self.objects = {}
+        self.crops: List['Crop'] = []
         self.resource_nodes: Dict[Tuple[int, int], Dict[str, Any]] = {}
         self.season_index = 0
         self.season = World.SEASONS[self.season_index]
@@ -61,8 +64,7 @@ class World:
         self._characters_by_tile: Dict[Tuple[int, int], Set[str]] = defaultdict(set)
         self.stockpiles: List[Stockpile] = []
         self.stockpile_tiles: Dict[Tuple[int, int], str] = {}
-        self.buildings: List[Building] = [] # Re-added
-        # self.furniture: List[Furniture] = [] # Re-added, but keep commented if not used by this test
+        self.buildings: List[Building] = []
         self.ledger: Ledger = Ledger()
         self.game_time: Optional[Time] = game_time_ref
         self.work_orders: List[WorkOrder] = []
@@ -73,11 +75,11 @@ class World:
         self.latest_personal_pursuit_events: List[Dict[str, Any]] = []
         self._last_wealth_tension_day: Optional[int] = None
         self.active_world_effects: Dict[str, Any] = {}
-        self.recent_notable_events: List[Dict[str, Any]] = [] # For rumor spreading
-        self.rumors: List[Rumor] = [] # Added for rumor system
+        self.recent_notable_events: List[Dict[str, Any]] = []
+        self.rumors: List[Rumor] = []
         self.base_market_prices: Dict[str, int] = MARKET_PRICES.copy()
         self.market_prices: Dict[str, int] = MARKET_PRICES.copy()
-        self.market_location: Tuple[int, int] = (5, 5) # Central market location
+        self.market_location: Tuple[int, int] = (5, 5)
         self.resource_yield_multipliers: Dict[str, float] = {
             "Wood": 1.0,
             "Stone": 1.0,
@@ -199,33 +201,33 @@ class World:
         self._family_lookup: Dict[str, str] = {}
         self.family_history: List[Dict[str, Any]] = []
         self._character_lineage: Dict[str, Dict[str, Set[str]]] = {}
-
-        seed = map_seed if map_seed is not None else getattr(config, "MAP_RANDOM_SEED", None)
-        self._map_rng = random.Random(seed)
-        self.natural_features: Dict[str, Set[Tuple[int, int]]] = defaultdict(set)
+        self._map_rng = random.Random(map_seed)
         self._reserved_land_tiles: Set[Tuple[int, int]] = set()
-        self._feature_margin: int = max(0, getattr(config, "MAP_FEATURE_MARGIN", 0))
+        self.natural_features: Dict[str, Set[Tuple[int, int]]] = defaultdict(set)
         self.landscape_profile: Dict[str, Any] = {}
-        self._generate_initial_landscape()
-        self._spawn_animals()
-        self._military_rng = random.Random(seed)
+        self._feature_margin = max(1, int(getattr(config, "MAP_FEATURE_MARGIN", 2)))
+
+
+    def add_object(self, x, y, obj):
+        self.objects[(x, y)] = obj
+
+    def remove_object(self, x, y):
+        if (x, y) in self.objects:
+            del self.objects[(x, y)]
+
+    def get_object_at(self, x, y):
+        return self.objects.get((x, y))
+
+    def set_tile_type(self, x, y, tile_type):
+        self.set_tile(x, y, tile_type)
 
     def _spawn_animals(self):
         for animal_name, blueprint in ANIMAL_BLUEPRINTS.items():
-            for _ in range(5): # spawn 5 of each animal
+            for _ in range(5):  # spawn 5 of each animal
                 x = random.randint(0, self.grid_size[0] - 1)
                 y = random.randint(0, self.grid_size[1] - 1)
                 if self.is_walkable(x, y):
-                    animal = Animal(
-                        name=animal_name,
-                        x=x,
-                        y=y,
-                        health=blueprint["health"],
-                        resources=blueprint["resources"],
-                        speed=blueprint["speed"],
-                        map_char=blueprint["map_char"]
-                    )
-                    self.animals.append(animal)
+                    self.add_animal(animal_name, x, y)
 
     def add_animal(self, animal_type, x, y):
         blueprint = ANIMAL_BLUEPRINTS.get(animal_type)
@@ -238,6 +240,10 @@ class World:
     def update_animals(self):
         for animal in self.animals:
             animal.move(self)
+
+    def update_crops(self):
+        for crop in self.crops:
+            crop.update(self)
 
     # --- Map & Landscape Generation -------------------------------------------------
 
@@ -395,8 +401,8 @@ class World:
             {
                 "resource": "Food",
                 "tile": "Fields",
-                "clusters": (2, 3),
-                "radius": (1, 2),
+                "clusters": (4, 6),
+                "radius": (2, 4),
                 "scatter": 1,
                 "density": (4, 8),
                 "base_tiles": ["Fields", "Meadow", "Grass"],
@@ -839,6 +845,10 @@ class World:
         # if furniture_at_loc:
         #     return furniture_at_loc.map_char
 
+        crop_at_loc = self.get_crop_at(x, y)
+        if crop_at_loc:
+            return crop_at_loc.map_char
+
         return self.grid[x][y]
 
     def is_walkable(
@@ -981,6 +991,12 @@ class World:
         for building in self.buildings:
             if building.location == location:
                 return building
+        return None
+
+    def get_crop_at(self, x: int, y: int) -> Optional[Crop]:
+        for crop in self.crops:
+            if crop.x == x and crop.y == y:
+                return crop
         return None
 
     def _is_residential(self, building: Building) -> bool:

@@ -9,6 +9,8 @@ from game.work_order import WorkOrder # For potential crafting tests
 from game.data import JOB_TASK_DEFINITIONS, BLUEPRINTS, JOB_SALARIES
 from game.goal import Goal, GoalType
 from game import config
+from game.crop import Crop
+
 
 class TestCharacterTaskPerformance(unittest.TestCase):
     def setUp(self):
@@ -320,6 +322,81 @@ class TestCharacterTaskPerformance(unittest.TestCase):
 
         self.assertTrue(any(f"Careless counting {target_stockpile_name}" in msg for msg in careless_bookie.memory), "Careless bookkeeper log not found.")
         self.assertTrue(any(f"Logs (actual: {initial_logs}, recorded: {initial_logs - 1})" in msg for msg in careless_bookie.memory), "Careless bookkeeper miscount detail not found.")
+
+
+class TestCharacterFarming(unittest.TestCase):
+    def setUp(self):
+        self.time = Time(ticks_per_day=10)
+        self.world = World(grid_size=(10, 10), game_time_ref=self.time)
+        self.farmer = Character(name="Farmer", personality="hardworking", traits=[], skills={"Farming": 1}, job=Job("Farmer", None, 0))
+        self.world.add_character(self.farmer)
+
+    def test_farmer_prioritizes_harvest(self):
+        # Setup: ripe crop, tilled soil, and grass nearby
+        self.world.set_tile_type(1, 1, "Tilled Soil")
+        self.world.set_tile_type(1, 2, "Grass")
+        ripe_crop = Crop("Wheat", 1, 0)
+        ripe_crop.growth = 1.0
+        self.world.crops.append(ripe_crop)
+        self.farmer.x, self.farmer.y = 1, 1
+
+        self.farmer.current_goal = Goal(GoalType.PERFORM_FARMER_DUTIES, assignee_id=self.farmer.name)
+        self.farmer.decide_action(self.world)
+
+        self.assertEqual(self.farmer.current_goal.type, GoalType.HARVEST_CROP)
+        self.assertEqual(self.farmer.current_goal.parameters["target_location"], (1, 0))
+
+    def test_farmer_prioritizes_plant(self):
+        # Setup: tilled soil and grass nearby, no ripe crops
+        self.world.set_tile_type(1, 1, "Tilled Soil")
+        self.world.set_tile_type(1, 2, "Grass")
+        self.farmer.x, self.farmer.y = 1, 0
+
+        self.farmer.current_goal = Goal(GoalType.PERFORM_FARMER_DUTIES, assignee_id=self.farmer.name)
+        self.farmer.decide_action(self.world)
+
+        self.assertEqual(self.farmer.current_goal.type, GoalType.PLANT_SEEDS)
+        self.assertEqual(self.farmer.current_goal.parameters["target_location"], (1, 1))
+
+    def test_farmer_tills_when_no_other_tasks(self):
+        # Clear the area of grass first
+        for x in range(self.world.grid_size[0]):
+            for y in range(self.world.grid_size[1]):
+                self.world.set_tile_type(x, y, "Dirt")
+
+        # Setup: only one grass tile nearby
+        self.world.set_tile_type(1, 1, "Grass")
+        self.farmer.x, self.farmer.y = 1, 0
+
+        self.farmer.current_goal = Goal(GoalType.PERFORM_FARMER_DUTIES, assignee_id=self.farmer.name)
+        self.farmer.decide_action(self.world)
+
+        self.assertEqual(self.farmer.current_goal.type, GoalType.TILL_SOIL)
+        self.assertEqual(self.farmer.current_goal.parameters["target_location"], (1, 1))
+
+    def test_farmer_full_cycle(self):
+        # Till
+        self.world.set_tile_type(1, 1, "Grass")
+        self.farmer.x, self.farmer.y = 1, 1 # Move farmer to the spot to till
+        self.farmer.current_goal = Goal(GoalType.TILL_SOIL, assignee_id=self.farmer.name, parameters={"target_location": (1, 1)})
+        self.farmer.decide_action(self.world)
+        self.assertEqual(self.world.grid[1][1], "Tilled Soil")
+
+        # Plant
+        self.farmer.x, self.farmer.y = 1, 1 # Ensure farmer is at the spot to plant
+        self.farmer.current_goal = Goal(GoalType.PLANT_SEEDS, assignee_id=self.farmer.name, parameters={"target_location": (1, 1)})
+        self.farmer.decide_action(self.world)
+        crop = self.world.get_crop_at(1, 1)
+        self.assertIsNotNone(crop)
+        self.assertEqual(crop.crop_type, "Wheat")
+
+        # Harvest
+        crop.growth = 1.0 # Make the crop ready for harvest
+        self.farmer.x, self.farmer.y = 1, 1 # Ensure farmer is at the spot to harvest
+        self.farmer.current_goal = Goal(GoalType.HARVEST_CROP, assignee_id=self.farmer.name, parameters={"target_location": (1, 1)})
+        self.farmer.decide_action(self.world)
+        self.assertIsNone(self.world.get_crop_at(1, 1))
+        self.assertEqual(self.farmer.inventory.get("Wheat"), 1)
 
 
 class TestCharacterHunting(unittest.TestCase):
