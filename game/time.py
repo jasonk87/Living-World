@@ -31,6 +31,15 @@ class Time:
         # Simple representation for now
         return f"Day {self.current_day}, Tick {self.current_tick}/{self.ticks_per_day}"
 
+    def get_absolute_tick(self) -> int:
+        """Returns the total number of ticks elapsed since the start of the simulation."""
+        return (self.current_day - 1) * self.ticks_per_day + self.current_tick
+
+    def advance_ticks(self, num_ticks: int):
+        """Advances the game time by a specified number of ticks."""
+        for _ in range(num_ticks):
+            self.tick()
+
     # --- Phase Helpers ---
 
     def _build_phase_schedule(self) -> List[Dict[str, Any]]:
@@ -63,6 +72,13 @@ class Time:
 
     def get_phase_key(self) -> str:
         return self.get_phase().get("key", "")
+
+    def set_phase(self, phase_key: str):
+        for phase in self._phase_schedule:
+            if phase.get("key") == phase_key:
+                self.current_tick = phase.get("start_tick", 0)
+                self._cached_phase = phase
+                return
 
     def __str__(self) -> str:
         return self.get_time_of_day()

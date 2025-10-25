@@ -49,7 +49,7 @@ class World:
             grid_size = (int(default_size[0]), int(default_size[1]))
         self.grid_size = (int(grid_size[0]), int(grid_size[1]))
         self.grid = [["Grass" for _ in range(self.grid_size[1])] for _ in range(self.grid_size[0])]
-        self.resources: Dict[str, List[Dict[str, Any]]] = {}
+        self.resource_nodes: Dict[Tuple[int, int], Dict[str, Any]] = {}
         self.season_index = 0
         self.season = World.SEASONS[self.season_index]
         self.weather = "Sunny"
@@ -571,10 +571,7 @@ class World:
 
     def _seed_resource_clusters(self, cluster_defs: List[Dict[str, Any]]) -> None:
         rows, cols = self.grid_size
-        existing_nodes: Set[Tuple[int, int]] = set()
-        for nodes in self.resources.values():
-            for node in nodes:
-                existing_nodes.add(tuple(node.get("location", (0, 0))))
+        existing_nodes: Set[Tuple[int, int]] = set(self.resource_nodes.keys())
 
         for cluster in cluster_defs:
             resource = cluster.get("resource")
@@ -699,14 +696,14 @@ class World:
             for y in range(self.grid_size[1]):
                 tile_counter[self.grid[x][y]] += 1
 
-        resource_counts = {
-            resource: sum(1 for node in nodes if not node.get("depleted", False))
-            for resource, nodes in self.resources.items()
-        }
+        resource_counts: Counter[str] = Counter()
+        for node in self.resource_nodes.values():
+            if not node.get("depleted"):
+                resource_counts[node["resource"]] += 1
 
         self.landscape_profile = {
             "tiles": dict(tile_counter),
-            "resources": resource_counts,
+            "resources": dict(resource_counts),
             "reserved": len(self._reserved_land_tiles),
         }
 
@@ -742,13 +739,10 @@ class World:
         if not to_clear:
             return
         changed = False
-        for resource, nodes in self.resources.items():
-            for idx in range(len(nodes) - 1, -1, -1):
-                node = nodes[idx]
-                loc = tuple(node.get("location", ()))
-                if loc in to_clear:
-                    nodes.pop(idx)
-                    changed = True
+        for loc in to_clear:
+            if loc in self.resource_nodes:
+                del self.resource_nodes[loc]
+                changed = True
         if changed:
             self._record_landscape_profile()
 
@@ -1151,12 +1145,7 @@ class World:
         if max_x <= 0 or max_y <= 0:
             return None
 
-        resource_tiles: Set[Tuple[int, int]] = set()
-        for node_list in self.resources.values():
-            for node in node_list:
-                loc = node.get("location")
-                if isinstance(loc, (list, tuple)) and len(loc) == 2:
-                    resource_tiles.add((int(loc[0]), int(loc[1])))
+        resource_tiles: Set[Tuple[int, int]] = set(self.resource_nodes.keys())
 
         anchor_point = anchor or getattr(config, "RESIDENTIAL_ANCHOR", None) or self.market_location
         candidates: List[Tuple[Tuple[int, int], int]] = []
@@ -1644,7 +1633,8 @@ class World:
 
             moment = random.choice(options)
             host = max(occupants, key=lambda char: getattr(char, "net_worth", 0))
-
+            if not isinstance(moment, dict):
+                continue
             group_summary = moment.get("group_summary")
             solo_summary = moment.get("solo_summary")
             if len(occupants) > 1:
@@ -1774,6 +1764,8 @@ class World:
                 continue
 
             moment = random.choice(moment_options)
+            if not isinstance(moment, dict):
+                continue
             neighborhood_label = self._format_neighborhood_label(block_key, block_size)
             summary_template = moment.get("summary") or "Neighbors gathered near {host} in {neighborhood}."
 
@@ -1854,6 +1846,17 @@ class World:
     def get_operational_buildings_of_type(self, structure_type_str: str) -> List[Building]:
         return [b for b in self.buildings if b.structure_type == structure_type_str and b.is_operational]
 
+    def get_buildings_by_functionality(self, functionality: str) -> List[Building]:
+        found_buildings = []
+        for b in self.buildings:
+            if not b.is_operational or not b.functionality:
+                continue
+
+            allowed_categories = b.functionality.get("allows_crafting_category")
+            if allowed_categories and isinstance(allowed_categories, list) and functionality in allowed_categories:
+                found_buildings.append(b)
+        return found_buildings
+
     # Furniture methods (can be kept commented if Furniture class is not re-added for this test)
     # def add_furniture(self, furniture_item: 'Furniture'):
     #     if not hasattr(self, 'furniture'): self.furniture = []
@@ -1886,10 +1889,9 @@ class World:
         x, y = location
         if not (0 <= x < self.grid_size[0] and 0 <= y < self.grid_size[1]):
             return
-        if self.get_building_at(x, y):
+        if self.get_building_at(x, y) or location in self.resource_nodes:
             return
 
-        node_list = self.resources.setdefault(resource_name, [])
         current_tile = self.grid[x][y]
         max_durability = durability if durability is not None else config.RESOURCE_NODE_DURABILITY.get(resource_name, 5)
         node = {
@@ -1903,7 +1905,7 @@ class World:
             "original_tile": current_tile,
             "depleted_tile": config.RESOURCE_NODE_DEPLETED_TILES.get(resource_name, current_tile),
         }
-        node_list.insert(0, node)
+        self.resource_nodes[location] = node
 
         if tile_becomes and current_tile != tile_becomes:
             self.set_tile(x, y, tile_becomes)
@@ -1913,98 +1915,102 @@ class World:
 
 
     def get_resources(self, resource_name: str) -> List[Any]:
-        nodes = self.resources.get(resource_name, [])
-        return [node for node in nodes if not node.get("depleted", False)]
+        return [
+            node
+            for node in self.resource_nodes.values()
+            if node["resource"] == resource_name and not node.get("depleted")
+        ]
 
     def is_resource_node(self, resource_name: str, location: Tuple[int, int]) -> bool:
-        for node in self.resources.get(resource_name, []):
-            if tuple(node.get("location", ())) == tuple(location):
-                return not node.get("depleted", False)
-        return False
+        node = self.resource_nodes.get(location)
+        if not node:
+            return False
+        return node["resource"] == resource_name and not node.get("depleted")
 
     def record_resource_harvest(self, resource_name: str, location: Tuple[int, int], amount: int = 1) -> None:
-        nodes = self.resources.get(resource_name, [])
-        for node in nodes:
-            if tuple(node.get("location", ())) != tuple(location):
+        node = self.resource_nodes.get(location)
+        if not node or node["resource"] != resource_name:
+            return
+
+        if node.get("depleted") or node.get("max_durability", 0) >= 999:
+            return
+        node["durability"] = max(0, node.get("durability", 0) - amount)
+        node.setdefault("harvested_today", 0)
+        node["harvested_today"] += amount
+        if node["durability"] <= 0:
+            node["depleted"] = True
+            node["regrowth_progress"] = 0.0
+            depleted_tile = node.get("depleted_tile")
+            if depleted_tile:
+                self.set_tile(location[0], location[1], depleted_tile)
+            self.add_event_log_message(
+                f"{resource_name} exhausted at {location}. The area now shows {depleted_tile or 'scars of overuse'}."
+            )
+            self.add_notable_event(
+                "ResourceDepleted",
+                {
+                    "summary": f"{resource_name} depleted at {location}",
+                    "resource": resource_name,
+                    "location": location,
+                },
+            )
+            self._record_landscape_profile()
+
+    def _advance_resource_regrowth(self) -> None:
+        landscape_changed = False
+        for node in self.resource_nodes.values():
+            resource_name = node["resource"]
+            regrowth_days = config.RESOURCE_NODE_REGROWTH_DAYS.get(resource_name)
+            if not regrowth_days:
+                node.pop("harvested_today", None)
                 continue
-            if node.get("depleted") or node.get("max_durability", 0) >= 999:
-                return
-            node["durability"] = max(0, node.get("durability", 0) - amount)
-            node.setdefault("harvested_today", 0)
-            node["harvested_today"] += amount
-            if node["durability"] <= 0:
-                node["depleted"] = True
+
+            node.pop("harvested_today", None)
+            if not node.get("depleted"):
+                continue
+
+            regrowth_increment = 1.0 / max(1, regrowth_days)
+            env_modifier = self.resource_yield_multipliers.get(resource_name, 1.0)
+            env_modifier = max(0.25, env_modifier)
+            node["regrowth_progress"] += regrowth_increment * env_modifier
+
+            if node["regrowth_progress"] >= 1.0:
                 node["regrowth_progress"] = 0.0
-                depleted_tile = node.get("depleted_tile")
-                if depleted_tile:
-                    self.set_tile(location[0], location[1], depleted_tile)
+                node["depleted"] = False
+                node["durability"] = node.get("max_durability", 1)
+                active_tile = node.get("active_tile") or node.get("original_tile")
+                location = tuple(node["location"])
+                if active_tile:
+                    self.set_tile(location[0], location[1], active_tile)
                 self.add_event_log_message(
-                    f"{resource_name} exhausted at {location}. The area now shows {depleted_tile or 'scars of overuse'}."
+                    f"{resource_name} has regrown at {location} after a period of rest."
                 )
                 self.add_notable_event(
-                    "ResourceDepleted",
+                    "ResourceRegrowth",
                     {
-                        "summary": f"{resource_name} depleted at {location}",
+                        "summary": f"{resource_name} regrew at {location}",
                         "resource": resource_name,
                         "location": location,
                     },
                 )
-                self._record_landscape_profile()
-            return
-
-    def _advance_resource_regrowth(self) -> None:
-        landscape_changed = False
-        for resource_name, nodes in self.resources.items():
-            regrowth_days = config.RESOURCE_NODE_REGROWTH_DAYS.get(resource_name)
-            if not regrowth_days:
-                for node in nodes:
-                    node.pop("harvested_today", None)
-                continue
-            regrowth_increment = 1.0 / max(1, regrowth_days)
-            env_modifier = self.resource_yield_multipliers.get(resource_name, 1.0)
-            env_modifier = max(0.25, env_modifier)
-            for node in nodes:
-                node.pop("harvested_today", None)
-                if not node.get("depleted"):
-                    continue
-                node["regrowth_progress"] += regrowth_increment * env_modifier
-                if node["regrowth_progress"] >= 1.0:
-                    node["regrowth_progress"] = 0.0
-                    node["depleted"] = False
-                    node["durability"] = node.get("max_durability", 1)
-                    active_tile = node.get("active_tile") or node.get("original_tile")
-                    if active_tile:
-                        self.set_tile(node["location"][0], node["location"][1], active_tile)
-                    self.add_event_log_message(
-                        f"{resource_name} has regrown at {node['location']} after a period of rest."
-                    )
-                    self.add_notable_event(
-                        "ResourceRegrowth",
-                        {
-                            "summary": f"{resource_name} regrew at {node['location']}",
-                            "resource": resource_name,
-                            "location": tuple(node["location"]),
-                        },
-                    )
-                    landscape_changed = True
+                landscape_changed = True
 
         if landscape_changed:
             self._record_landscape_profile()
 
     def get_resource_nodes_snapshot(self) -> List[Dict[str, Any]]:
         snapshot: List[Dict[str, Any]] = []
-        for resource_name, nodes in self.resources.items():
-            for node in nodes:
-                snapshot.append(
-                    {
-                        "resource": resource_name,
-                        "location": tuple(node.get("location", (0, 0))),
-                        "durability": node.get("durability"),
-                        "max_durability": node.get("max_durability"),
-                        "depleted": node.get("depleted", False),
-                        "regrowth_progress": round(node.get("regrowth_progress", 0.0), 3),
-                    }
-                )
+        for node in self.resource_nodes.values():
+            snapshot.append(
+                {
+                    "resource": node["resource"],
+                    "location": tuple(node.get("location", (0, 0))),
+                    "durability": node.get("durability"),
+                    "max_durability": node.get("max_durability"),
+                    "depleted": node.get("depleted", False),
+                    "regrowth_progress": round(node.get("regrowth_progress", 0.0), 3),
+                }
+            )
         return snapshot
 
     def update_weather(self, new_weather: str):
@@ -5095,7 +5101,7 @@ class World:
 
         digest_components.extend(sorted(resource_bits)[:3])
         digest_components.extend(sorted(market_bits)[:3])
-        digest_key = "|".join(digest_components)
+        digest_key = "|".join(map(str, digest_components))
 
         current_day = self.game_time.current_day if self.game_time else None
         if (
@@ -6548,6 +6554,8 @@ class World:
             ]
             if eligible_parents:
                 parent = random.choice(eligible_parents)
+                if not hasattr(parent, "name"):
+                    return
                 child_profile = self._generate_citizen_profile(
                     job="Unemployed",
                     age=0,
@@ -6583,6 +6591,8 @@ class World:
             and random.random() < migration_chance
         ):
             archetype = random.choice(MIGRANT_ARCHETYPES)
+            if not isinstance(archetype, dict):
+                return
             migrant_profile = self._generate_citizen_profile(
                 job=archetype.get("job", "Laborer"),
                 traits=archetype.get("traits"),
@@ -6624,7 +6634,9 @@ class World:
             and random.random() < (departure_chance + hardship)
         ):
             leaving = random.choice(departure_candidates)
-            reason = "homelessness" if leaving.name in homeless_names else "hardship"
+            if not hasattr(leaving, "name"):
+                return
+            reason = "homelessness" if leaving in homeless_names else "hardship"
             self.add_event_log_message(f"{leaving.name} departs the settlement due to {reason}.")
             self.add_notable_event(
                 "Departure",

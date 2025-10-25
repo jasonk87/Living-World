@@ -20,6 +20,7 @@ class Building:
         tile_palette: Optional[Dict[str, str]] = None,
         amenities: Optional[List[str]] = None,
         household_style: Optional[str] = None,
+        **kwargs,
     ):
 
         self.structure_type = structure_type
@@ -58,6 +59,11 @@ class Building:
         # These are set by the blueprint but stored on instance for get_current_map_char
         self.map_char_initial = map_char_initial
         self.map_char_complete = map_char_complete
+
+        self.tile_layout = tile_layout
+        self.interior_tile = kwargs.get("interior_tile")
+        self.amenities = kwargs.get("amenities")
+        self.household_style = kwargs.get("household_style")
 
         self.tile_palette: Dict[str, str] = dict(tile_palette or {})
         self.tile_layout: List[List[str]] = self._normalize_tile_layout(tile_layout, self.tile_palette)

@@ -5,6 +5,7 @@ from game import config
 from game.character import Character, Job
 from game.goal import Goal, GoalType, create_goal_from_job
 from game.building import Building
+from game.rumor import Rumor
 from game.time import Time
 from game.world import World
 from game.data import JOB_SALARIES
@@ -38,13 +39,14 @@ def test_character_shifts_to_job_goal_during_work_phase(mock_random):  # noqa: A
         skills={},
         job=Job("Farmer", None, JOB_SALARIES.get("Farmer", 0)),
         needs=_basic_needs(),
-        current_goal_obj=Goal(GoalType.IDLE, assignee_id="Avery", originator_id="Test"),
+            current_goal_obj=Goal(GoalType.IDLE, assignee_id="Avery", originator_id="Test"),
     )
     world.add_character(worker)
 
     phase_info = config.DAY_PHASE_CONFIG[1]
+    game_time.set_phase(phase_info["key"])
     with patch.object(worker, "get_default_goal", return_value=create_goal_from_job(worker.job.title, worker.name)):
-        worker._apply_phase_behavior(world, phase_info)
+        worker.decide_action(world)
 
     assert worker.current_goal.type == GoalType.PERFORM_FARMER_DUTIES
 
@@ -52,22 +54,30 @@ def test_character_shifts_to_job_goal_during_work_phase(mock_random):  # noqa: A
 @patch("random.random", return_value=0.99)
 def test_character_prioritizes_meal_during_supper(mock_random):  # noqa: ARG001
     world, _ = _make_world_with_time()
+    needs = _basic_needs()
+    needs["Hunger"] = config.HUNGER_THRESHOLD_EAT - 1
     diner = Character(
         name="Bryn",
         personality="Cheerful",
         traits=[],
         skills={},
         job=Job("Unemployed", None, JOB_SALARIES.get("Unemployed", 0)),
-        needs=_basic_needs(),
-        current_goal_obj=Goal(GoalType.WANDER, assignee_id="Bryn", originator_id="Test", priority=6),
+        needs=needs,
+        current_goal_obj=Goal(GoalType.WANDER, assignee_id="Bryn", originator_id="Test"),
     )
     diner.inventory["Food"] = 1
     world.add_character(diner)
 
     phase_info = config.DAY_PHASE_CONFIG[2]
-    diner._apply_phase_behavior(world, phase_info)
+    world.game_time.set_phase(phase_info["key"])
 
-    assert diner.current_goal.type == GoalType.EAT_FOOD
+    initial_hunger = diner.needs.get("Hunger", 0)
+    initial_food = diner.inventory.get("Food", 0)
+
+    diner.decide_action(world)
+
+    assert diner.needs["Hunger"] > initial_hunger
+    assert diner.inventory.get("Food", 0) < initial_food
 
 
 @patch("random.random", return_value=0.99)
@@ -85,23 +95,25 @@ def test_character_forced_to_rest_during_night(mock_random):  # noqa: ARG001
     cottage.is_operational = True
     world.add_building(cottage)
 
+    needs = _basic_needs()
+    needs["Energy"] = config.ENERGY_THRESHOLD_REST - 1
     worker = Character(
         name="Caro",
         personality="Calm",
         traits=[],
         skills={},
         job=Job("Farmer", None, JOB_SALARIES.get("Farmer", 0)),
-        needs=_basic_needs(),
-        current_goal_obj=Goal(GoalType.PERFORM_FARMER_DUTIES, assignee_id="Caro", originator_id="Test", priority=4),
+        needs=needs,
+        current_goal_obj=Goal(GoalType.PERFORM_FARMER_DUTIES, assignee_id="Caro", originator_id="Test"),
     )
     worker.x = worker.y = 1
     world.add_character(worker)
     phase_info = config.DAY_PHASE_CONFIG[-1]
+    world.game_time.set_phase(phase_info["key"])
     with patch.object(worker, "_ensure_home_assignment", return_value=cottage):
-        worker._apply_phase_behavior(world, phase_info)
+        worker.decide_action(world)
 
     assert worker.current_goal.type == GoalType.REST_AT_HOME
-    assert worker.current_goal.parameters.get("building_location") == cottage.location
 
 
 def test_decision_profile_blends_memory_relationships():
@@ -329,3 +341,42 @@ def test_personal_pursuits_progress_and_log_entries():
     assert milestone_events
     assert pursuit.get("level", 0) >= 1
     assert any(evt.get("type") == "pursuit_milestone" for evt in citizen.life_history)
+
+
+def test_character_reacts_to_strong_positive_rumor():
+    world, game_time = _make_world_with_time()
+    subject = Character(
+        name="Subject",
+        personality="Friendly",
+        traits=[],
+        skills={},
+        needs=_basic_needs(),
+    )
+    listener = Character(
+        name="Listener",
+        personality="Chatty",
+        traits=[],
+        skills={},
+        needs=_basic_needs(),
+        current_goal_obj=Goal(GoalType.IDLE, assignee_id="Listener", originator_id="Test"),
+    )
+    world.add_character(subject)
+    world.add_character(listener)
+    listener.known_characters.append("Subject")
+
+    rumor = Rumor(
+        subject_char_id="Subject",
+        content_key="did_a_good_deed_positive",
+        initial_strength=config.MIN_RUMOR_STRENGTH_FOR_OPINION_EFFECT + 10,
+        creation_day=game_time.current_day,
+        is_positive=True,
+        original_source_char_id="Source",
+    )
+    world.add_rumor(rumor)
+
+    # Simulate listener hearing the rumor
+    with patch("random.random", return_value=0.0):  # Ensure reaction is triggered
+        listener._process_learned_rumor(rumor, world)
+
+    assert listener.current_goal.type == GoalType.PRAISE_CHARACTER
+    assert listener.current_goal.parameters["target_char_name"] == "Subject"

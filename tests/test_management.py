@@ -9,6 +9,7 @@ from game.work_order import WorkOrder # Import WorkOrder
 from game.data import BLUEPRINTS, JOB_SALARIES # Import BLUEPRINTS for item definition
 from game.goal import Goal, GoalType
 from game import config
+import random
 
 class TestManagement(unittest.TestCase):
     def setUp(self):

@@ -7,6 +7,7 @@ from game.goal import Goal, GoalType
 from game import config
 from game.work_order import WorkOrder
 from game.data import BLUEPRINTS, JOB_SALARIES
+from game.building import Building
 
 class TestNeedsAndGoals(unittest.TestCase):
     def setUp(self):
@@ -18,8 +19,22 @@ class TestNeedsAndGoals(unittest.TestCase):
             BLUEPRINTS["Wooden Sword"] = {
                 "required_resources": {"Wood": 2},
                 "type": "Weapon",
-                "craft_time_per_unit": 5
+                "craft_time_per_unit": 5,
+                "required_skill": "Woodworking"
             }
+
+        # Add a workshop for the test
+        carpentry_shop = Building(
+            structure_type='carpenters_shop',
+            display_name="Carpenter's Shop",
+            location=(0, 1),
+            size=(3, 2),
+            functionality={"allows_crafting_category": ["carpentry"], "tags": ["indoor", "workshop", "woodworking"]},
+            required_resources={},
+            required_skill=None
+        )
+        carpentry_shop.is_operational = True
+        self.world.add_building(carpentry_shop)
 
     def test_low_esteem_generates_seek_recognition_goal(self):
         # Setup character with low esteem
@@ -43,19 +58,18 @@ class TestNeedsAndGoals(unittest.TestCase):
 
     def test_praise_interaction_boosts_esteem(self):
         # Setup characters
-        crafter = Character(name="Crafter", personality="Focused", traits=[], skills={"Crafting": 5}, job=Job("Master Craftsman", None, JOB_SALARIES.get("Master Craftsman", 0)), x=0, y=0)
+        crafter = Character(name="Crafter", personality="Focused", traits=[], skills={"Woodworking": 5}, job=Job("Carpenter", None, JOB_SALARIES.get("Carpenter", 0)), x=0, y=0)
         witness = Character(name="Witness", personality="Friendly", traits=[], skills={}, job=Job("Unemployed", None, JOB_SALARIES.get("Unemployed", 0)), x=1, y=0)
         self.world.add_character(crafter)
         self.world.add_character(witness)
 
         # Give crafter the resources and a work order
         crafter.inventory["Wood"] = 2
+        crafter.inventory["Saw"] = 1
+        crafter.equip_tool("Saw")
         order = WorkOrder(order_type="CraftItem", details={"item_name": "Wooden Sword", "quantity": 1})
         self.world.add_work_order(order)
-        order.status = "InProgress"
-        order.assigned_to = crafter.name
-        crafter.active_work_order_id = order.order_id
-        crafter.current_goal = Goal(GoalType.EXECUTE_CRAFT_ORDER, assignee_id=crafter.name)
+        order.status = "Approved"
         crafter.materials_gathered_for_wo = True # Skip gathering
         crafter.crafting_progress = 0 # Explicitly reset for test isolation
 
@@ -66,11 +80,16 @@ class TestNeedsAndGoals(unittest.TestCase):
         original_random = random.random
         random.random = lambda: 0.0 # Will pass the < 0.2 check for witness to be impressed
 
-        # Run crafter's action for enough ticks to complete the item
+        # Run the simulation for enough ticks to complete the item
         craft_time = BLUEPRINTS["Wooden Sword"]["craft_time_per_unit"]
-        for _ in range(craft_time + 1): # Add one extra tick for safety
-            crafter.decide_action(self.world)
-            if crafter.items_crafted_for_wo:
+        for _ in range(craft_time + 5):  # Add extra ticks for witness reaction
+            # Simulate a world tick for all characters
+            for char in self.world.characters:
+                char.decide_action(self.world)
+
+            if witness.current_goal.type == GoalType.PRAISE_CHARACTER:
+                # Now, let the witness execute the praise goal
+                witness.decide_action(self.world)
                 break
 
         self.assertTrue(crafter.items_crafted_for_wo, "Crafter should have finished the item.")

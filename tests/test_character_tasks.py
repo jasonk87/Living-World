@@ -23,10 +23,10 @@ class TestCharacterTaskPerformance(unittest.TestCase):
             }
         if "Stone Axe" not in BLUEPRINTS:
             BLUEPRINTS["Stone Axe"] = {
-                "required_resources": {"Stone": 2, "Wood": 1}, "job_skill_needed": "Stonemasonry",
+                "required_resources": {"Stone": 2, "Wood": 1}, "required_skill": "Stonemasonry",
                 "type": "Tool", "tool_type": "Axe", "max_durability": 50, "craft_time_per_unit": 8
             }
-        if "Wood" not in self.world.resources:
+        if not self.world.get_resources("Wood"):
              self.world.add_resource("Wood", (0,0), tile_becomes="Forest")
              self.world.add_resource("Wood", (0,1), tile_becomes="Forest")
 
@@ -41,22 +41,15 @@ class TestCharacterTaskPerformance(unittest.TestCase):
 
     def run_task_for_ticks(self, character, task_name, ticks, task_location=(0,0)):
         """Helper to run a generic task for a number of ticks."""
-        character.current_goal = task_name # e.g. "Gather Wood"
-        character.current_task_def_name = task_name # e.g. "Chop Wood" for generic task
+        character.current_goal = Goal(GoalType.GATHER_RESOURCE, assignee_id=character.name, parameters={"task_name": task_name})
 
         # Ensure character is at task location
         character.x, character.y = task_location
 
         for _ in range(ticks):
             if task_name in JOB_TASK_DEFINITIONS : # Generic gather task
-                 # Ensure the goal is set for generic task execution if it relies on it
-                 original_goal = character.current_goal
-                 if character.current_goal != task_name and task_name in [v['resource_produced'] for k,v in JOB_TASK_DEFINITIONS.items() if 'resource_produced' in v] : # hacky way to set goal
-                     character.current_goal = f"Gather {task_name}"
-
                  character._execute_generic_task(self.world, task_name)
-                 character.current_goal = original_goal # restore
-            # Add other task types here if needed (e.g. crafting)
+
 
     def test_lazy_generic_task_slower_progress(self):
         lazy_char = Character(name="LazyTest", personality="slacker", traits=["Lazy"], skills={}, job=Job("Woodcutter", None, JOB_SALARIES.get("Woodcutter", 0)))
@@ -215,13 +208,16 @@ class TestCharacterTaskPerformance(unittest.TestCase):
         """Helper to run a craft order for a number of ticks."""
         wo_details = {"item_name": item_name, "quantity": 1, "required_resources": required_resources}
         if item_name not in BLUEPRINTS: # Ensure blueprint exists for test
-            BLUEPRINTS[item_name] = {"required_resources": required_resources, "craft_time_per_unit": craft_time, "job_skill_needed": "Crafting"}
+            BLUEPRINTS[item_name] = {"required_resources": required_resources, "craft_time_per_unit": craft_time, "required_skill": "Crafting"}
 
         order = WorkOrder(order_type="CraftItem", details=wo_details, creation_day=self.time.current_day)
         self.world.add_work_order(order)
         order.status = "InProgress"
         order.assigned_to = character.name
         character.active_work_order_id = order.order_id
+        goal = Goal(GoalType.EXECUTE_CRAFT_ORDER, assignee_id=character.name, parameters={"work_order_id": order.order_id})
+        character.current_goal = goal
+
 
         # Assume materials are already gathered for simplicity in testing crafting speed
         character.materials_gathered_for_wo = True
@@ -291,19 +287,16 @@ class TestCharacterTaskPerformance(unittest.TestCase):
         self.world.add_character(careless_bookie)
         careless_bookie.x, careless_bookie.y = stockpile_for_char.rect[0], stockpile_for_char.rect[1]
 
-        careless_bookie.current_goal = Goal(GoalType.COUNT_STOCKPILE, assignee_id=careless_bookie.name, parameters={"stockpile_name": target_stockpile_name})
+        goal = Goal(GoalType.COUNT_STOCKPILE, assignee_id=careless_bookie.name, parameters={"stockpile_name": target_stockpile_name})
+        careless_bookie.current_goal = goal
 
         initial_logs = stockpile_for_char.inventory["Logs"]
         initial_stones = stockpile_for_char.inventory["Stones"]
 
-        original_random = random.random
-        original_choice = random.choice
-
-        miscount_triggers = [0.05, 0.5]
-        def miscount_random():
-            return miscount_triggers.pop(0) if miscount_triggers else 0.5
-        random.random = miscount_random
-        random.choice = lambda x: -1
+        # Set a specific tick to make the "Careless" trait trigger deterministically
+        # For "Logs", hash is 405. (tick + 405) % 10 == 0. So tick=5 works.
+        # Error amount is -1 if (tick // 10) % 2 == 0. For tick=5, this is true.
+        self.time.advance_ticks(5)
 
         original_decide_action = careless_bookie.decide_action
         careless_bookie.decide_action = lambda world_param: None
@@ -321,9 +314,6 @@ class TestCharacterTaskPerformance(unittest.TestCase):
 
         self.assertTrue(any(f"Careless counting {target_stockpile_name}" in msg for msg in careless_bookie.memory), "Careless bookkeeper log not found.")
         self.assertTrue(any(f"Logs (actual: {initial_logs}, recorded: {initial_logs - 1})" in msg for msg in careless_bookie.memory), "Careless bookkeeper miscount detail not found.")
-
-        random.random = original_random
-        random.choice = original_choice
 
 
 if __name__ == '__main__':

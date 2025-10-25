@@ -120,6 +120,13 @@ BLUEPRINTS = {
         "max_durability": 100,
         "description": "A tool for sawing wood into lumber.",
         "craft_time_per_unit": 10
+    },
+    "Wooden Sword": {
+        "required_resources": {"Wood": 2},
+        "required_skill": "Woodworking",
+        "type": "Weapon",
+        "description": "A simple wooden sword for training or defense.",
+        "craft_time_per_unit": 5
     }
 }
 
@@ -252,6 +259,14 @@ JOB_TASK_DEFINITIONS = {
         "resource_produced": "Furniture",
         "base_yield": 1,
         "base_time_per_yield": 12,
+    },
+    "Craft Wooden Sword": {
+        "required_tool_type": "Saw",
+        "required_building": "carpentry",
+        "skill_used": "Woodworking",
+        "resource_produced": "Wooden Sword",
+        "base_yield": 1,
+        "base_time_per_yield": 5,
     },
     "Construct Building": { # Generic task for working on any building
         "required_tool_type": None,
@@ -1161,4 +1176,27 @@ MARKET_PRICES = {
     "Food": 4, # Price to buy 1 unit of food
     "Water": 2,
     "Arrow Bundle": 8,
+}
+
+AMBITIONS = {
+    "BECOME_TOWN_LEADER": {
+        "prerequisites": {"trait": "Ambitious"},
+        "completion_criteria": {"job": "Mayor"},
+        "next_goal": {"type": "INCREASE_REPUTATION"}
+    },
+    "BUILD_A_HOUSE": {
+        "prerequisites": {"min_money": 100},
+        "completion_criteria": {"has_home": True},
+        "next_goal": {"type": "IMPROVE_DWELLING"}
+    },
+    "BECOME_MASTER_ARTISAN": {
+        "prerequisites": {"skill": {"Crafting": 5}},
+        "completion_criteria": {"skill": {"Crafting": 10}},
+        "next_goal": {"type": "IMPROVE_SKILL", "parameters": {"skill": "Crafting"}}
+    },
+    "ACCUMULATE_WEALTH": {
+        "prerequisites": {"min_money": 100},
+        "completion_criteria": {"money": 1000},
+        "next_goal": {"type": "EARN_MONEY"}
+    },
 }

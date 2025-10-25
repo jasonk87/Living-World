@@ -192,11 +192,13 @@ def test_weather_event_applies_and_expires_effects(mock_randint, mock_random):  
 def test_resource_regrowth_cycle_logs_and_restores_node():
     world, _ = _make_world()
     world.add_resource("Wood", (2, 2))
-    node = world.resources["Wood"][0]
+    node = world.resource_nodes[(2, 2)]
 
     for _ in range(node["max_durability"]):
         world.record_resource_harvest("Wood", (2, 2), amount=1)
 
+    # After harvesting, the node should be depleted. get_resources only returns non-depleted nodes.
+    # So we must check the resource_nodes dictionary directly.
     assert node["depleted"] is True
     depleted_tile = config.RESOURCE_NODE_DEPLETED_TILES["Wood"]
     assert world.get_tile(2, 2) == depleted_tile
@@ -375,8 +377,10 @@ def test_leadership_cycle_flags_neglect_and_records_incident(mock_random):  # no
     assert worker.money > 0
 
 
-@patch("random.choice", side_effect=lambda options: options[0])
-def test_household_evening_generates_story_and_bonuses(mock_choice):  # noqa: ARG001
+import random
+
+def test_household_evening_generates_story_and_bonuses():
+    random.seed(0)
     world, game_time = _make_world()
     game_time.current_day = 5
     layout = [["WoodWall", "Bedroll"], ["Hearth", "Bed"]]
@@ -483,8 +487,8 @@ def test_household_comfort_cycle_consumes_resources_and_updates_mood():
     assert summary["partial"] + summary["missed"] >= 1
 
 
-@patch("random.choice", side_effect=lambda options: options[0])
-def test_neighborhood_gathering_records_story(mock_choice):  # noqa: ARG001
+def test_neighborhood_gathering_records_story():
+    random.seed(0)
     world, game_time = _make_world()
     game_time.current_day = 9
 

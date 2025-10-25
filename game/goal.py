@@ -1,6 +1,8 @@
 # game/goal.py
 from enum import Enum, auto
 from typing import Optional, Dict, Any, List
+from .goal_runtime import GoalPriority
+from .goal_runtime import GoalPriority
 
 class GoalType(Enum):
     # General & Maintenance
@@ -116,20 +118,27 @@ class GoalType(Enum):
 
     GO_TO_WORK = auto()
 
+    PURSUE_JOB = auto()
+    IMPROVE_SKILL = auto()
+    CRAFT_MASTERPIECE = auto()
+    EARN_MONEY = auto()
+    BUILD_STRUCTURE = auto()
+    INCREASE_REPUTATION = auto()
+
 
 class GoalStatus(Enum):
-    PENDING = auto()    # Newly created, not yet started
-    ACTIVE = auto()     # Currently being pursued
-    COMPLETED = auto()  # Successfully achieved
-    FAILED = auto()     # Could not be achieved
-    CANCELLED = auto()  # Cancelled by originator or circumstance
-    DELEGATED = auto()  # This goal has been broken down and delegated
+    PENDING = auto()
+    IN_PROGRESS = auto()
+    COMPLETED = auto()
+    FAILED = auto()
+    CANCELLED = auto()
+    DELEGATED = auto()
 
 class Goal:
     def __init__(self, goal_type: GoalType,
                  originator_id: Optional[str] = None, # Character name or "System"
                  assignee_id: Optional[str] = None, # Character name responsible for this goal
-                 priority: int = 5, # Lower is higher priority (e.g. 1-10)
+                 priority: GoalPriority = GoalPriority.MEDIUM,
                  parameters: Optional[Dict[str, Any]] = None,
                  status: GoalStatus = GoalStatus.PENDING):
         self.type = goal_type
@@ -143,7 +152,8 @@ class Goal:
     def __str__(self):
         goal_type_name = self.type.name if self.type else "NoGoalType"
         status_name = self.status.name if self.status else "NoStatus"
-        return (f"Goal(Type: {goal_type_name}, Prio: {self.priority}, "
+        priority_name = self.priority.name if isinstance(self.priority, GoalPriority) else str(self.priority)
+        return (f"Goal(Type: {goal_type_name}, Prio: {priority_name}, "
                 f"Assignee: {self.assignee_id or 'Any'}, Status: {status_name}, "
                 f"Params: {self.parameters}, Orig: {self.originator_id or 'Self'})")
 
@@ -159,19 +169,14 @@ class Goal:
 
     def set_completed(self):
         self.status = GoalStatus.COMPLETED
-        # print(f"DEBUG: Goal {self.type.name} for {self.assignee_id} set to COMPLETED.")
 
-
-    def set_failed(self, reason: Optional[str] = None): # reason can be stored in params if needed
+    def set_failed(self, reason: Optional[str] = None):
         self.status = GoalStatus.FAILED
         if reason: self.parameters["failure_reason"] = reason
-        # print(f"DEBUG: Goal {self.type.name} for {self.assignee_id} set to FAILED. Reason: {reason}")
-
 
     def set_cancelled(self, reason: Optional[str] = None):
         self.status = GoalStatus.CANCELLED
         if reason: self.parameters["cancellation_reason"] = reason
-        # print(f"DEBUG: Goal {self.type.name} for {self.assignee_id} set to CANCELLED. Reason: {reason}")
 
     def to_dict(self) -> Dict[str, Any]:
         """Converts the Goal object to a dictionary for JSON serialization."""
@@ -179,7 +184,7 @@ class Goal:
             "type": self.type.name,
             "originator_id": self.originator_id,
             "assignee_id": self.assignee_id,
-            "priority": self.priority,
+            "priority": self.priority.name,
             "parameters": self.parameters,
             "status": self.status.name,
             "sub_goals": [sg.to_dict() for sg in self.sub_goals]
@@ -187,66 +192,62 @@ class Goal:
 
 # Default goal instance for characters when they have nothing else to do.
 # Assignee will be set by the character itself.
-DEFAULT_IDLE_GOAL = Goal(GoalType.IDLE, originator_id="System", priority=10)
-DEFAULT_WANDER_GOAL = Goal(GoalType.WANDER, originator_id="System", priority=9)
+def DEFAULT_IDLE_GOAL(assignee_id: str) -> Goal:
+    return Goal(GoalType.IDLE, originator_id="System", assignee_id=assignee_id, priority=GoalPriority.IDLE)
 
-def create_goal_from_job(job_name: str, char_name: str) -> Goal:
+def create_goal_from_job(job_name: str, char_name: str, priority: GoalPriority = GoalPriority.MEDIUM) -> Optional[Goal]:
     """
     Creates a default Goal object based on a character's job title or a goal string.
     """
-    # Handle direct goal strings first
     goal_str_upper = job_name.replace(" ", "_").upper()
     try:
         goal_type_enum = GoalType[goal_str_upper]
-        return Goal(goal_type_enum, originator_id="SystemAssignment", assignee_id=char_name)
+        return Goal(goal_type_enum, originator_id="SystemAssignment", assignee_id=char_name, priority=priority)
     except KeyError:
-        pass  # If not a direct match, fall through to ROLE_DETAILS lookup
+        pass
 
-    from .data import ROLE_DETAILS # Local import to avoid circularity at module load time
-
+    from .data import ROLE_DETAILS
     role_detail = ROLE_DETAILS.get(job_name)
-    default_goal_str = "IDLE" # Fallback
     if role_detail and role_detail.get("job_default_goal"):
-        # Convert string like "Oversee Settlement" to GoalType.OVERSEE_SETTLEMENT
-        # This is a bit naive and assumes direct mapping.
-        # A more robust solution would be a direct mapping in ROLE_DETAILS or here.
         goal_str_upper = role_detail["job_default_goal"].replace(" ", "_").upper()
         try:
             goal_type_enum = GoalType[goal_str_upper]
-            return Goal(goal_type_enum, originator_id="SystemAssignment", assignee_id=char_name)
+            return Goal(goal_type_enum, originator_id="SystemAssignment", assignee_id=char_name, priority=priority)
         except KeyError:
-            # Try specific mappings for job_default_goal strings from character.py
-            mapping = {
-                "Perform Builder Duties": GoalType.PERFORM_BUILDER_DUTIES,
-                "Perform Woodcutter Duties": GoalType.PERFORM_WOODCUTTER_DUTIES,
-                "Perform Stonemason Duties": GoalType.PERFORM_STONEMASON_DUTIES,
-                "Perform Miner Duties": GoalType.PERFORM_MINER_DUTIES,
-                "Perform Farmer Duties": GoalType.PERFORM_FARMER_DUTIES,
-                "Perform Hunter Duties": GoalType.PERFORM_HUNTER_DUTIES,
-                "Perform Fletcher Duties": GoalType.PERFORM_FLETCHER_DUTIES,
-                "Perform Sawyer Duties": GoalType.PERFORM_SAWYER_DUTIES,
-                "Perform Carpenter Duties": GoalType.PERFORM_CARPENTER_DUTIES,
-                "Perform Smelter Duties": GoalType.PERFORM_SMELTER_DUTIES,
-                "Perform Blacksmith Duties": GoalType.PERFORM_BLACKSMITH_DUTIES,
-                "Assess Production Needs": GoalType.ASSESS_PRODUCTION_NEEDS,
-                "Manage Subordinates": GoalType.MANAGE_SUBORDINATES,
-                "Maintain Ledger": GoalType.MAINTAIN_LEDGER,
-                "Oversee Expedition": GoalType.MAINTAIN_DEFENSES, # Changed from Oversee Expedition
-                "Oversee Settlement": GoalType.OVERSEE_SETTLEMENT,
-                "Oversee Medical Operations": GoalType.OVERSEE_MEDICAL_OPERATIONS,
-                "Provide Medical Care": GoalType.PROVIDE_MEDICAL_CARE,
-                "Maintain Peace in Settlement": GoalType.MAINTAIN_PEACE_IN_SETTLEMENT,
-                "Patrol Area": GoalType.PATROL_AREA,
-                "Oversee Domain": GoalType.OVERSEE_DOMAIN,
-                 # Add "Lead Unit" for Militia Captain when defined
-                "Lead Unit": GoalType.PATROL_AREA, # Defaulting to PATROL_AREA for now for Militia Captain
-            }
-            if role_detail["job_default_goal"] in mapping:
-                return Goal(mapping[role_detail["job_default_goal"]], originator_id="SystemAssignment", assignee_id=char_name)
-            else:
-                print(f"Warning: No direct GoalType enum for default goal string '{role_detail['job_default_goal']}' for job {job_name}. Defaulting to IDLE.")
-    elif job_name == "Unemployed": # Handle Unemployed explicitly
-        return Goal(GoalType.WANDER, originator_id="SystemAssignment", assignee_id=char_name, priority=9)
+            pass
+
+    mapping = {
+        "Perform Builder Duties": GoalType.PERFORM_BUILDER_DUTIES,
+        "Perform Woodcutter Duties": GoalType.PERFORM_WOODCUTTER_DUTIES,
+        "Perform Stonemason Duties": GoalType.PERFORM_STONEMASON_DUTIES,
+        "Perform Miner Duties": GoalType.PERFORM_MINER_DUTIES,
+        "Perform Farmer Duties": GoalType.PERFORM_FARMER_DUTIES,
+        "Perform Hunter Duties": GoalType.PERFORM_HUNTER_DUTIES,
+        "Perform Fletcher Duties": GoalType.PERFORM_FLETCHER_DUTIES,
+        "Perform Sawyer Duties": GoalType.PERFORM_SAWYER_DUTIES,
+        "Perform Carpenter Duties": GoalType.PERFORM_CARPENTER_DUTIES,
+        "Perform Smelter Duties": GoalType.PERFORM_SMELTER_DUTIES,
+        "Perform Blacksmith Duties": GoalType.PERFORM_BLACKSMITH_DUTIES,
+        "Assess Production Needs": GoalType.ASSESS_PRODUCTION_NEEDS,
+        "Manage Subordinates": GoalType.MANAGE_SUBORDINATES,
+        "Maintain Ledger": GoalType.MAINTAIN_LEDGER,
+        "Oversee Expedition": GoalType.MAINTAIN_DEFENSES,
+        "Oversee Settlement": GoalType.OVERSEE_SETTLEMENT,
+        "Oversee Medical Operations": GoalType.OVERSEE_MEDICAL_OPERATIONS,
+        "Provide Medical Care": GoalType.PROVIDE_MEDICAL_CARE,
+        "Maintain Peace in Settlement": GoalType.MAINTAIN_PEACE_IN_SETTLEMENT,
+        "Patrol Area": GoalType.PATROL_AREA,
+        "Oversee Domain": GoalType.OVERSEE_DOMAIN,
+        "Lead Unit": GoalType.PATROL_AREA,
+    }
+
+    default_goal_str = role_detail.get("job_default_goal") if role_detail else job_name
+    if default_goal_str in mapping:
+        return Goal(mapping[default_goal_str], originator_id="SystemAssignment", assignee_id=char_name, priority=priority)
+
+    if job_name == "Unemployed":
+        return Goal(GoalType.WANDER, originator_id="SystemAssignment", assignee_id=char_name, priority=GoalPriority.LOW)
+
+    return Goal(GoalType.IDLE, originator_id="SystemAssignment", assignee_id=char_name, priority=GoalPriority.IDLE)
 
 
-    return Goal(GoalType.IDLE, originator_id="SystemAssignment", assignee_id=char_name, priority=10)

@@ -16,7 +16,10 @@ from .data import (
 )
 from . import config
 from .goal import Goal, GoalType, GoalStatus, DEFAULT_IDLE_GOAL, create_goal_from_job
-from .rumor import Rumor # Added for rumor generation
+from .rumor import Rumor  # Added for rumor generation
+from .ambition import Ambition, AmbitionType
+from .data import AMBITIONS
+
 
 if TYPE_CHECKING:
     from .world import World
@@ -283,6 +286,9 @@ class Character:
         self._cached_path: Deque[Tuple[int, int]] = deque()
         self._cached_path_target: Optional[Tuple[int, int]] = None
         self._cached_path_revision: Optional[int] = None
+
+        self.ambition: Optional[Ambition] = None
+        self._last_ambition_evaluation_day: Optional[int] = None
 
     def update_reputation(self, change: int, reason: Optional[str] = None, world: Optional['World'] = None):
         """Updates reputation score, clamps it, and logs the change."""
@@ -798,6 +804,7 @@ class Character:
             "active_personal_project": self.active_personal_project,
             "reputation_score": self.reputation_score,
             "reputation_tier": self.get_reputation_tier(),
+            "ambition": self.ambition.type.value if self.ambition else None,
         }
 
     @staticmethod
@@ -4222,7 +4229,32 @@ class Character:
 
         if next_goal_type:
             self.current_goal = Goal(next_goal_type, assignee_id=self.name, originator_id=self.name, parameters=params_for_next_goal)
-        # If no next_goal_type, means current logic is fine, or it's already Idle/Wander - or if the above didn't set a new goal, it implies current one continues or becomes default via decide_action
+    def _evaluate_ambition(self, world: 'World'):
+        if not world.game_time:
+            return
+
+        today = world.game_time.current_day
+        if self._last_ambition_evaluation_day is not None and today - self._last_ambition_evaluation_day < 7:
+            return
+
+        self._last_ambition_evaluation_day = today
+
+        if self.ambition:
+            if self.ambition.is_complete(self):
+                self.add_memory(f"I have achieved my ambition of {self.ambition.type.value}!")
+                self.ambition = None
+            else:
+                return # Still working on current ambition
+
+        eligible_ambitions = []
+        for ambition_type, data in AMBITIONS.items():
+            if Ambition.is_eligible(self, data):
+                eligible_ambitions.append((ambition_type, data))
+
+        if eligible_ambitions:
+            ambition_type, data = random.choice(eligible_ambitions)
+            self.ambition = Ambition(AmbitionType[ambition_type], data)
+            self.add_memory(f"I have a new ambition: {self.ambition.type.value}")
 
     def _execute_perform_miner_duties(self, world: 'World'):
         if not self.job or self.job.title != "Miner":
@@ -6244,6 +6276,15 @@ class Character:
             choice = random.choice(moves)
             self.move(choice[0], choice[1], world)
 
+    def _execute_increase_reputation(self, world: 'World'):
+        self.add_memory("Working on increasing my reputation.")
+
+    def _execute_improve_skill(self, world: 'World'):
+        self.add_memory("Working on improving my skills.")
+
+    def _execute_earn_money(self, world: 'World'):
+        self.add_memory("Working on earning more money.")
+
     # This is the redundant job_default_goal. The primary one is around line 480.
     # def job_default_goal(self) -> str: # Ensure this exists for the minimal decide_action
     #     if self.job == "Builder":
@@ -6541,6 +6582,11 @@ class Character:
         elif self.current_goal.type == GoalType.ASSIST_REEVE: self._execute_assist_reeve(world)
         elif self.current_goal.type == GoalType.HOLD_HIGH_COURT: self._execute_hold_high_court(world)
         elif self.current_goal.type == GoalType.ATTEND_HIGH_COURT: self._execute_attend_high_court(world)
+
+        # Ambition Goals
+        elif self.current_goal.type == GoalType.INCREASE_REPUTATION: self._execute_increase_reputation(world)
+        elif self.current_goal.type == GoalType.IMPROVE_SKILL: self._execute_improve_skill(world)
+        elif self.current_goal.type == GoalType.EARN_MONEY: self._execute_earn_money(world)
 
         # Social Goals
         elif self.current_goal.type == GoalType.GREET_CHARACTER: self._execute_greet_character(world)
@@ -9186,6 +9232,15 @@ class Character:
 
             # Allow this new opinion to influence overall relationship
             self._update_relationship_from_opinions(rumor.subject_char_id, world)
+
+            # Check for strong rumors to trigger a social reaction goal
+            if rumor.current_strength > config.MIN_RUMOR_STRENGTH_FOR_OPINION_EFFECT and rumor.subject_char_id in self.known_characters:
+                if rumor.is_positive and random.random() < 0.5:
+                    self.current_goal = Goal(GoalType.PRAISE_CHARACTER, assignee_id=self.name, originator_id=self.name, parameters={"target_char_name": rumor.subject_char_id})
+                    self.add_memory(f"This is great news about {rumor.subject_char_id}! I should praise them.")
+                elif not rumor.is_positive and random.random() < 0.5:
+                    self.current_goal = Goal(GoalType.ARGUE, assignee_id=self.name, originator_id=self.name, parameters={"target_char_name": rumor.subject_char_id})
+                    self.add_memory(f"I can't believe what I'm hearing about {rumor.subject_char_id}. I need to confront them.")
         else:
             self.add_memory(f"Heard a rumor ({rumor.rumor_id[:4]}) about {rumor.subject_char_id}: '{rumor.content_key}', but my opinion on that aspect didn't change significantly.")
 
