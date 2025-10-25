@@ -13,6 +13,7 @@ class GoalType(Enum):
     ASSESS_PRODUCTION_NEEDS = auto() # Master Craftsman
 
     # Resource Gathering & Hauling
+    HUNT = auto()
     GATHER_RESOURCE = auto() # Generic, params will specify what (e.g. {"resource_name": "Wood"})
     GATHER_WOOD = auto() # Specific version of GATHER_RESOURCE
     GATHER_STONE = auto() # Specific version of GATHER_RESOURCE
@@ -244,6 +245,9 @@ def create_goal_from_job(job_name: str, char_name: str, priority: GoalPriority =
     default_goal_str = role_detail.get("job_default_goal") if role_detail else job_name
     if default_goal_str in mapping:
         return Goal(mapping[default_goal_str], originator_id="SystemAssignment", assignee_id=char_name, priority=priority)
+
+    if job_name == "Hunt":
+        return Goal(GoalType.HUNT, originator_id="SystemAssignment", assignee_id=char_name, priority=priority)
 
     if job_name == "Unemployed":
         return Goal(GoalType.WANDER, originator_id="SystemAssignment", assignee_id=char_name, priority=GoalPriority.LOW)

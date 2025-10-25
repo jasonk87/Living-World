@@ -22,10 +22,12 @@ from .data import (
     CITIZEN_TRAIT_POOL,
     MIGRANT_ARCHETYPES,
     NOBLE_RANKS_OR_JOBS,
+    ANIMAL_BLUEPRINTS,
 )
 from .rumor import Rumor
 from . import config
 from .goal import Goal, GoalType
+from .animal import Animal
 from .pathfinding import Pathfinder
 
 if TYPE_CHECKING:
@@ -54,6 +56,7 @@ class World:
         self.season = World.SEASONS[self.season_index]
         self.weather = "Sunny"
         self.characters: List['Character'] = []
+        self.animals: List['Animal'] = []
         self._characters_by_name: Dict[str, 'Character'] = {}
         self._characters_by_tile: Dict[Tuple[int, int], Set[str]] = defaultdict(set)
         self.stockpiles: List[Stockpile] = []
@@ -204,7 +207,37 @@ class World:
         self._feature_margin: int = max(0, getattr(config, "MAP_FEATURE_MARGIN", 0))
         self.landscape_profile: Dict[str, Any] = {}
         self._generate_initial_landscape()
+        self._spawn_animals()
         self._military_rng = random.Random(seed)
+
+    def _spawn_animals(self):
+        for animal_name, blueprint in ANIMAL_BLUEPRINTS.items():
+            for _ in range(5): # spawn 5 of each animal
+                x = random.randint(0, self.grid_size[0] - 1)
+                y = random.randint(0, self.grid_size[1] - 1)
+                if self.is_walkable(x, y):
+                    animal = Animal(
+                        name=animal_name,
+                        x=x,
+                        y=y,
+                        health=blueprint["health"],
+                        resources=blueprint["resources"],
+                        speed=blueprint["speed"],
+                        map_char=blueprint["map_char"]
+                    )
+                    self.animals.append(animal)
+
+    def add_animal(self, animal_type, x, y):
+        blueprint = ANIMAL_BLUEPRINTS.get(animal_type)
+        if not blueprint:
+            return
+
+        animal = Animal.from_blueprint(blueprint, x, y)
+        self.animals.append(animal)
+
+    def update_animals(self):
+        for animal in self.animals:
+            animal.move(self)
 
     # --- Map & Landscape Generation -------------------------------------------------
 
@@ -785,6 +818,10 @@ class World:
     def get_tile(self, x: int, y: int) -> str:
         if not (0 <= x < self.grid_size[0] and 0 <= y < self.grid_size[1]):
             return "OutOfBounds"
+
+        for animal in self.animals:
+            if animal.x == x and animal.y == y:
+                return animal.map_char
 
         # Characters are drawn on top by the UI/print_map_to_console, not part of get_tile's role for terrain/structure
 

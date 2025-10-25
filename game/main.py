@@ -173,6 +173,8 @@ def tick_simulation():
             game_world.update_day_phase()
         # current_total_ticks +=1 # This was local, can be re-added if needed for other metrics
 
+        game_world.update_animals()
+
         for char_to_act in list(game_world.characters): # Iterate over a copy if list might change
             if char_to_act not in game_world.characters: continue # If character was removed (e.g. fired and despawned)
             # if hasattr(char_to_act, 'process_status_effects'): char_to_act.process_status_effects(game_world) # If status effects exist

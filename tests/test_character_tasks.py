@@ -293,10 +293,14 @@ class TestCharacterTaskPerformance(unittest.TestCase):
         initial_logs = stockpile_for_char.inventory["Logs"]
         initial_stones = stockpile_for_char.inventory["Stones"]
 
-        # Set a specific tick to make the "Careless" trait trigger deterministically
-        # For "Logs", hash is 405. (tick + 405) % 10 == 0. So tick=5 works.
-        # Error amount is -1 if (tick // 10) % 2 == 0. For tick=5, this is true.
-        self.time.advance_ticks(5)
+        original_random = random.random
+        original_choice = random.choice
+        def careless_random():
+            return 0.05 # < 0.10, triggers miscount
+        def careless_choice(seq):
+            return -1 # Always choose -1
+        random.random = careless_random
+        random.choice = careless_choice
 
         original_decide_action = careless_bookie.decide_action
         careless_bookie.decide_action = lambda world_param: None
@@ -304,17 +308,63 @@ class TestCharacterTaskPerformance(unittest.TestCase):
         careless_bookie._execute_count_stockpile(self.world)
 
         careless_bookie.decide_action = original_decide_action
+        random.random = original_random
+        random.choice = original_choice
 
         # Check the ledger using the correct resource-keyed structure
         logs_in_ledger = self.world.ledger.get_resource_count_in_stockpile("Logs", target_stockpile_name)
         stones_in_ledger = self.world.ledger.get_resource_count_in_stockpile("Stones", target_stockpile_name)
 
         self.assertEqual(logs_in_ledger, initial_logs - 1)
-        self.assertEqual(stones_in_ledger, initial_stones)
+        self.assertEqual(stones_in_ledger, initial_stones -1)
 
         self.assertTrue(any(f"Careless counting {target_stockpile_name}" in msg for msg in careless_bookie.memory), "Careless bookkeeper log not found.")
         self.assertTrue(any(f"Logs (actual: {initial_logs}, recorded: {initial_logs - 1})" in msg for msg in careless_bookie.memory), "Careless bookkeeper miscount detail not found.")
 
+
+class TestCharacterHunting(unittest.TestCase):
+    def setUp(self):
+        self.time = Time(ticks_per_day=10)
+        self.world = World(grid_size=(10, 10), game_time_ref=self.time)
+        self.hunter = Character(name="Hunter", personality="adventurous", traits=[], skills={}, job=Job("Hunter", None, 0))
+        self.world.add_character(self.hunter)
+        self.world.add_animal("Deer", 5, 5)
+        self.stockpile = Stockpile(name="MainStockpile", x=0, y=0, width=1, height=1)
+        self.world.add_stockpile(self.stockpile)
+
+    def test_hunter_job_hunts_animal(self):
+        original_random = random.random
+        def successful_hunt():
+            return 0.1 # < 0.7, guarantees success
+        random.random = successful_hunt
+
+        self.hunter.current_goal = Goal(GoalType.PERFORM_HUNTER_DUTIES, assignee_id=self.hunter.name)
+        self.hunter.decide_action(self.world) # Should decide to hunt
+        self.assertEqual(self.hunter.current_goal.type, GoalType.HUNT)
+
+        target_animal = self.hunter.current_goal.parameters.get("target_animal")
+        self.assertIsNotNone(target_animal)
+
+        # Move hunter next to animal
+        self.hunter.x = target_animal.x - 1
+        self.hunter.y = target_animal.y
+
+        # Execute hunt
+        self.hunter.decide_action(self.world)
+
+        self.assertNotIn(target_animal, self.world.animals)
+        self.assertGreater(self.hunter.inventory.get("Raw Meat", 0), 0)
+
+        random.random = original_random
+
+    def test_hunter_job_hauls_when_full(self):
+        # Fill hunter's inventory
+        self.hunter.inventory["Raw Meat"] = self.hunter.max_inventory_items
+
+        self.hunter.current_goal = Goal(GoalType.PERFORM_HUNTER_DUTIES, assignee_id=self.hunter.name)
+        self.hunter.decide_action(self.world) # Should decide to haul
+
+        self.assertEqual(self.hunter.current_goal.type, GoalType.INITIATE_HAULING)
 
 if __name__ == '__main__':
     unittest.main()

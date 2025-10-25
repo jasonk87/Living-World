@@ -8,6 +8,7 @@ from .llm_integration import generate_dialogue # Kept as it's used
 # from .work_order import WorkOrder # Not directly used by Character methods
 from .data import (
     BLUEPRINTS,
+    ANIMAL_BLUEPRINTS,
     JOB_TASK_DEFINITIONS,
     STRUCTURE_BLUEPRINTS,
     JOB_SALARIES,
@@ -3449,6 +3450,51 @@ class Character:
             self.current_goal = new_goal
 
         return True
+
+    def _execute_hunt(self, world: 'World'):
+        if self.get_inventory_load() >= self.max_inventory_items:
+            self.add_memory("My inventory is full, I should store my gains.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        target_animal = self.current_goal.parameters.get("target_animal")
+        if not target_animal or not hasattr(target_animal, 'name'):
+            self.add_memory("The animal I was hunting is gone.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        distance = abs(self.x - target_animal.x) + abs(self.y - target_animal.y)
+        if distance > 1:
+            self.move_towards(target_animal.x, target_animal.y, world)
+            return
+
+        # Simple hunt success chance
+        if random.random() < 0.7:
+            animal_blueprint = ANIMAL_BLUEPRINTS.get(target_animal.name, {})
+            resources = animal_blueprint.get("resources", {})
+            for resource, quantity in resources.items():
+                self.inventory[resource] = self.inventory.get(resource, 0) + quantity
+                self.add_memory(f"Successfully hunted {target_animal.name} and got {quantity} {resource}.")
+            world.animals.remove(target_animal)
+        else:
+            self.add_memory(f"Failed to hunt the {target_animal.name}.")
+
+        self.current_goal = self.get_default_goal()
+
+    def hunt(self, world: 'World') -> bool:
+        """Finds and hunts an animal."""
+        if not world.animals:
+            self.add_memory("No animals to hunt.")
+            self.current_goal = self.get_default_goal()
+            return False
+
+        # Find closest animal
+        closest_animal = min(world.animals, key=lambda a: abs(self.x - a.x) + abs(self.y - a.y))
+
+        self.current_goal = Goal(GoalType.HUNT, assignee_id=self.name, originator_id=self.name, parameters={"target_animal": closest_animal})
+        self.add_memory(f"Began hunting a {closest_animal.name}.")
+        return True
+
     def build(self, structure_type: str, world: 'World') -> bool: return False
 
     def job_default_goal_type_str(self) -> str: # Returns a string representing the goal type or job title
@@ -4388,32 +4434,19 @@ class Character:
             self.current_goal = self.get_default_goal()
             return
 
-        params = self.current_goal.parameters
-        params.setdefault("phase", "stalk")
-        deliver_threshold = max(2, min(self.max_inventory_items, 5))
-
-        if params.get("phase") == "deliver" or self.inventory.get("Food", 0) >= deliver_threshold:
-            params["phase"] = "deliver"
-            if self._deposit_resource_to_nearest_stockpile("Food", world):
-                params["phase"] = "stalk"
+        # If inventory is full, haul resources
+        if self.get_inventory_load() >= self.max_inventory_items:
+            # For simplicity, we assume hunters primarily gather "Raw Meat".
+            # A more complex system could have them haul all their hunted goods.
+            if "Raw Meat" in self.inventory:
+                self.current_goal = Goal(GoalType.INITIATE_HAULING, assignee_id=self.name, originator_id=self.name, parameters={"resource": "Raw Meat"})
+            else:
+                self.add_memory("Inventory full, but no meat to store. Resting.")
                 self.current_goal = self.get_default_goal()
             return
 
-        hunt_location = self.find_task_location("Hunt Game", world)
-        if not hunt_location:
-            self.add_memory("Couldn't find promising hunting grounds today.")
-            self.current_goal = self.get_default_goal()
-            return
-
-        if (self.x, self.y) != hunt_location:
-            self.move_towards(hunt_location[0], hunt_location[1], world)
-            return
-
-        if not self._execute_generic_task(world, "Hunt Game"):
-            return
-
-        if self.inventory.get("Food", 0) >= deliver_threshold:
-            params["phase"] = "deliver"
+        # If inventory has space, go hunting
+        self.hunt(world)
 
     def _execute_perform_fletcher_duties(self, world: 'World'):
         if not self.job or self.job.title != "Fletcher":
@@ -6546,6 +6579,7 @@ class Character:
 
         # Specific Action Goals
         elif self.current_goal.type == GoalType.EXECUTE_BUILD_ORDER: self._execute_build_order(world) # Already handled above too
+        elif self.current_goal.type == GoalType.HUNT: self._execute_hunt(world)
         elif self.current_goal.type == GoalType.EXECUTE_CRAFT_ORDER: self._execute_craft_order(world)
         elif self.current_goal.type == GoalType.FETCH_TOOL: self._execute_fetch_tool(world)
         elif self.current_goal.type == GoalType.GATHER_RESOURCE:

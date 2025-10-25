@@ -127,6 +127,14 @@ BLUEPRINTS = {
         "type": "Weapon",
         "description": "A simple wooden sword for training or defense.",
         "craft_time_per_unit": 5
+    },
+    "Raw Meat": {
+        "type": "Resource",
+        "description": "Raw meat from a hunted animal, needs to be cooked."
+    },
+    "Leather": {
+        "type": "Resource",
+        "description": "Tanned leather, useful for crafting."
     }
 }
 
@@ -300,12 +308,12 @@ JOB_TASK_DEFINITIONS = {
         "base_yield": 1,
         "base_time_per_yield": 4
     },
-    "Hunt Game": {
-        "required_tool_type": None,
+    "Hunt": {
+        "required_tool_type": None, # Later, could be "Bow"
         "skill_used": "Hunting",
-        "resource_produced": "Food",
+        "resource_produced": "Raw Meat",
         "base_yield": 1,
-        "base_time_per_yield": 5
+        "base_time_per_yield": 10
     },
     "Fletch Arrows": {
         "required_tool_type": None,
@@ -1199,4 +1207,25 @@ AMBITIONS = {
         "completion_criteria": {"money": 1000},
         "next_goal": {"type": "EARN_MONEY"}
     },
+}
+
+ANIMAL_BLUEPRINTS = {
+    "Deer": {
+        "name": "Deer",
+        "prey": True,
+        "predator": False,
+        "health": 3,
+        "resources": {"Raw Meat": 3, "Leather": 2},
+        "speed": 2,
+        "map_char": "D"
+    },
+    "Boar": {
+        "name": "Boar",
+        "prey": True,
+        "predator": False,
+        "health": 4,
+        "resources": {"Raw Meat": 4, "Leather": 1},
+        "speed": 1,
+        "map_char": "B"
+    }
 }
