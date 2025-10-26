@@ -3,6 +3,24 @@ from typing import List, Optional, Dict, Tuple
 
 class Stockpile:
     _init_default_allowed_resources_marker = object() # Unique marker for default argument
+    _RESOURCE_GLYPHS = {
+        "wood": "W",
+        "lumber": "W",
+        "logs": "W",
+        "stone": "R",
+        "rock": "R",
+        "ore": "O",
+        "iron": "I",
+        "copper": "C",
+        "food": "F",
+        "grain": "G",
+        "vegetables": "V",
+        "herbs": "H",
+        "medicine": "+",
+        "water": "~",
+        "cloth": "C",
+        "tools": "T",
+    }
 
     def __init__(self, name: str, x: int, y: int, width: int, height: int,
                  allowed_resources: Optional[List[str]] = _init_default_allowed_resources_marker,
@@ -25,6 +43,25 @@ class Stockpile:
         # For simplicity, interaction points are the perimeter of the stockpile OR its main tiles
         self.access_points = self._calculate_access_points() # For characters to stand on when interacting
         self.deposit_tiles = self._calculate_deposit_tiles() # Actual tiles of the stockpile
+
+    def get_map_char(self) -> str:
+        """Return a glyph that represents the stockpile's dominant resource."""
+
+        dominant_resource: Optional[str] = None
+        if self.inventory:
+            dominant_resource = max(self.inventory.items(), key=lambda item: item[1])[0]
+        elif self.allowed_resources and len(self.allowed_resources) == 1:
+            dominant_resource = self.allowed_resources[0]
+
+        if dominant_resource:
+            glyph = self._RESOURCE_GLYPHS.get(dominant_resource.lower())
+            if glyph:
+                return glyph
+            for char in dominant_resource:
+                if char.isalpha():
+                    return char.upper()
+
+        return "S"
 
     def _calculate_deposit_tiles(self) -> List[Tuple[int,int]]:
         # Tiles the stockpile physically occupies
@@ -124,5 +161,6 @@ class Stockpile:
             "allowed_resources": self.allowed_resources,
             "total_capacity": self.total_capacity,
             "current_load": self.get_current_load(),
-            "structure_type": "Stockpile" # To help frontend distinguish
+            "structure_type": "Stockpile", # To help frontend distinguish
+            "map_char": self.get_map_char(),
         }

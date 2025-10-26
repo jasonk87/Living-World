@@ -358,10 +358,101 @@ STRUCTURE_BLUEPRINTS = {
             {"name": "Framing Walls", "work_required": 15, "map_char_during": "|"},
             {"name": "Roofing", "work_required": 10, "map_char_during": "^"}
         ],
-        "functionality": {"provides_shelter": 1, "tags": ["indoor", "residential", "housing"]},
+        "functionality": {
+            "provides_shelter": 2,
+            "tags": ["indoor", "residential", "housing"],
+            "wealth_tier": "modest",
+        },
         "required_skill": {"Construction": 1},
         "map_char_initial": ".", # Initial representation on map before construction starts
-        "map_char_complete": "H"
+        "map_char_complete": "H",
+        "interior_tile": "Floor",
+        "tile_layout": [
+            ["WoodWall", "WoodWall"],
+            ["Bedroll", "Hearth"],
+        ],
+        "amenities": ["Shared hearth", "Sleeping pallets"],
+        "household_style": "hearthfire",
+    },
+    "stone_cottage": {
+        "display_name": "Stone Cottage",
+        "size": (3, 3),
+        "required_resources": {"Wood": 40, "Stone": 45},
+        "construction_phases": [
+            {"name": "Foundation", "work_required": 20, "map_char_during": "_"},
+            {"name": "Walls", "work_required": 28, "map_char_during": "#"},
+            {"name": "Roof & Hearth", "work_required": 22, "map_char_during": "^"}
+        ],
+        "functionality": {
+            "provides_shelter": 3,
+            "tags": ["indoor", "residential", "housing"],
+            "wealth_tier": "comfortable",
+        },
+        "required_skill": {"Construction": 3},
+        "map_char_initial": ".",
+        "map_char_complete": "C",
+        "interior_tile": "Flagstone",
+        "tile_layout": [
+            ["StoneWall", "StoneWall", "StoneWall"],
+            ["Bed", "Flagstone", "Bed"],
+            ["Chest", "Hearth", "Table"],
+        ],
+        "amenities": ["Sturdy bunks", "Warm hearth", "Provision chest"],
+        "household_style": "artisan",
+    },
+    "merchant_manor": {
+        "display_name": "Merchant Manor",
+        "size": (4, 3),
+        "required_resources": {"Wood": 60, "Stone": 70, "Furniture": 4},
+        "construction_phases": [
+            {"name": "Estate Footing", "work_required": 28, "map_char_during": "_"},
+            {"name": "Grand Hall", "work_required": 36, "map_char_during": "M"},
+            {"name": "Finishes", "work_required": 24, "map_char_during": "m"}
+        ],
+        "functionality": {
+            "provides_shelter": 5,
+            "tags": ["indoor", "residential", "housing"],
+            "wealth_tier": "prosperous",
+        },
+        "required_skill": {"Construction": 4},
+        "map_char_initial": ".",
+        "map_char_complete": "M",
+        "interior_tile": "Parquet",
+        "tile_layout": [
+            ["StoneWall", "StoneWall", "StoneWall", "StoneWall"],
+            ["Dining", "Parquet", "Parquet", "Study"],
+            ["Garden", "Parlor", "Parlor", "Garden"],
+        ],
+        "amenities": ["Formal dining table", "Parlor for guests", "Private study"],
+        "household_style": "mercantile",
+    },
+    "noble_estate": {
+        "display_name": "Noble Estate",
+        "size": (4, 4),
+        "required_resources": {"Wood": 80, "Stone": 120, "Furniture": 8},
+        "construction_phases": [
+            {"name": "Manor Grounds", "work_required": 32, "map_char_during": "_"},
+            {"name": "Wing Construction", "work_required": 48, "map_char_during": "N"},
+            {"name": "Great Hall", "work_required": 36, "map_char_during": "n"},
+            {"name": "Finishing Touches", "work_required": 28, "map_char_during": "^"}
+        ],
+        "functionality": {
+            "provides_shelter": 6,
+            "tags": ["indoor", "residential", "housing"],
+            "wealth_tier": "noble",
+        },
+        "required_skill": {"Construction": 5},
+        "map_char_initial": ".",
+        "map_char_complete": "N",
+        "interior_tile": "Marble",
+        "tile_layout": [
+            ["StoneWall", "StoneWall", "StoneWall", "StoneWall"],
+            ["Marble", "GrandHall", "GrandHall", "Marble"],
+            ["Garden", "Library", "Library", "Garden"],
+            ["Courtyard", "Courtyard", "Courtyard", "Courtyard"],
+        ],
+        "amenities": ["Grand hall", "Private library", "Garden courtyard"],
+        "household_style": "noble",
     },
     "small_workshop": {
         "display_name": "Small Workshop",
@@ -398,7 +489,9 @@ ROLE_HIERARCHY = {
 
     # Report to Mayor
     "Manager": "Mayor",
+    "Chancellor": "Mayor",
     "Militia Commander": "Mayor",
+    "Marshal": "Militia Commander",
     "Chief Medical Officer": "Mayor",
     "Sheriff": "Mayor",
     "Noble Lord": "Mayor",  # For settlement-level concerns, even if landed.
@@ -430,16 +523,39 @@ ROLE_HIERARCHY = {
     "Deputy": "Sheriff",
 
     # Report to Baron/Baroness
-    "Reeve": "Baron",
-    "Bailiff": "Baron",
+    "Steward": "Baron",
+    "Reeve": "Steward",
+    "Bailiff": "Steward",
+
+    # Report to Chancellor
+    "Spymaster": "Chancellor",
 }
 
 # Defines which jobs or ranks are considered part of the "nobility"
 # This can be used for social interactions, access to certain areas, or game mechanics.
-NOBLE_RANKS_OR_JOBS = ["Mayor", "Noble Lord", "Baron", "Baroness", "Duke", "Duchess"]
+NOBLE_RANKS_OR_JOBS = [
+    "Mayor",
+    "Noble Lord",
+    "Baron",
+    "Baroness",
+    "Duke",
+    "Duchess",
+    "Chancellor",
+    "Steward",
+    "Marshal",
+    "Spymaster",
+]
 
 # Defines key official positions that the Mayor (or equivalent top leader) can appoint.
-MAYORAL_APPOINTMENTS = ["Manager", "Militia Commander", "Chief Medical Officer", "Sheriff"]
+MAYORAL_APPOINTMENTS = [
+    "Manager",
+    "Militia Commander",
+    "Chief Medical Officer",
+    "Sheriff",
+    "Chancellor",
+    "Marshal",
+    "Spymaster",
+]
 
 
 # Design documentation for Role Responsibilities and Capabilities.
@@ -463,6 +579,24 @@ ROLE_DETAILS = {
             "AllocateSettlementBudget(category, amount)" # Future
         ],
         "job_default_goal": "Oversee Settlement" # From character.py
+    },
+    "Chancellor": {
+        "description": "Chief administrator who coordinates civic policy and the mayoral council.",
+        "reports_to": "Mayor",
+        "responsibilities": [
+            "Maintaining cohesion between economic, civic, and noble offices.",
+            "Auditing performance of appointed officials and nobles.",
+            "Drafting decrees or policy proposals for the mayor's approval.",
+            "Stewarding the settlement council agenda and priorities."
+        ],
+        "capabilities": [
+            "ReviewOfficialPerformance(official_name, findings)",
+            "ProposeSettlementDecree(decree_name, justification)",
+            "ConveneCouncilSession(topic, participants)",
+            "ReassignStaffBetweenOffices(staff_name, target_office)",
+            "ManageSubordinates(subordinate_name, action_type, details)",
+        ],
+        "job_default_goal": "Oversee Settlement"
     },
     "Manager": {
         "description": "Oversees civilian production, construction, and resource management.",
@@ -503,6 +637,24 @@ ROLE_DETAILS = {
         ],
         "job_default_goal": "Maintain Defenses"
     },
+    "Marshal": {
+        "description": "Senior military officer charged with discipline across the guard and militia.",
+        "reports_to": "Militia Commander",
+        "responsibilities": [
+            "Inspecting patrol readiness and battlefield drills.",
+            "Coordinating joint operations with the Sheriff during crises.",
+            "Setting response plans for major threats to the settlement.",
+            "Reviewing conduct of captains, sergeants, and veteran guards."
+        ],
+        "capabilities": [
+            "InspectGarrisonUnit(unit_name, findings)",
+            "IssueBattlePlan(plan_name, objectives)",
+            "ReassignCaptain(captain_name, new_post)",
+            "EscalateThreatReport(threat_summary, recipients)",
+            "ManageSubordinates(subordinate_name, action_type, details)",
+        ],
+        "job_default_goal": "Maintain Defenses"
+    },
     "Sheriff": {
         "description": "Maintains day-to-day peace and enforces local laws.",
         "reports_to": "Mayor",
@@ -520,6 +672,24 @@ ROLE_DETAILS = {
             "RequestAssistanceFromMilitia(reason_for_request)" # In major situations
         ],
         "job_default_goal": "Maintain Peace in Settlement" # From character.py
+    },
+    "Spymaster": {
+        "description": "Keeper of intelligence networks and covert investigations.",
+        "reports_to": "Chancellor",
+        "responsibilities": [
+            "Collecting rumors and reports about corruption, threats, or unrest.",
+            "Coordinating covert checks on officials, guilds, and nobles.",
+            "Advising leadership on hidden risks and leverage points.",
+            "Deploying trusted agents to observe sensitive situations."
+        ],
+        "capabilities": [
+            "AssignInformant(target_area, objective)",
+            "CompileDossier(subject_name, findings)",
+            "RecommendSecuritySweep(location, rationale)",
+            "BriefLeadershipOnIntel(summary, recipients)",
+            "ManageSubordinates(subordinate_name, action_type, details)",
+        ],
+        "job_default_goal": "Maintain Peace in Settlement"
     },
     "Chief Medical Officer": {
         "description": "Oversees public health and medical services.",
@@ -567,6 +737,24 @@ ROLE_DETAILS = {
         "responsibilities": ["Similar to Noble Lord, potentially with greater scope or expectation."],
         "capabilities": ["Similar to Noble Lord, potentially with greater impact or access."],
         "job_default_goal": "Oversee Domain"
+    },
+    "Steward": {
+        "description": "An appointed official who oversees day-to-day operations of a noble estate.",
+        "reports_to": "Baron",
+        "responsibilities": [
+            "Balancing estate ledgers and supply stores.",
+            "Directing reeves and bailiffs in maintenance and collection duties.",
+            "Reporting estate performance and incidents to their liege.",
+            "Hosting visitors or dignitaries on behalf of the noble household."
+        ],
+        "capabilities": [
+            "ReviewEstateLedger(section, findings)",
+            "AssignEstateTask(target_role, task_details)",
+            "ReportEstateStatusToLiege(summary)",
+            "HostEstateGathering(event_details)",
+            "ManageSubordinates(subordinate_name, action_type, details)",
+        ],
+        "job_default_goal": "Manage Estate"
     },
     "Duke": {
         "description": "A high-ranking noble, ruler of a duchy, and liege to Barons.",

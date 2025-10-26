@@ -13,12 +13,12 @@ from game.stockpile import Stockpile
 from game.work_order import WorkOrder
 from game.data import BLUEPRINTS, JOB_TASK_DEFINITIONS, STRUCTURE_BLUEPRINTS
 from game.building import Building
-from game.rumor import Rumor
 from game import config
 
 import random
 import curses # Keep for now, might be used by main_simulation_logic
 from typing import Optional, Dict, Any, List
+from copy import deepcopy
 
 import http.server
 import socketserver
@@ -46,12 +46,21 @@ def initialize_game_world():
 
     ticks_per_day = config.TICKS_PER_DAY if hasattr(config, 'TICKS_PER_DAY') else 10 # Default if not in config
     game_time_obj = Time(ticks_per_day=ticks_per_day)
-    game_world = World(grid_size=(10, 10), game_time_ref=game_time_obj)
+    default_size = getattr(config, "MAP_DEFAULT_SIZE", (10, 10))
+    game_world = World(grid_size=(int(default_size[0]), int(default_size[1])), game_time_ref=game_time_obj)
 
     test_characters_list = [] # Reset for this initialization
 
     # Stockpiles (example setup)
-    wood_stockpile = Stockpile(name="WoodStore", x=0, y=3, width=1, height=1, allowed_resources=["Wood"], total_capacity=100)
+    wood_stockpile = Stockpile(
+        name="WoodStore",
+        x=0,
+        y=3,
+        width=1,
+        height=1,
+        allowed_resources=["Wood", "Lumber"],
+        total_capacity=100,
+    )
     wood_stockpile.add_item("Wood", 40)
     game_world.add_stockpile(wood_stockpile)
     game_world.ledger.update_stockpile_record(wood_stockpile.name, wood_stockpile.inventory, game_time_obj.current_day)
@@ -162,6 +171,8 @@ def tick_simulation():
                 game_world.manage_campaigns()
             if hasattr(game_world, "manage_economy"):
                 game_world.manage_economy()
+            if hasattr(game_world, "process_military_daily"):
+                game_world.process_military_daily()
             if hasattr(game_world, "process_governance_daily"):
                 game_world.process_governance_daily()
             if hasattr(game_world, "process_daily_economy"):
@@ -188,71 +199,6 @@ def tick_simulation():
 
             # Daily needs update and goal reset for idle characters
             for char_daily_reset in game_world.characters:
-                # Sickness & Injury Chance
-                if not char_daily_reset.is_sick and random.random() < 0.005: # 0.5% chance per day to get sick
-                    char_daily_reset.is_sick = True
-                    char_daily_reset.sickness_severity = random.randint(1, 3) # Mild sickness
-                    game_world.add_event_log_message(f"{char_daily_reset.name} has fallen ill (Severity: {char_daily_reset.sickness_severity}).")
-                    char_daily_reset.add_memory("Fell ill.")
-                    char_daily_reset.needs['Safety'] = max(config.NEED_SCORE_MIN, char_daily_reset.needs.get('Safety', config.NEED_SAFETY_DEFAULT) - 15) # Sickness reduces safety
-                    char_daily_reset.add_memory(f"Sickness reduced my safety. Safety: {char_daily_reset.needs['Safety']}")
-                    # Generate a rumor and notable event for sickness
-                    game_world.add_notable_event(
-                        "CharacterSickness",
-                        {
-                            "summary": f"{char_daily_reset.name} has fallen ill.",
-                            "character": char_daily_reset.name,
-                            "severity": char_daily_reset.sickness_severity,
-                        },
-                    )
-                    rumor_content_key = "has_fallen_ill_negative"
-                    rumor_strength = config.RUMOR_INITIAL_STRENGTH_SMALL_EVENT
-                    new_rumor = Rumor(
-                        subject_char_id=char_daily_reset.name,
-                        content_key=rumor_content_key,
-                        initial_strength=rumor_strength,
-                        creation_day=game_time_obj.current_day,
-                        is_positive=False,
-                        original_source_char_id=char_daily_reset.name
-                    )
-                    game_world.add_rumor(new_rumor)
-                    char_daily_reset.known_rumor_ids.add(new_rumor.rumor_id)
-                    char_daily_reset.add_memory(f"My falling ill might start a rumor ({new_rumor.rumor_id[:4]}).")
-
-
-                injury_chance = 0.002 # Base 0.2% chance
-                if char_daily_reset.job in ["Builder", "Woodcutter", "Stonemason", "Miner"]: # Example risky jobs
-                    injury_chance = 0.005 # 0.5% for riskier jobs
-                if not char_daily_reset.is_injured and random.random() < injury_chance:
-                    char_daily_reset.is_injured = True
-                    char_daily_reset.injury_severity = random.randint(1, 3) # Mild injury
-                    game_world.add_event_log_message(f"{char_daily_reset.name} has been injured (Severity: {char_daily_reset.injury_severity}).")
-                    char_daily_reset.add_memory("Got injured.")
-                    char_daily_reset.needs['Safety'] = max(config.NEED_SCORE_MIN, char_daily_reset.needs.get('Safety', config.NEED_SAFETY_DEFAULT) - 20) # Injury significantly reduces safety
-                    char_daily_reset.add_memory(f"Injury reduced my safety. Safety: {char_daily_reset.needs['Safety']}")
-                    # Generate a rumor and notable event for injury
-                    game_world.add_notable_event(
-                        "CharacterInjury",
-                        {
-                            "summary": f"{char_daily_reset.name} has been injured.",
-                            "character": char_daily_reset.name,
-                            "severity": char_daily_reset.injury_severity,
-                        },
-                    )
-                    rumor_content_key = "has_been_injured_negative"
-                    rumor_strength = config.RUMOR_INITIAL_STRENGTH_SMALL_EVENT
-                    new_rumor = Rumor(
-                        subject_char_id=char_daily_reset.name,
-                        content_key=rumor_content_key,
-                        initial_strength=rumor_strength,
-                        creation_day=game_time_obj.current_day,
-                        is_positive=False,
-                        original_source_char_id=char_daily_reset.name
-                    )
-                    game_world.add_rumor(new_rumor)
-                    char_daily_reset.known_rumor_ids.add(new_rumor.rumor_id)
-                    char_daily_reset.add_memory(f"My injury might start a rumor ({new_rumor.rumor_id[:4]}).")
-
                 char_daily_reset.needs['Hunger'] = max(0, char_daily_reset.needs.get('Hunger', 100) - random.randint(10, 20))
                 char_daily_reset.needs['Thirst'] = max(0, char_daily_reset.needs.get('Thirst', 100) - random.randint(15, 25))
                 char_daily_reset.needs['Energy'] = max(0, char_daily_reset.needs.get('Energy', 100) - random.randint(10, 15)) # Energy decay from general activity
@@ -389,22 +335,39 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                             "x": char.x,
                             "y": char.y,
                             "job": char.job,
+                            "rank": getattr(char, 'rank', None),
                             "goal": goal_payload,
                             "is_sick": getattr(char, 'is_sick', False), # Add health status
                             "is_injured": getattr(char, 'is_injured', False),
                             "inventory_load": char.get_inventory_load(),
-                            "known_characters": getattr(char, 'known_characters', []),
-                            "dialogue_history_count": len(getattr(char, 'dialogue_history', [])), # Just count for overview
-                            "needs": getattr(char, 'needs', {}),
                             "resting_at_home": getattr(char, 'resting_at_home', False),
                             "home_location": getattr(char, 'home_location', None),
                             "energy": getattr(char, 'needs', {}).get('Energy'),
                             "thirst": getattr(char, 'needs', {}).get('Thirst'),
-                            "inventory": getattr(char, 'inventory', {}),
+                            "money": getattr(char, 'money', None),
+                            "net_worth": getattr(char, 'net_worth', None),
+                            "wealth_status": getattr(char, 'wealth_status', None),
+                            "businesses_owned": list(getattr(char, 'businesses_owned', [])),
+                            "business_roles": dict(getattr(char, 'business_roles', {})),
                             "age": getattr(char, 'age_years', None),
+                            "origin": getattr(char, 'origin', None),
                             "citizenship": getattr(char, 'citizenship_status', 'Resident'),
+                            "family_members": list(getattr(char, 'family_members', [])),
+                            "romantic_partners": char.get_romantic_partners() if hasattr(char, 'get_romantic_partners') else list(getattr(char, 'romantic_partners', [])),
+                            "active_romances": char.get_active_romances_snapshot() if hasattr(char, 'get_active_romances_snapshot') else {},
+                            "ex_partners": sorted(list(getattr(char, 'ex_partners', []))),
+                            "children": char.get_children() if hasattr(char, 'get_children') else sorted(list(getattr(char, 'children_names', []))),
+                            "parents": char.get_parents() if hasattr(char, 'get_parents') else sorted(list(getattr(char, 'parent_names', []))),
+                            "marriage_history": deepcopy(getattr(char, 'marriage_history', [])),
                             "life_highlights": char.get_life_highlights(limit=3) if hasattr(char, 'get_life_highlights') else [],
-                            "family_profile": game_world.get_family_profile_for_character(char.name) if hasattr(game_world, 'get_family_profile_for_character') else None,
+                            "career_stage": getattr(char, 'career_stage', None),
+                            "job_satisfaction": getattr(char, 'job_satisfaction', None),
+                            "profession_focus": getattr(char, 'professional_focus', None),
+                            "profession_tenure": getattr(char, 'current_profession_tenure', None),
+                            "health_profile": char.get_health_snapshot() if hasattr(char, 'get_health_snapshot') else {},
+                            "supervisor_name": getattr(char, 'supervisor_name', None),
+                            "supervisor_oversight": getattr(char, 'supervisor_oversight', None),
+                            "leadership_oversight": getattr(char, 'leadership_oversight_score', None),
                         })
 
                 event_log_repr = game_world.event_log[-20:] if game_world else []
@@ -422,6 +385,10 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                             "structure_type": b.structure_type, # Added for frontend differentiation
                             "occupants": getattr(b, 'occupants', []),
                             "provides_shelter": b.functionality.get('provides_shelter') if b.functionality else None,
+                            "wealth_tier": b.functionality.get('wealth_tier') if b.functionality else None,
+                            "household_style": getattr(b, 'household_style', None),
+                            "latest_household_story": getattr(b, 'latest_household_story', None),
+                            "latest_neighborhood_story": getattr(b, 'latest_neighborhood_story', None),
                         })
                 if hasattr(game_world, 'stockpiles'): # Also include stockpiles as "buildings" for map display
                     for sp in game_world.stockpiles:
@@ -430,7 +397,7 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                             "y": sp.rect[1],
                             "width": sp.rect[2],
                             "height": sp.rect[3],
-                            "map_char": "S", # Stockpile character
+                            "map_char": sp.get_map_char(),
                             "display_name": sp.name,
                             "structure_type": "Stockpile"
                         })
@@ -468,12 +435,14 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "current_phase": game_world.get_current_phase() if hasattr(game_world, 'get_current_phase') else {},
                     "active_weather_event": game_world.get_active_weather_event() if hasattr(game_world, 'get_active_weather_event') else None,
                     "resource_nodes": game_world.get_resource_nodes_snapshot() if hasattr(game_world, 'get_resource_nodes_snapshot') else [],
+                    "landscape": game_world.get_landscape_profile() if hasattr(game_world, 'get_landscape_profile') else {},
                     "population": getattr(game_world, 'population_stats', {}),
                     "cultural": game_world.get_cultural_snapshot() if hasattr(game_world, 'get_cultural_snapshot') else {},
                     "training": game_world.get_training_snapshot() if hasattr(game_world, 'get_training_snapshot') else {},
                     "workforce": game_world.get_workforce_snapshot() if hasattr(game_world, 'get_workforce_snapshot') else {},
                     "families": game_world.get_family_snapshot() if hasattr(game_world, 'get_family_snapshot') else {},
                     "governance": game_world.get_governance_snapshot() if hasattr(game_world, 'get_governance_snapshot') else {},
+                    "personal_pursuit_events": getattr(game_world, 'latest_personal_pursuit_events', []),
                 }
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
@@ -574,11 +543,25 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "is_injured": getattr(character, 'is_injured', False),
                     "injury_severity": getattr(character, 'injury_severity', 0),
                     "appointed_by": getattr(character, 'appointed_by', None),
-                    "supervisor_name": character.supervisor_name,
                     "subordinates_names": character.subordinates_names,
                     "memory": character.memory[-10:], # Last 10 memories
                     "personality": character.personality,
                     "traits": character.traits,
+                    "money": getattr(character, 'money', None),
+                    "net_worth": getattr(character, 'net_worth', None),
+                    "wealth_status": getattr(character, 'wealth_status', None),
+                    "businesses_owned": list(getattr(character, 'businesses_owned', [])),
+                    "business_roles": dict(getattr(character, 'business_roles', {})),
+                    "wealth_history": [
+                        {"day": entry[0], "net_worth": entry[1]}
+                        for entry in getattr(character, 'wealth_history', [])
+                    ],
+                    "career_stage": getattr(character, 'career_stage', None),
+                    "job_satisfaction": getattr(character, 'job_satisfaction', None),
+                    "profession_focus": getattr(character, 'professional_focus', None),
+                    "profession_tenure": getattr(character, 'current_profession_tenure', None),
+                    "profession_history": character.export_profession_history(limit=10),
+                    "health_profile": character.get_health_snapshot() if hasattr(character, 'get_health_snapshot') else {},
                     "performance_rating": getattr(character, 'performance_rating', "N/A"),
                     "warning_count": getattr(character, 'warning_count', 0),
                     "known_characters": getattr(character, 'known_characters', []),
@@ -587,7 +570,15 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "dialogue_history": getattr(character, 'dialogue_history', [])[-10:], # Last 10 dialogue entries
                     "life_history": character.export_life_history(limit=20) if hasattr(character, 'export_life_history') else [],
                     "life_highlights": character.get_life_highlights(limit=6) if hasattr(character, 'get_life_highlights') else [],
+                    "personal_pursuits": character.export_personal_pursuits() if hasattr(character, 'export_personal_pursuits') else [],
+                    "personal_pursuit_log": character.export_personal_pursuit_log(limit=12) if hasattr(character, 'export_personal_pursuit_log') else [],
+                    "active_personal_project": getattr(character, 'active_personal_project', None),
                     "family_profile": game_world.get_family_profile_for_character(character.name) if hasattr(game_world, 'get_family_profile_for_character') else None,
+                    "family_members": list(getattr(character, 'family_members', [])),
+                    "age": getattr(character, 'age_years', None),
+                    "origin": getattr(character, 'origin', None),
+                    "citizenship": getattr(character, 'citizenship_status', 'Resident'),
+                    "reputation": getattr(character, 'reputation_score', None),
                 }
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
@@ -632,12 +623,46 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                     "map_char": building.get_current_map_char(),
                     "occupants": getattr(building, 'occupants', []),
                     "provides_shelter": building.functionality.get('provides_shelter') if building.functionality else None,
+                    "wealth_tier": building.functionality.get('wealth_tier') if building.functionality else None,
+                    "household_style": getattr(building, 'household_style', None),
+                    "amenities": list(getattr(building, 'amenities', [])),
+                    "tile_layout": building.get_tile_layout() if hasattr(building, 'get_tile_layout') else [],
                 }
                 # If it's a stockpile or has inventory (like some workshops might)
                 if hasattr(building, 'inventory'):
                     building_data["inventory"] = building.inventory
                 if hasattr(building, 'allowed_resources'): # For stockpiles
                     building_data["allowed_resources"] = building.allowed_resources
+
+                occupant_profiles = []
+                for occupant_name in getattr(building, 'occupants', []):
+                    character = game_world.get_character_by_name(occupant_name)
+                    if not character:
+                        continue
+                    occupant_profiles.append({
+                        "name": character.name,
+                        "job": character.job,
+                        "wealth_status": getattr(character, 'wealth_status', None),
+                        "mood": getattr(character, 'mood', None),
+                    })
+                if occupant_profiles:
+                    building_data["occupant_profiles"] = occupant_profiles
+
+                latest_story = None
+                for story in getattr(game_world, '_latest_household_vignettes', []):
+                    if story.get("building") == building.display_name:
+                        latest_story = story
+                        break
+                if latest_story:
+                    building_data["latest_household_story"] = latest_story
+
+                latest_neighborhood_story = None
+                for story in getattr(game_world, '_latest_neighborhood_gatherings', []):
+                    if story.get("host") == building.display_name:
+                        latest_neighborhood_story = story
+                        break
+                if latest_neighborhood_story:
+                    building_data["latest_neighborhood_story"] = latest_neighborhood_story
 
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
@@ -661,7 +686,7 @@ class GameDataHandler(http.server.SimpleHTTPRequestHandler):
                         "is_operational": True, # Stockpiles are always "operational"
                         "inventory": stockpile_at_loc.inventory,
                         "allowed_resources": stockpile_at_loc.allowed_resources,
-                        "map_char": "S" # Placeholder map char for stockpile
+                        "map_char": stockpile_at_loc.get_map_char(),
                     }
                     self.send_response(200)
                     self.send_header('Content-type', 'application/json')

@@ -1,8 +1,9 @@
 # game/world.py
 from __future__ import annotations
 
+import math
 import random
-from collections import Counter
+from collections import Counter, defaultdict
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Set, Tuple
 
@@ -20,6 +21,7 @@ from .data import (
     CITIZEN_PERSONALITY_POOL,
     CITIZEN_TRAIT_POOL,
     MIGRANT_ARCHETYPES,
+    NOBLE_RANKS_OR_JOBS,
 )
 from .rumor import Rumor
 from . import config
@@ -36,14 +38,24 @@ if TYPE_CHECKING:
 class World:
     SEASONS = ["Spring", "Summer", "Autumn", "Winter"]
 
-    def __init__(self, grid_size: tuple[int, int] = (10, 10), game_time_ref: Optional[Time] = None):
-        self.grid_size = grid_size
-        self.grid = [["Grass" for _ in range(grid_size[1])] for _ in range(grid_size[0])]
+    def __init__(
+        self,
+        grid_size: Optional[tuple[int, int]] = None,
+        game_time_ref: Optional[Time] = None,
+        map_seed: Optional[int] = None,
+    ):
+        if grid_size is None:
+            default_size = getattr(config, "MAP_DEFAULT_SIZE", (10, 10))
+            grid_size = (int(default_size[0]), int(default_size[1]))
+        self.grid_size = (int(grid_size[0]), int(grid_size[1]))
+        self.grid = [["Grass" for _ in range(self.grid_size[1])] for _ in range(self.grid_size[0])]
         self.resources: Dict[str, List[Dict[str, Any]]] = {}
         self.season_index = 0
         self.season = World.SEASONS[self.season_index]
         self.weather = "Sunny"
         self.characters: List['Character'] = []
+        self._characters_by_name: Dict[str, 'Character'] = {}
+        self._characters_by_tile: Dict[Tuple[int, int], Set[str]] = defaultdict(set)
         self.stockpiles: List[Stockpile] = []
         self.stockpile_tiles: Dict[Tuple[int, int], str] = {}
         self.buildings: List[Building] = [] # Re-added
@@ -52,6 +64,11 @@ class World:
         self.game_time: Optional[Time] = game_time_ref
         self.work_orders: List[WorkOrder] = []
         self.event_log: List[str] = []
+        self.businesses: Dict[str, Dict[str, Any]] = {}
+        self._business_counter: int = 0
+        self.latest_wealth_snapshot: Dict[str, Any] = {}
+        self.latest_personal_pursuit_events: List[Dict[str, Any]] = []
+        self._last_wealth_tension_day: Optional[int] = None
         self.active_world_effects: Dict[str, Any] = {}
         self.recent_notable_events: List[Dict[str, Any]] = [] # For rumor spreading
         self.rumors: List[Rumor] = [] # Added for rumor system
@@ -97,11 +114,16 @@ class World:
         self.clinic_supply_requests: List[Dict[str, Any]] = []
         self.latest_healthcare_report: Dict[str, Any] = {}
         self._medical_case_counter: int = 0
+        self.health_event_history: List[Dict[str, Any]] = []
         courthouse_y = max(0, self.market_location[1] - 1)
         self.courthouse_location: Tuple[int, int] = (self.market_location[0], courthouse_y)
         self.today_surplus_sales: List[Dict[str, Any]] = []
         self._residential_assignments: Dict[str, Tuple[int, int]] = {}
         self.last_housing_evaluation_day: Optional[int] = None
+        self._latest_household_vignettes: List[Dict[str, Any]] = []
+        self._latest_neighborhood_gatherings: List[Dict[str, Any]] = []
+        self._latest_household_comforts: List[Dict[str, Any]] = []
+        self._latest_household_comfort_summary: Dict[str, Any] = {}
         self.latest_housing_snapshot: Dict[str, Any] = self.get_housing_snapshot()
         self.current_phase: Dict[str, Any] = {}
         self.phase_history: List[Dict[str, Any]] = []
@@ -149,6 +171,19 @@ class World:
         self.latest_workforce_report: Dict[str, Any] = {}
         self._last_workforce_update_day: Optional[int] = None
         self.work_logistics_history: List[Dict[str, Any]] = []
+        self.leadership_oversight_report: List[Dict[str, Any]] = []
+        self.military_structure: Dict[str, Any] = {
+            "commander": None,
+            "captains": [],
+            "squads": [],
+            "readiness": 0.0,
+            "alerts": [],
+            "enemy_activity": [],
+            "updated_day": None,
+        }
+        self._militia_readiness: Dict[str, float] = {}
+        self.enemy_activity_log: List[Dict[str, Any]] = []
+        self._last_enemy_activity_day: Optional[int] = None
         self.law_petitions: List[Dict[str, Any]] = []
         self.active_laws: Dict[str, Dict[str, Any]] = {}
         self.law_history: List[Dict[str, Any]] = []
@@ -161,6 +196,551 @@ class World:
         self._family_lookup: Dict[str, str] = {}
         self.family_history: List[Dict[str, Any]] = []
         self._character_lineage: Dict[str, Dict[str, Set[str]]] = {}
+
+        seed = map_seed if map_seed is not None else getattr(config, "MAP_RANDOM_SEED", None)
+        self._map_rng = random.Random(seed)
+        self.natural_features: Dict[str, Set[Tuple[int, int]]] = defaultdict(set)
+        self._reserved_land_tiles: Set[Tuple[int, int]] = set()
+        self._feature_margin: int = max(0, getattr(config, "MAP_FEATURE_MARGIN", 0))
+        self.landscape_profile: Dict[str, Any] = {}
+        self._generate_initial_landscape()
+        self._military_rng = random.Random(seed)
+
+    # --- Map & Landscape Generation -------------------------------------------------
+
+    def _generate_initial_landscape(self) -> None:
+        if getattr(config, "MAP_GENERATION_DISABLED", False):
+            total_tiles = self.grid_size[0] * self.grid_size[1]
+            self.landscape_profile = {
+                "tiles": {"Grass": total_tiles},
+                "resources": {},
+                "reserved": 0,
+            }
+            return
+
+        self._prepare_reserved_tiles()
+
+        terrain_features = getattr(config, "MAP_TERRAIN_FEATURES", None)
+        if not terrain_features:
+            terrain_features = self._default_terrain_features()
+        for feature in terrain_features:
+            self._apply_terrain_feature(feature)
+
+        scatter_defs = getattr(config, "MAP_SCATTERED_TILES", None)
+        if not scatter_defs:
+            scatter_defs = self._default_scatter_tiles()
+        for scatter in scatter_defs:
+            self._scatter_tile(scatter)
+
+        resource_defs = getattr(config, "MAP_RESOURCE_CLUSTERS", None)
+        if not resource_defs:
+            resource_defs = self._default_resource_clusters()
+        self._seed_resource_clusters(resource_defs)
+
+        self._record_landscape_profile()
+
+    def _prepare_reserved_tiles(self) -> None:
+        self._reserved_land_tiles.clear()
+        rows, cols = self.grid_size
+
+        edge_buffer = max(0, getattr(config, "MAP_EDGE_BUFFER", 0))
+        if edge_buffer:
+            for x in range(rows):
+                for y in range(cols):
+                    if (
+                        x < edge_buffer
+                        or y < edge_buffer
+                        or x >= rows - edge_buffer
+                        or y >= cols - edge_buffer
+                    ):
+                        self._reserved_land_tiles.add((x, y))
+
+        radius = max(0, getattr(config, "MAP_RESERVED_CLEARING_RADIUS", 0))
+        if radius:
+            center = (rows // 2, cols // 2)
+            for x in range(rows):
+                for y in range(cols):
+                    if abs(x - center[0]) <= radius and abs(y - center[1]) <= radius:
+                        self._reserved_land_tiles.add((x, y))
+
+        for coord in getattr(config, "MAP_RESERVED_COORDS", []):
+            if isinstance(coord, (list, tuple)) and len(coord) == 2:
+                cx, cy = int(coord[0]), int(coord[1])
+                if 0 <= cx < rows and 0 <= cy < cols:
+                    self._reserved_land_tiles.add((cx, cy))
+
+    def _default_terrain_features(self) -> List[Dict[str, Any]]:
+        return [
+            {
+                "key": "water",
+                "tile": "Water",
+                "clusters": (1, 2),
+                "radius": (2, 3),
+                "scatter": (1, 2),
+                "roughness": 0.55,
+                "preserve_tiles": ["Water", "DeepWater"],
+            },
+            {
+                "key": "forest",
+                "tile": "Forest",
+                "clusters": (3, 4),
+                "radius": (2, 3),
+                "scatter": (1, 2),
+                "roughness": 0.4,
+                "avoid_tiles": ["Water", "DeepWater"],
+            },
+            {
+                "key": "meadow",
+                "tile": "Meadow",
+                "clusters": (2, 3),
+                "radius": (2, 3),
+                "scatter": (1, 2),
+                "roughness": 0.45,
+                "avoid_tiles": ["Water", "DeepWater"],
+            },
+            {
+                "key": "rockfield",
+                "tile": "Rocks",
+                "clusters": (1, 2),
+                "radius": (1, 2),
+                "scatter": 1,
+                "roughness": 0.5,
+                "avoid_tiles": ["Water", "DeepWater"],
+            },
+        ]
+
+    def _default_scatter_tiles(self) -> List[Dict[str, Any]]:
+        return [
+            {"tile": "Clearing", "count": (6, 10), "avoid_tiles": ["Water", "DeepWater"]},
+            {"tile": "Path", "count": (12, 18), "avoid_tiles": ["Water", "DeepWater"]},
+        ]
+
+    def _default_resource_clusters(self) -> List[Dict[str, Any]]:
+        return [
+            {
+                "resource": "Wood",
+                "tile": "Wood",
+                "clusters": (3, 5),
+                "radius": (1, 2),
+                "scatter": 1,
+                "density": (4, 6),
+                "prefer_feature": "forest",
+                "base_tiles": ["Forest"],
+            },
+            {
+                "resource": "Stone",
+                "tile": "Stone",
+                "clusters": (2, 3),
+                "radius": (1, 1),
+                "scatter": 1,
+                "density": (3, 5),
+                "prefer_feature": "rockfield",
+                "base_tiles": ["Rocks", "Stone"],
+            },
+            {
+                "resource": "Herbs",
+                "tile": "Herbs",
+                "clusters": (2, 3),
+                "radius": (1, 2),
+                "scatter": 1,
+                "density": (3, 6),
+                "prefer_feature": "meadow",
+                "base_tiles": ["Meadow"],
+                "allow_base_conversion": True,
+                "paint_tile": "Meadow",
+            },
+            {
+                "resource": "Food",
+                "tile": "Fields",
+                "clusters": (2, 3),
+                "radius": (1, 2),
+                "scatter": 1,
+                "density": (4, 8),
+                "base_tiles": ["Fields", "Meadow", "Grass"],
+                "allow_base_conversion": True,
+                "paint_tile": "Fields",
+                "feature_key": "farmland",
+            },
+            {
+                "resource": "Water",
+                "tile": "Water",
+                "clusters": (1, 2),
+                "radius": (1, 1),
+                "scatter": 0,
+                "density": (2, 4),
+                "prefer_feature": "water",
+                "base_tiles": ["Water"],
+                "allow_base_conversion": False,
+            },
+        ]
+
+    def _resolve_range(self, spec: Any, default: int = 0) -> int:
+        if spec is None:
+            return default
+        if isinstance(spec, range):
+            spec = list(spec)
+        if isinstance(spec, (list, tuple)):
+            if not spec:
+                return default
+            if len(spec) == 1:
+                return int(spec[0])
+            lo, hi = spec[0], spec[1]
+            if lo > hi:
+                lo, hi = hi, lo
+            return int(self._map_rng.randint(int(lo), int(hi)))
+        if isinstance(spec, dict):
+            lo = spec.get("min", default)
+            hi = spec.get("max", lo)
+            if lo > hi:
+                lo, hi = hi, lo
+            return int(self._map_rng.randint(int(lo), int(hi)))
+        if isinstance(spec, (int, float)):
+            return int(round(spec))
+        return default
+
+    def _is_reserved_tile(self, x: int, y: int) -> bool:
+        return (x, y) in self._reserved_land_tiles
+
+    def _set_feature_tile(
+        self,
+        x: int,
+        y: int,
+        tile_type: str,
+        feature_key: Optional[str] = None,
+    ) -> None:
+        if self._is_reserved_tile(x, y):
+            return
+        previous = self.grid[x][y]
+        if previous == tile_type:
+            if feature_key:
+                self.natural_features[feature_key].add((x, y))
+            return
+        self.set_tile(x, y, tile_type)
+        if feature_key:
+            self.natural_features[feature_key].add((x, y))
+
+    def _apply_terrain_feature(self, feature: Dict[str, Any]) -> None:
+        tile = feature.get("tile")
+        if not tile:
+            return
+
+        key = feature.get("key") or tile.lower()
+        clusters = max(0, self._resolve_range(feature.get("clusters"), 0))
+        if clusters <= 0:
+            return
+
+        rows, cols = self.grid_size
+        avoid_tiles = set(feature.get("avoid_tiles", []))
+        preserve_tiles = set(feature.get("preserve_tiles", []))
+        prefer_tiles = set(feature.get("prefer_tiles", []))
+        margin = max(self._feature_margin, int(feature.get("margin", 0)))
+        roughness = float(feature.get("roughness", 0.5))
+        radius_spec = feature.get("radius", 1)
+        scatter_spec = feature.get("scatter", 0)
+        allow_overwrite = bool(feature.get("allow_overwrite", False))
+
+        candidates: List[Tuple[int, int]] = []
+        for x in range(rows):
+            if margin and (x < margin or x >= rows - margin):
+                continue
+            for y in range(cols):
+                if margin and (y < margin or y >= cols - margin):
+                    continue
+                if self._is_reserved_tile(x, y):
+                    continue
+                current_tile = self.grid[x][y]
+                if avoid_tiles and current_tile in avoid_tiles:
+                    continue
+                candidates.append((x, y))
+
+        if prefer_tiles:
+            preferred = [coord for coord in candidates if self.grid[coord[0]][coord[1]] in prefer_tiles]
+            if preferred:
+                candidates = preferred
+
+        if not candidates:
+            return
+
+        for _ in range(clusters):
+            if not candidates:
+                break
+            center = self._map_rng.choice(candidates)
+            if feature.get("unique_centers", True):
+                try:
+                    candidates.remove(center)
+                except ValueError:
+                    pass
+
+            radius = max(0, self._resolve_range(radius_spec, 1))
+            scatter = max(0, self._resolve_range(scatter_spec, 0))
+            max_radius = radius + scatter
+            radius_sq = radius * radius
+            max_sq = max_radius * max_radius
+
+            for x in range(max(0, center[0] - max_radius), min(rows, center[0] + max_radius + 1)):
+                for y in range(max(0, center[1] - max_radius), min(cols, center[1] + max_radius + 1)):
+                    if self._is_reserved_tile(x, y):
+                        continue
+                    current_tile = self.grid[x][y]
+                    if avoid_tiles and current_tile in avoid_tiles:
+                        continue
+                    if preserve_tiles and current_tile in preserve_tiles and current_tile != tile:
+                        continue
+                    distance_sq = (x - center[0]) ** 2 + (y - center[1]) ** 2
+                    if distance_sq > max_sq:
+                        continue
+                    if (
+                        distance_sq > radius_sq
+                        and scatter > 0
+                        and self._map_rng.random() < roughness
+                    ):
+                        continue
+                    if not allow_overwrite and current_tile == tile:
+                        self.natural_features[key].add((x, y))
+                        continue
+                    self._set_feature_tile(x, y, tile, key)
+
+    def _scatter_tile(self, scatter: Dict[str, Any]) -> None:
+        tile = scatter.get("tile")
+        if not tile:
+            return
+        count = max(0, self._resolve_range(scatter.get("count"), 0))
+        if count <= 0:
+            return
+
+        avoid_tiles = set(scatter.get("avoid_tiles", []))
+        prefer_tiles = set(scatter.get("prefer_tiles", []))
+        feature_key = scatter.get("key") or tile.lower()
+
+        for _ in range(count):
+            coord = self._pick_random_tile(avoid_tiles=avoid_tiles, prefer_tiles=prefer_tiles)
+            if coord is None:
+                break
+            self._set_feature_tile(coord[0], coord[1], tile, feature_key)
+
+    def _pick_random_tile(
+        self,
+        *,
+        avoid_tiles: Optional[Set[str]] = None,
+        prefer_tiles: Optional[Set[str]] = None,
+        max_attempts: int = 64,
+    ) -> Optional[Tuple[int, int]]:
+        rows, cols = self.grid_size
+        candidates: List[Tuple[int, int]] = []
+        if prefer_tiles:
+            for x in range(rows):
+                for y in range(cols):
+                    if self._is_reserved_tile(x, y):
+                        continue
+                    tile = self.grid[x][y]
+                    if avoid_tiles and tile in avoid_tiles:
+                        continue
+                    if tile in prefer_tiles:
+                        candidates.append((x, y))
+            if candidates:
+                return self._map_rng.choice(candidates)
+
+        min_x = self._feature_margin
+        min_y = self._feature_margin
+        max_x = rows - 1 - self._feature_margin
+        max_y = cols - 1 - self._feature_margin
+        if min_x > max_x or min_y > max_y:
+            min_x, max_x = 0, rows - 1
+            min_y, max_y = 0, cols - 1
+
+        for _ in range(max_attempts):
+            x = self._map_rng.randint(min_x, max_x)
+            y = self._map_rng.randint(min_y, max_y)
+            if self._is_reserved_tile(x, y):
+                continue
+            tile = self.grid[x][y]
+            if avoid_tiles and tile in avoid_tiles:
+                continue
+            return x, y
+        return None
+
+    def _seed_resource_clusters(self, cluster_defs: List[Dict[str, Any]]) -> None:
+        rows, cols = self.grid_size
+        existing_nodes: Set[Tuple[int, int]] = set()
+        for nodes in self.resources.values():
+            for node in nodes:
+                existing_nodes.add(tuple(node.get("location", (0, 0))))
+
+        for cluster in cluster_defs:
+            resource = cluster.get("resource")
+            if not resource:
+                continue
+
+            tile_override = cluster.get("tile")
+            feature_key = cluster.get("feature_key") or f"resource_{resource.lower()}"
+            cluster_count = max(0, self._resolve_range(cluster.get("clusters"), 0))
+            if cluster_count <= 0:
+                continue
+
+            radius = max(0, self._resolve_range(cluster.get("radius"), 0))
+            scatter = max(0, self._resolve_range(cluster.get("scatter"), 0))
+            density = max(1, self._resolve_range(cluster.get("density"), 1))
+            base_tiles = cluster.get("base_tiles") or []
+            if cluster.get("base_tile") and cluster.get("base_tile") not in base_tiles:
+                base_tiles.append(cluster.get("base_tile"))
+            base_tiles = [tile for tile in base_tiles if isinstance(tile, str)]
+            avoid_tiles = set(cluster.get("avoid_tiles", []))
+            allow_conversion = bool(cluster.get("allow_base_conversion", True))
+            prefer_feature = cluster.get("prefer_feature")
+            paint_tile = cluster.get("paint_tile")
+
+            candidate_centers: List[Tuple[int, int]] = []
+            if prefer_feature and prefer_feature in self.natural_features:
+                candidate_centers = list(self.natural_features[prefer_feature])
+            if not candidate_centers:
+                for x in range(rows):
+                    for y in range(cols):
+                        if self._is_reserved_tile(x, y):
+                            continue
+                        current_tile = self.grid[x][y]
+                        if base_tiles and current_tile not in base_tiles:
+                            continue
+                        if avoid_tiles and current_tile in avoid_tiles:
+                            continue
+                        candidate_centers.append((x, y))
+
+            if not candidate_centers:
+                candidate_centers = [
+                    (x, y)
+                    for x in range(rows)
+                    for y in range(cols)
+                    if not self._is_reserved_tile(x, y)
+                ]
+
+            if not candidate_centers:
+                continue
+
+            unique_centers = cluster.get("unique_centers", True)
+
+            for _ in range(cluster_count):
+                if not candidate_centers:
+                    break
+                center = self._map_rng.choice(candidate_centers)
+                if unique_centers:
+                    try:
+                        candidate_centers.remove(center)
+                    except ValueError:
+                        pass
+
+                max_radius = radius + scatter
+                max_sq = max_radius * max_radius
+                radius_sq = radius * radius
+                cluster_positions: List[Tuple[int, int]] = []
+
+                for x in range(max(0, center[0] - max_radius), min(rows, center[0] + max_radius + 1)):
+                    for y in range(max(0, center[1] - max_radius), min(cols, center[1] + max_radius + 1)):
+                        if self._is_reserved_tile(x, y):
+                            continue
+                        if (x, y) in existing_nodes:
+                            continue
+                        if self.get_building_at(x, y):
+                            continue
+                        current_tile = self.grid[x][y]
+                        if avoid_tiles and current_tile in avoid_tiles:
+                            continue
+                        if base_tiles and current_tile not in base_tiles:
+                            if not allow_conversion:
+                                continue
+                        distance_sq = (x - center[0]) ** 2 + (y - center[1]) ** 2
+                        if distance_sq > max_sq:
+                            continue
+                        if (
+                            distance_sq > radius_sq
+                            and scatter > 0
+                            and self._map_rng.random() < 0.35
+                        ):
+                            continue
+                        cluster_positions.append((x, y))
+
+                if paint_tile and cluster_positions:
+                    for x, y in cluster_positions:
+                        if base_tiles and self.grid[x][y] not in base_tiles and not allow_conversion:
+                            continue
+                        self._set_feature_tile(x, y, paint_tile, feature_key)
+
+                if not cluster_positions:
+                    continue
+
+                self._map_rng.shuffle(cluster_positions)
+                placed = 0
+
+                for x, y in cluster_positions:
+                    if placed >= density:
+                        break
+                    if (x, y) in existing_nodes:
+                        continue
+                    node_tile = tile_override or resource
+                    if base_tiles and self.grid[x][y] not in base_tiles and allow_conversion and paint_tile:
+                        self._set_feature_tile(x, y, paint_tile, feature_key)
+                    self.add_resource(resource, (x, y), tile_becomes=node_tile)
+                    existing_nodes.add((x, y))
+                    placed += 1
+                    if feature_key:
+                        self.natural_features[feature_key].add((x, y))
+
+    def _record_landscape_profile(self) -> None:
+        tile_counter: Counter[str] = Counter()
+        for x in range(self.grid_size[0]):
+            for y in range(self.grid_size[1]):
+                tile_counter[self.grid[x][y]] += 1
+
+        resource_counts = {
+            resource: sum(1 for node in nodes if not node.get("depleted", False))
+            for resource, nodes in self.resources.items()
+        }
+
+        self.landscape_profile = {
+            "tiles": dict(tile_counter),
+            "resources": resource_counts,
+            "reserved": len(self._reserved_land_tiles),
+        }
+
+    def get_landscape_profile(self) -> Dict[str, Any]:
+        return deepcopy(self.landscape_profile)
+
+    def ensure_passable_tile(self, x: int, y: int, *, tile_type: str = "Grass") -> None:
+        if not (0 <= x < self.grid_size[0] and 0 <= y < self.grid_size[1]):
+            return
+        if self.grid[x][y] in config.IMPASSABLE_TERRAINS:
+            self.set_tile(x, y, tile_type)
+            self.natural_features["clearing"].add((x, y))
+
+    def ensure_passable_patch(
+        self,
+        origin: Tuple[int, int],
+        size: Tuple[int, int],
+        *,
+        tile_type: Optional[str] = None,
+    ) -> None:
+        tile_type = tile_type or getattr(config, "STRUCTURE_FOUNDATION_TILE", "Flagstone")
+        for dx in range(size[0]):
+            for dy in range(size[1]):
+                tx, ty = origin[0] + dx, origin[1] + dy
+                if not (0 <= tx < self.grid_size[0] and 0 <= ty < self.grid_size[1]):
+                    continue
+                if self.grid[tx][ty] in config.IMPASSABLE_TERRAINS:
+                    self.set_tile(tx, ty, tile_type)
+                    self.natural_features["clearing"].add((tx, ty))
+
+    def _remove_resource_nodes_at(self, tiles: Iterable[Tuple[int, int]]) -> None:
+        to_clear = {tuple(tile) for tile in tiles}
+        if not to_clear:
+            return
+        changed = False
+        for resource, nodes in self.resources.items():
+            for idx in range(len(nodes) - 1, -1, -1):
+                node = nodes[idx]
+                loc = tuple(node.get("location", ()))
+                if loc in to_clear:
+                    nodes.pop(idx)
+                    changed = True
+        if changed:
+            self._record_landscape_profile()
 
     def update_rumors_daily(self):
         """Decays strength of all rumors and removes very weak ones."""
@@ -206,6 +786,9 @@ class World:
 
         building_at_loc = self.get_building_at(x, y)
         if building_at_loc:
+            tile_label = building_at_loc.get_tile_label(x, y)
+            if tile_label:
+                return tile_label
             return building_at_loc.get_current_map_char()
 
         if (x, y) in self.stockpile_tiles:
@@ -239,10 +822,11 @@ class World:
         if reservation_holder and reservation_holder not in ignore_set and not goal_override:
             return False
 
-        for char in self.characters:
-            if char.name in ignore_set:
-                continue
-            if (char.x, char.y) == (x, y):
+        occupants = self._characters_by_tile.get((x, y))
+        if occupants:
+            for occupant in occupants:
+                if occupant in ignore_set:
+                    continue
                 if goal_override:
                     continue
                 return False
@@ -253,6 +837,12 @@ class World:
         current_holder = self._tile_reservations.get(coords)
         if current_holder and current_holder != character_name:
             return False
+
+        occupants = self._characters_by_tile.get(coords)
+        if occupants:
+            for occupant in occupants:
+                if occupant != character_name:
+                    return False
 
         previous = self._reservation_by_character.get(character_name)
         if previous == coords:
@@ -278,6 +868,28 @@ class World:
 
     def clear_reservations_for_character(self, character_name: str) -> None:
         self.release_tile(character_name)
+
+    def update_character_position(
+        self,
+        character: 'Character',
+        old_coords: Optional[Tuple[int, int]],
+        new_coords: Optional[Tuple[int, int]],
+    ) -> None:
+        """Refresh spatial indexes when a citizen moves."""
+
+        if old_coords:
+            occupants = self._characters_by_tile.get(old_coords)
+            if occupants and character.name in occupants:
+                occupants.discard(character.name)
+                if not occupants:
+                    del self._characters_by_tile[old_coords]
+
+        if new_coords:
+            self._characters_by_tile[new_coords].add(character.name)
+            self._characters_by_name[character.name] = character
+        else:
+            # Character removed from the world entirely.
+            self._characters_by_name.pop(character.name, None)
 
     def find_path(
         self,
@@ -335,22 +947,52 @@ class World:
         provides = building.functionality.get("provides_shelter", 0) if building.functionality else 0
         return building.is_operational and "residential" in tags and provides
 
-    def claim_residential_spot(self, character: 'Character') -> Optional[Building]:
+    def _get_building_tier(self, building: Building) -> str:
+        if not building.functionality:
+            return getattr(config, "RESIDENTIAL_FALLBACK_TIER", "modest")
+        tier = building.functionality.get("wealth_tier")
+        if tier:
+            return tier
+        return getattr(config, "RESIDENTIAL_FALLBACK_TIER", "modest")
+
+    def claim_residential_spot(
+        self,
+        character: 'Character',
+        preferred_tier: Optional[str] = None,
+    ) -> Optional[Building]:
         existing_location = self._residential_assignments.get(character.name)
         assigned_building: Optional[Building] = None
         if existing_location:
             existing = self.get_building_by_location(existing_location)
             if existing and self._is_residential(existing):
-                if character.name not in existing.occupants:
-                    existing.add_occupant(character.name)
-                assigned_building = existing
+                if preferred_tier and self._get_building_tier(existing) != preferred_tier:
+                    existing.remove_occupant(character.name)
+                    if character.name in self._residential_assignments:
+                        del self._residential_assignments[character.name]
+                    existing = None
+                else:
+                    if character.name not in existing.occupants:
+                        existing.add_occupant(character.name)
+                    assigned_building = existing
         if assigned_building:
             self.latest_housing_snapshot = self.get_housing_snapshot()
+            if hasattr(character, "home_location"):
+                character.home_location = assigned_building.location
             return assigned_building
 
+        candidate_buildings: List[Building] = []
+        if preferred_tier:
+            for building in self.buildings:
+                if self._is_residential(building) and self._get_building_tier(building) == preferred_tier:
+                    candidate_buildings.append(building)
         for building in self.buildings:
             if not self._is_residential(building):
                 continue
+            if building in candidate_buildings:
+                continue
+            candidate_buildings.append(building)
+
+        for building in candidate_buildings:
             capacity = int(building.functionality.get("provides_shelter", 0))
             if character.name in building.occupants:
                 self._residential_assignments[character.name] = building.location
@@ -364,6 +1006,8 @@ class World:
 
         if assigned_building:
             self.latest_housing_snapshot = self.get_housing_snapshot()
+            if hasattr(character, "home_location"):
+                character.home_location = assigned_building.location
         return assigned_building
 
     def release_residential_spot(self, character: 'Character'):
@@ -381,6 +1025,8 @@ class World:
             target_building.remove_occupant(character.name)
         if character.name in self._residential_assignments:
             del self._residential_assignments[character.name]
+        if hasattr(character, "home_location"):
+            character.home_location = None
         self.latest_housing_snapshot = self.get_housing_snapshot()
 
     def get_housing_snapshot(self) -> Dict[str, Any]:
@@ -406,6 +1052,13 @@ class World:
                     "capacity": capacity,
                     "occupants": occupants,
                     "available": available,
+                    "tier": self._get_building_tier(building),
+                    "amenities": list(getattr(building, "amenities", [])),
+                    "style": getattr(building, "household_style", None),
+                    "comfort": round(getattr(building, "comfort_score", 0.0), 1),
+                    "comfort_state": deepcopy(
+                        getattr(building, "household_comfort_state", {})
+                    ),
                 }
             )
 
@@ -440,8 +1093,753 @@ class World:
             "assignments": assignments,
             "homeless_characters": homeless,
             "resting_characters": resting_characters,
+            "household_vignettes": list(self._latest_household_vignettes),
+            "neighborhood_gatherings": list(self._latest_neighborhood_gatherings),
         }
+        snapshot["comfort_summary"] = deepcopy(self._latest_household_comfort_summary)
+        snapshot["comfort_events"] = deepcopy(self._latest_household_comforts[-8:])
         return snapshot
+
+    def _can_place_structure(
+        self,
+        origin: Tuple[int, int],
+        size: Tuple[int, int],
+        resource_tiles: Set[Tuple[int, int]],
+    ) -> bool:
+        width, height = size
+        ox, oy = origin
+        for dx in range(width):
+            for dy in range(height):
+                tx = ox + dx
+                ty = oy + dy
+                if not (0 <= tx < self.grid_size[0] and 0 <= ty < self.grid_size[1]):
+                    return False
+                if self.get_building_at(tx, ty):
+                    return False
+                if (tx, ty) in self.stockpile_tiles:
+                    return False
+                if self._tile_reservations.get((tx, ty)):
+                    return False
+                if self._characters_by_tile.get((tx, ty)):
+                    return False
+                tile_type = self.grid[tx][ty]
+                if tile_type in getattr(config, "IMPASSABLE_TERRAINS", set()):
+                    return False
+        return True
+
+    def _find_structure_site(
+        self,
+        size: Tuple[int, int],
+        *,
+        anchor: Optional[Tuple[int, int]] = None,
+    ) -> Optional[Tuple[int, int]]:
+        width, height = size
+        if width <= 0 or height <= 0:
+            return None
+        max_x = self.grid_size[0] - width + 1
+        max_y = self.grid_size[1] - height + 1
+        if max_x <= 0 or max_y <= 0:
+            return None
+
+        resource_tiles: Set[Tuple[int, int]] = set()
+        for node_list in self.resources.values():
+            for node in node_list:
+                loc = node.get("location")
+                if isinstance(loc, (list, tuple)) and len(loc) == 2:
+                    resource_tiles.add((int(loc[0]), int(loc[1])))
+
+        anchor_point = anchor or getattr(config, "RESIDENTIAL_ANCHOR", None) or self.market_location
+        candidates: List[Tuple[Tuple[int, int], int]] = []
+        for x in range(max_x):
+            for y in range(max_y):
+                if not self._can_place_structure((x, y), size, resource_tiles):
+                    continue
+                distance = abs(anchor_point[0] - x) + abs(anchor_point[1] - y)
+                candidates.append(((x, y), distance))
+
+        if not candidates:
+            return None
+
+        candidates.sort(key=lambda item: (item[1], item[0][0], item[0][1]))
+        return candidates[0][0]
+
+    def _place_structure_from_blueprint(self, blueprint_key: str) -> Optional[Building]:
+        blueprint = STRUCTURE_BLUEPRINTS.get(blueprint_key)
+        if not blueprint:
+            return None
+        size = tuple(blueprint.get("size", (1, 1)))
+        location = self._find_structure_site(size)
+        if not location:
+            return None
+
+        building = Building(
+            structure_type=blueprint_key,
+            display_name=blueprint.get("display_name", blueprint_key.replace("_", " ").title()),
+            location=location,
+            size=size,
+            required_resources=deepcopy(blueprint.get("required_resources", {})),
+            functionality=deepcopy(blueprint.get("functionality", {})),
+            required_skill=deepcopy(blueprint.get("required_skill")),
+            construction_phases=deepcopy(blueprint.get("construction_phases")),
+            map_char_initial=blueprint.get("map_char_initial", "X"),
+            map_char_complete=blueprint.get("map_char_complete", "B"),
+            tile_layout=deepcopy(blueprint.get("tile_layout")),
+            tile_palette=deepcopy(blueprint.get("tile_palette")),
+            amenities=deepcopy(blueprint.get("amenities")),
+            household_style=blueprint.get("household_style"),
+        )
+        building.is_operational = True
+        building.current_phase_index = len(building.phases)
+        building.current_progress = building.build_time
+        building.current_phase_progress = 0.0
+        self.add_building(building)
+        self._remove_resource_nodes_at(building.get_tiles_occupied())
+
+        layout = building.get_tile_layout()
+        if layout:
+            for row_idx, row in enumerate(layout):
+                for col_idx, tile_name in enumerate(row):
+                    tx = building.location[0] + col_idx
+                    ty = building.location[1] + row_idx
+                    if 0 <= tx < self.grid_size[0] and 0 <= ty < self.grid_size[1] and tile_name:
+                        self.grid[tx][ty] = tile_name
+            self.map_revision += 1
+        else:
+            interior_tile = blueprint.get("interior_tile")
+            if interior_tile:
+                for tx, ty in building.get_tiles_occupied():
+                    if 0 <= tx < self.grid_size[0] and 0 <= ty < self.grid_size[1]:
+                        self.grid[tx][ty] = interior_tile
+                self.map_revision += 1
+
+        tier = building.functionality.get("wealth_tier") if building.functionality else None
+        tier_label = tier or "residential"
+        self.add_event_log_message(
+            f"Raised {building.display_name} ({tier_label}) at {building.location} to meet housing demand."
+        )
+        return building
+
+    def determine_estate_tier(self, character: 'Character') -> str:
+        tier_configs = getattr(config, "RESIDENTIAL_TIER_BLUEPRINTS", [])
+        available_tiers = {entry.get("status") for entry in tier_configs if entry.get("status")}
+        fallback = getattr(config, "RESIDENTIAL_FALLBACK_TIER", "modest")
+        noble_ranks = set(getattr(config, "NOBLE_RANKS_OR_JOBS", []) or NOBLE_RANKS_OR_JOBS)
+        if character.rank in noble_ranks and "noble" in available_tiers:
+            return "noble"
+        status = getattr(character, "wealth_status", fallback)
+        if status in available_tiers:
+            return status
+        if fallback in available_tiers:
+            return fallback
+        if tier_configs:
+            return tier_configs[0].get("status", fallback)
+        return fallback
+
+    def _synchronize_estate_expectations(self, snapshot: Dict[str, Any]) -> bool:
+        tier_configs = getattr(config, "RESIDENTIAL_TIER_BLUEPRINTS", [])
+        if not tier_configs or not self.characters:
+            return False
+
+        tier_lookup = {
+            entry["status"]: entry
+            for entry in tier_configs
+            if entry.get("status") and entry.get("blueprint")
+        }
+        fallback_tier = getattr(config, "RESIDENTIAL_FALLBACK_TIER", "modest")
+
+        tier_priority = getattr(config, "RESIDENTIAL_TIER_PRIORITY", {})
+        default_priority = max(tier_priority.values(), default=5) + 1
+
+        buildings_by_tier: Dict[str, List[Building]] = defaultdict(list)
+        for building in self.buildings:
+            if not self._is_residential(building):
+                continue
+            tier = self._get_building_tier(building)
+            buildings_by_tier[tier].append(building)
+
+        desired_counts: Counter[str] = Counter()
+        for character in self.characters:
+            desired_tier = self.determine_estate_tier(character)
+            desired_counts[desired_tier] += 1
+
+        shortage_logged: Set[str] = set()
+        changed = False
+        sorted_desired = sorted(
+            desired_counts.items(),
+            key=lambda item: tier_priority.get(item[0], default_priority),
+        )
+        for tier, resident_count in sorted_desired:
+            config_entry = tier_lookup.get(tier) or tier_lookup.get(fallback_tier)
+            if not config_entry:
+                continue
+            capacity = sum(
+                int(building.functionality.get("provides_shelter", 0))
+                for building in buildings_by_tier.get(tier, [])
+            )
+            while capacity < resident_count:
+                new_building = self._place_structure_from_blueprint(config_entry.get("blueprint"))
+                if not new_building:
+                    if tier not in shortage_logged:
+                        shortage_logged.add(tier)
+                        self.add_event_log_message(
+                            f"Unable to expand {tier} housing—no suitable plots remain for that estate tier."
+                        )
+                    break
+                buildings_by_tier.setdefault(tier, []).append(new_building)
+                capacity += int(new_building.functionality.get("provides_shelter", 0))
+                changed = True
+
+        for building in self.buildings:
+            if not self._is_residential(building):
+                continue
+            tier = self._get_building_tier(building)
+            for occupant_name in list(building.occupants):
+                occupant = self.get_character_by_name(occupant_name)
+                desired_tier = self.determine_estate_tier(occupant) if occupant else None
+                if not occupant or desired_tier != tier:
+                    building.remove_occupant(occupant_name)
+                    if occupant_name in self._residential_assignments:
+                        del self._residential_assignments[occupant_name]
+                    changed = True
+
+        sorted_characters = sorted(
+            self.characters,
+            key=lambda char: tier_priority.get(self.determine_estate_tier(char), default_priority),
+        )
+
+        for character in sorted_characters:
+            preferred_tier = self.determine_estate_tier(character)
+            building = self.claim_residential_spot(character, preferred_tier=preferred_tier)
+            if not building:
+                changed = True
+
+        if changed:
+            self.latest_housing_snapshot = self.get_housing_snapshot()
+
+        return changed
+
+    def _format_household_label(self, occupants: List['Character'], host: 'Character') -> str:
+        others = [char.name for char in occupants if char and char.name != host.name]
+        if not others:
+            return host.name
+        if len(others) == 1:
+            return f"{host.name} and {others[0]}"
+        if len(others) == 2:
+            return f"{host.name}, {others[0]}, and {others[1]}"
+        return f"{host.name}, {others[0]}, and {len(others) - 1} others"
+
+    def _format_neighborhood_label(self, block_key: Tuple[int, int], block_size: int) -> str:
+        block_x, block_y = block_key
+        start_x = block_x * block_size
+        start_y = block_y * block_size
+        human_x = block_x + 1
+        human_y = block_y + 1
+        return f"District {human_x}-{human_y} (tiles {start_x}–{start_x + block_size - 1}, {start_y}–{start_y + block_size - 1})"
+
+    def _maintain_household_comforts(
+        self, report: Optional[Dict[str, Any]] = None
+    ) -> List[Dict[str, Any]]:
+        rules = list(getattr(config, "HOUSEHOLD_COMFORT_RULES", []))
+        if report is not None:
+            report.setdefault("household_comforts", [])
+            report.setdefault("household_comfort_summary", {})
+        if not self.game_time or not rules:
+            self._latest_household_comforts = []
+            self._latest_household_comfort_summary = {}
+            if report is not None:
+                report["household_comforts"] = []
+                report["household_comfort_summary"] = {}
+            return []
+
+        today = self.game_time.current_day
+        base_decay = float(getattr(config, "HOUSEHOLD_COMFORT_DECAY_BASE", 0.0))
+        empty_decay = float(getattr(config, "HOUSEHOLD_COMFORT_EMPTY_DECAY", base_decay))
+        max_score = float(getattr(config, "HOUSEHOLD_COMFORT_MAX", 100.0))
+        good_threshold = float(
+            getattr(config, "HOUSEHOLD_COMFORT_GOOD_THRESHOLD", max_score * 0.6)
+        )
+        need_cap = getattr(config, "NEED_SCORE_MAX", 100)
+        need_min = getattr(config, "NEED_SCORE_MIN", 0)
+
+        updates: List[Dict[str, Any]] = []
+        summary_counts: Counter[str] = Counter()
+        comfort_scores: List[float] = []
+        comfortable_households = 0
+        resource_usage: Dict[str, Dict[str, int]] = defaultdict(lambda: {"required": 0, "withdrawn": 0})
+
+        for building in self.buildings:
+            if not self._is_residential(building):
+                continue
+
+            occupants: List['Character'] = []
+            for name in list(building.occupants):
+                occupant = self.get_character_by_name(name)
+                if occupant:
+                    occupants.append(occupant)
+                else:
+                    building.remove_occupant(name)
+
+            occupant_count = len(occupants)
+            current_score = float(getattr(building, "comfort_score", 0.0))
+            decay_amount = base_decay if occupant_count > 0 else max(base_decay, empty_decay)
+            if decay_amount:
+                current_score = max(0.0, current_score - decay_amount)
+            building.comfort_score = current_score
+
+            tier = self._get_building_tier(building)
+            style = getattr(building, "household_style", None)
+
+            for rule in rules:
+                state = building.household_comfort_state.setdefault(
+                    rule.get("key", "comfort"),
+                    {
+                        "comfort": 0.0,
+                        "last_serviced_day": None,
+                        "last_outcome": None,
+                    },
+                )
+                rule_decay = float(rule.get("decay", 0.0))
+                if rule_decay:
+                    state["comfort"] = max(
+                        0.0, float(state.get("comfort", 0.0)) - rule_decay
+                    )
+
+                interval = max(1, int(rule.get("interval_days", 1)))
+                last_day = state.get("last_serviced_day")
+                if (
+                    occupant_count > 0
+                    and last_day is not None
+                    and today - int(last_day) < interval
+                ):
+                    continue
+
+                resource_name = rule.get("resource")
+                if not resource_name or occupant_count <= 0:
+                    continue
+
+                base_amount = float(rule.get("base_amount", 0.0))
+                per_resident = float(rule.get("per_resident", 0.0))
+                required_float = base_amount + per_resident * occupant_count
+
+                style_multipliers = rule.get("style_multipliers", {}) or {}
+                if style and style in style_multipliers:
+                    required_float *= float(style_multipliers[style])
+
+                tier_multipliers = rule.get("tier_multipliers", {}) or {}
+                if tier and tier in tier_multipliers:
+                    required_float *= float(tier_multipliers[tier])
+
+                minimum_amount = float(rule.get("minimum", 0.0))
+                if minimum_amount > 0:
+                    required_float = max(required_float, minimum_amount)
+
+                required = int(math.ceil(required_float)) if required_float > 0 else 0
+
+                usage_entry = resource_usage[resource_name]
+                usage_entry["required"] += required
+
+                withdrawn = 0
+                if required > 0:
+                    withdrawn = self._withdraw_from_stockpiles(resource_name, required)
+                usage_entry["withdrawn"] += withdrawn
+
+                ratio = 1.0 if required == 0 else max(0.0, min(1.0, withdrawn / required))
+                success_ratio = float(rule.get("success_ratio", 0.75))
+                if ratio >= success_ratio:
+                    outcome = "satisfied"
+                elif withdrawn > 0:
+                    outcome = "partial"
+                else:
+                    outcome = "missed"
+
+                state["last_outcome"] = outcome
+                if withdrawn > 0:
+                    state["last_serviced_day"] = today
+
+                comfort_gain = float(rule.get("comfort_gain", 0.0))
+                comfort_penalty = float(rule.get("comfort_penalty", comfort_gain))
+                comfort_delta = 0.0
+                if outcome == "satisfied":
+                    comfort_delta = comfort_gain
+                elif outcome == "partial":
+                    comfort_delta = (comfort_gain * ratio) - (comfort_penalty * (1 - ratio))
+                else:
+                    comfort_delta = -comfort_penalty
+
+                state["comfort"] = max(
+                    0.0,
+                    min(max_score, float(state.get("comfort", 0.0)) + comfort_delta),
+                )
+                building.comfort_score = max(
+                    0.0, min(max_score, building.comfort_score + comfort_delta)
+                )
+
+                mood_change = 0
+                need_changes: Dict[str, int] = {}
+                memory_template: Optional[str] = None
+                reason_label = rule.get("name") or rule.get("key", "Household Comfort")
+
+                if outcome == "satisfied":
+                    mood_change = int(rule.get("mood_bonus", 0))
+                    need_changes = {
+                        key: int(value)
+                        for key, value in (rule.get("need_bonus") or {}).items()
+                        if value
+                    }
+                    memory_template = rule.get("success_memory")
+                elif outcome == "partial":
+                    mood_change = int(round(rule.get("mood_bonus", 0) * ratio))
+                    need_changes = {
+                        key: int(round(value * ratio))
+                        for key, value in (rule.get("need_bonus") or {}).items()
+                        if value
+                    }
+                    penalty_needs = {
+                        key: int(round(value * (1 - ratio)))
+                        for key, value in (rule.get("need_penalty") or {}).items()
+                        if value
+                    }
+                    for need_name, delta in penalty_needs.items():
+                        need_changes[need_name] = need_changes.get(need_name, 0) + delta
+                    memory_template = rule.get("partial_memory") or rule.get("success_memory")
+                else:
+                    mood_change = int(rule.get("mood_penalty", 0))
+                    need_changes = {
+                        key: int(value)
+                        for key, value in (rule.get("need_penalty") or {}).items()
+                        if value
+                    }
+                    memory_template = rule.get("failure_memory")
+
+                reason = f"{reason_label} ({outcome})"
+                for occupant in occupants:
+                    if mood_change:
+                        occupant.update_mood_score(mood_change, reason)
+                    if need_changes:
+                        for need_name, delta in need_changes.items():
+                            if not delta:
+                                continue
+                            default_attr = f"NEED_{need_name.upper()}_DEFAULT"
+                            baseline = getattr(
+                                config,
+                                default_attr,
+                                (need_cap + need_min) // 2,
+                            )
+                            current_value = occupant.needs.get(need_name, baseline)
+                            occupant.needs[need_name] = max(
+                                need_min,
+                                min(need_cap, current_value + delta),
+                            )
+                    if memory_template:
+                        occupant.add_memory(
+                            memory_template.format(building=building.display_name)
+                        )
+
+                shortage = max(0, required - withdrawn)
+                update_entry = {
+                    "building": building.display_name,
+                    "location": tuple(building.location),
+                    "rule": rule.get("key", "comfort"),
+                    "name": rule.get("name"),
+                    "resource": resource_name,
+                    "required": required,
+                    "withdrawn": withdrawn,
+                    "outcome": outcome,
+                    "occupants": occupant_count,
+                    "ratio": round(ratio, 2),
+                    "comfort_score": round(building.comfort_score, 1),
+                    "state_comfort": round(float(state.get("comfort", 0.0)), 1),
+                }
+                if shortage:
+                    update_entry["shortage"] = shortage
+                updates.append(update_entry)
+                summary_counts[outcome] += 1
+
+            comfort_scores.append(building.comfort_score)
+            if building.comfort_score >= good_threshold:
+                comfortable_households += 1
+
+        average_score = (
+            round(sum(comfort_scores) / len(comfort_scores), 1)
+            if comfort_scores
+            else 0.0
+        )
+        summary_data = {
+            "average_score": average_score,
+            "comfortable_households": comfortable_households,
+            "total_households": len(comfort_scores),
+            "satisfied": summary_counts.get("satisfied", 0),
+            "partial": summary_counts.get("partial", 0),
+            "missed": summary_counts.get("missed", 0),
+            "resource_usage": {
+                resource: dict(values) for resource, values in resource_usage.items()
+            },
+        }
+
+        if summary_counts:
+            parts: List[str] = []
+            if summary_counts.get("satisfied"):
+                parts.append(f"{summary_counts['satisfied']} cozy")
+            if summary_counts.get("partial"):
+                parts.append(f"{summary_counts['partial']} rationed")
+            if summary_counts.get("missed"):
+                parts.append(f"{summary_counts['missed']} cold")
+            if parts:
+                self.add_event_log_message(
+                    f"Household comforts: {', '.join(parts)}."
+                )
+
+        self._latest_household_comforts = updates
+        self._latest_household_comfort_summary = summary_data
+        if report is not None:
+            report["household_comforts"] = updates
+            report["household_comfort_summary"] = summary_data
+        return updates
+
+    def _resolve_household_evenings(
+        self,
+        snapshot: Dict[str, Any],
+        report: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        stories: List[Dict[str, Any]] = []
+        style_moments = getattr(config, "HOUSEHOLD_STYLE_MOMENTS", {})
+        default_moments = style_moments.get("general", [])
+
+        for building in self.buildings:
+            if hasattr(building, "latest_household_story"):
+                building.latest_household_story = None
+
+        if not self.game_time:
+            self._latest_household_vignettes = stories
+            snapshot["household_vignettes"] = stories
+            return stories
+
+        today = self.game_time.current_day
+        for building in self.buildings:
+            if not self._is_residential(building):
+                continue
+
+            occupant_objects = [
+                self.get_character_by_name(name)
+                for name in building.occupants
+            ]
+            occupants: List['Character'] = [char for char in occupant_objects if char]
+            if not occupants:
+                continue
+
+            style_key = getattr(building, "household_style", None) or self._get_building_tier(building)
+            options = style_moments.get(style_key, []) or default_moments
+            if not options:
+                continue
+
+            moment = random.choice(options)
+            host = max(occupants, key=lambda char: getattr(char, "net_worth", 0))
+
+            group_summary = moment.get("group_summary")
+            solo_summary = moment.get("solo_summary")
+            if len(occupants) > 1:
+                summary_core = group_summary or solo_summary or "shared a quiet evening together"
+                subject = self._format_household_label(occupants, host)
+                summary_text = f"{subject} {summary_core} at {building.display_name}."
+            else:
+                summary_core = solo_summary or group_summary or "spent a reflective evening at home"
+                summary_text = f"{host.name} {summary_core} at {building.display_name}."
+
+            memory_text = moment.get("memory") or f"Evening at {building.display_name}"
+            memory_detail = summary_text
+            mood_bonus = int(moment.get("mood_bonus", 0) or 0)
+            belonging_bonus = int(moment.get("belonging_bonus", 0) or 0)
+            esteem_bonus = int(moment.get("esteem_bonus", 0) or 0)
+
+            for occupant in occupants:
+                if mood_bonus:
+                    occupant.update_mood_score(mood_bonus, memory_text)
+                if belonging_bonus:
+                    current_belonging = occupant.needs.get("Belonging", config.NEED_BELONGING_DEFAULT)
+                    occupant.needs["Belonging"] = min(
+                        config.NEED_SCORE_MAX,
+                        current_belonging + belonging_bonus,
+                    )
+                if esteem_bonus:
+                    current_esteem = occupant.needs.get("Esteem", config.NEED_ESTEEM_DEFAULT)
+                    occupant.needs["Esteem"] = min(
+                        config.NEED_SCORE_MAX,
+                        current_esteem + esteem_bonus,
+                    )
+                occupant.add_memory(f"{memory_text}: {memory_detail}")
+
+            story = {
+                "day": today,
+                "building": building.display_name,
+                "tier": self._get_building_tier(building),
+                "style": getattr(building, "household_style", None),
+                "summary": summary_text,
+                "occupants": [char.name for char in occupants],
+            }
+            stories.append(story)
+            if hasattr(building, "latest_household_story"):
+                building.latest_household_story = story
+            self.add_event_log_message(f"Household Highlight: {summary_text}")
+            if report is not None:
+                report.setdefault("housing_highlights", []).append(story)
+
+        self._latest_household_vignettes = stories
+        snapshot["household_vignettes"] = stories
+        return stories
+
+    def _resolve_neighborhood_gatherings(
+        self,
+        snapshot: Dict[str, Any],
+        report: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        gatherings: List[Dict[str, Any]] = []
+        block_size = max(1, int(getattr(config, "NEIGHBORHOOD_BLOCK_SIZE", 6)))
+        min_households = max(1, int(getattr(config, "NEIGHBORHOOD_MIN_HOUSEHOLDS", 2)))
+        base_chance = max(0.0, float(getattr(config, "NEIGHBORHOOD_GATHERING_BASE_CHANCE", 0.35)))
+        spirit_weight = float(getattr(config, "NEIGHBORHOOD_SPIRIT_WEIGHT", 0.4))
+        extra_bonus = float(getattr(config, "NEIGHBORHOOD_EXTRA_HOUSEHOLD_BONUS", 0.05))
+        style_moments = getattr(config, "NEIGHBORHOOD_MOMENTS", {})
+        default_moments = style_moments.get("general", [])
+
+        for building in self.buildings:
+            if hasattr(building, "latest_neighborhood_story"):
+                building.latest_neighborhood_story = None
+
+        snapshot["neighborhood_gatherings"] = gatherings
+        self._latest_neighborhood_gatherings = gatherings
+
+        if not self.game_time:
+            return gatherings
+
+        blocks: Dict[Tuple[int, int], List[Building]] = defaultdict(list)
+        for building in self.buildings:
+            if not self._is_residential(building):
+                continue
+            block_x = building.location[0] // block_size
+            block_y = building.location[1] // block_size
+            blocks[(block_x, block_y)].append(building)
+
+        today = self.game_time.current_day
+        community_spirit = float(getattr(self, "community_spirit", 0.0))
+
+        for block_key, homes in blocks.items():
+            populated_homes: List[Tuple[Building, List['Character']]] = []
+            for home in homes:
+                occupants = [
+                    self.get_character_by_name(name)
+                    for name in getattr(home, "occupants", [])
+                ]
+                valid = [char for char in occupants if char]
+                if valid:
+                    populated_homes.append((home, valid))
+
+            if len(populated_homes) < min_households:
+                continue
+
+            attendee_count = sum(len(chars) for _, chars in populated_homes)
+            if attendee_count < 2:
+                continue
+
+            attendance_bonus = extra_bonus * max(0, len(populated_homes) - min_households)
+            trigger_chance = base_chance + community_spirit * spirit_weight + attendance_bonus
+            trigger_chance = max(0.0, min(0.95, trigger_chance))
+            if random.random() > trigger_chance:
+                continue
+
+            host_home, host_residents = max(
+                populated_homes,
+                key=lambda item: max(
+                    (getattr(char, "net_worth", 0) for char in item[1]),
+                    default=0,
+                ),
+            )
+            host_character = max(
+                host_residents,
+                key=lambda char: getattr(char, "net_worth", 0),
+            )
+
+            style_key = getattr(host_home, "household_style", None) or self._get_building_tier(host_home)
+            moment_options = style_moments.get(style_key, []) or default_moments
+            if not moment_options:
+                continue
+
+            moment = random.choice(moment_options)
+            neighborhood_label = self._format_neighborhood_label(block_key, block_size)
+            summary_template = moment.get("summary") or "Neighbors gathered near {host} in {neighborhood}."
+
+            attendees = sorted({char.name for _, chars in populated_homes for char in chars})
+            attendee_count = len(attendees)
+            summary_text = summary_template.format(
+                host=host_home.display_name,
+                host_name=host_character.name,
+                neighborhood=neighborhood_label,
+                attendee_count=attendee_count,
+            )
+
+            memory_text = moment.get("memory") or "Neighborhood gathering"
+            memory_detail = summary_text
+            mood_bonus = int(moment.get("mood_bonus", 0) or 0)
+            belonging_bonus = int(moment.get("belonging_bonus", 0) or 0)
+            esteem_bonus = int(moment.get("esteem_bonus", 0) or 0)
+            spirit_delta = float(moment.get("spirit_delta", 0.0) or 0.0)
+
+            for _, chars in populated_homes:
+                for character in chars:
+                    if mood_bonus:
+                        character.update_mood_score(mood_bonus, memory_text)
+                    if belonging_bonus:
+                        current_belonging = character.needs.get(
+                            "Belonging",
+                            config.NEED_BELONGING_DEFAULT,
+                        )
+                        character.needs["Belonging"] = min(
+                            config.NEED_SCORE_MAX,
+                            current_belonging + belonging_bonus,
+                        )
+                    if esteem_bonus:
+                        current_esteem = character.needs.get(
+                            "Esteem",
+                            config.NEED_ESTEEM_DEFAULT,
+                        )
+                        character.needs["Esteem"] = min(
+                            config.NEED_SCORE_MAX,
+                            current_esteem + esteem_bonus,
+                        )
+                    character.add_memory(f"{memory_text}: {memory_detail}")
+
+            if spirit_delta and hasattr(self, "community_spirit"):
+                self.community_spirit = max(
+                    0.0,
+                    min(1.0, float(self.community_spirit) + spirit_delta),
+                )
+
+            gathering = {
+                "day": today,
+                "neighborhood": neighborhood_label,
+                "neighborhood_key": block_key,
+                "host": host_home.display_name,
+                "host_character": host_character.name,
+                "tier": self._get_building_tier(host_home),
+                "style": getattr(host_home, "household_style", None),
+                "summary": summary_text,
+                "attendees": attendees,
+                "attending_buildings": [home.display_name for home, _ in populated_homes],
+            }
+            gatherings.append(gathering)
+            if hasattr(host_home, "latest_neighborhood_story"):
+                host_home.latest_neighborhood_story = gathering
+
+            self.add_event_log_message(
+                f"Neighborhood Gathering: {summary_text} (attendees: {attendee_count})"
+            )
+            if report is not None:
+                report.setdefault("neighborhood_gatherings", []).append(gathering)
+
+        if gatherings:
+            snapshot["neighborhood_gatherings"] = gatherings
+            self._latest_neighborhood_gatherings = gatherings
+
+        return gatherings
 
     def get_operational_buildings_of_type(self, structure_type_str: str) -> List[Building]:
         return [b for b in self.buildings if b.structure_type == structure_type_str and b.is_operational]
@@ -495,12 +1893,13 @@ class World:
             "original_tile": current_tile,
             "depleted_tile": config.RESOURCE_NODE_DEPLETED_TILES.get(resource_name, current_tile),
         }
-        node_list.append(node)
+        node_list.insert(0, node)
 
         if tile_becomes and current_tile != tile_becomes:
             self.set_tile(x, y, tile_becomes)
         elif not tile_becomes and current_tile == "Grass":
             self.set_tile(x, y, resource_name)
+        self._record_landscape_profile()
 
 
     def get_resources(self, resource_name: str) -> List[Any]:
@@ -540,9 +1939,11 @@ class World:
                         "location": location,
                     },
                 )
+                self._record_landscape_profile()
             return
 
     def _advance_resource_regrowth(self) -> None:
+        landscape_changed = False
         for resource_name, nodes in self.resources.items():
             regrowth_days = config.RESOURCE_NODE_REGROWTH_DAYS.get(resource_name)
             if not regrowth_days:
@@ -575,6 +1976,10 @@ class World:
                             "location": tuple(node["location"]),
                         },
                     )
+                    landscape_changed = True
+
+        if landscape_changed:
+            self._record_landscape_profile()
 
     def get_resource_nodes_snapshot(self) -> List[Dict[str, Any]]:
         snapshot: List[Dict[str, Any]] = []
@@ -828,7 +2233,9 @@ class World:
     def add_character(self, character: 'Character'):
         if character in self.characters:
             return
+        self.ensure_passable_tile(character.x, character.y)
         self.characters.append(character)
+        self.update_character_position(character, None, (character.x, character.y))
         self.clear_reservations_for_character(character.name)
         if hasattr(character, "arrival_day") and character.arrival_day is None and self.game_time:
             character.arrival_day = self.game_time.current_day
@@ -863,7 +2270,11 @@ class World:
     def remove_character(self, character: 'Character'):
         if character not in self.characters:
             return
+        if hasattr(character, "business_roles"):
+            for business_id, role in list(character.business_roles.items()):
+                self._handle_character_departure_from_business(business_id, character.name, role == "owner")
         self.characters.remove(character)
+        self.update_character_position(character, (character.x, character.y), None)
         self.clear_reservations_for_character(character.name)
         if character.name in self._resident_registry:
             del self._resident_registry[character.name]
@@ -995,18 +2406,93 @@ class World:
         if canonical_role == "parents":
             subject_entry["parents"].add(relative.name)
             relative_entry["children"].add(subject.name)
+            if hasattr(relative, "note_child_added"):
+                relative.note_child_added(self, subject.name)
         elif canonical_role == "children":
             subject_entry["children"].add(relative.name)
             relative_entry["parents"].add(subject.name)
+            if hasattr(subject, "note_child_added"):
+                subject.note_child_added(self, relative.name)
         elif canonical_role == "siblings":
             subject_entry["siblings"].add(relative.name)
             relative_entry["siblings"].add(subject.name)
         elif canonical_role == "partners":
             subject_entry["partners"].add(relative.name)
             relative_entry["partners"].add(subject.name)
+            if hasattr(subject, "handle_union_formed"):
+                subject.handle_union_formed(self, relative.name)
+            if hasattr(relative, "handle_union_formed"):
+                relative.handle_union_formed(self, subject.name)
         else:
             subject_entry.setdefault(canonical_role, set()).add(relative.name)
             relative_entry.setdefault(mirror_role, set()).add(subject.name)
+
+        if refresh_profiles:
+            self._rebuild_family_profiles()
+        else:
+            family_ids = {
+                self._family_lookup.get(subject.name),
+                self._family_lookup.get(relative.name),
+            }
+            for fam_id in family_ids:
+                if fam_id:
+                    self._refresh_family_lineage_for_family(fam_id)
+        return True
+
+    def deregister_family_link(
+        self,
+        subject_name: str,
+        relative_name: str,
+        relation_type: str,
+        *,
+        refresh_profiles: bool = True,
+    ) -> bool:
+        if not subject_name or not relative_name or not relation_type:
+            return False
+
+        subject = self.get_character_by_name(subject_name)
+        relative = self.get_character_by_name(relative_name)
+        if not subject or not relative:
+            return False
+
+        canonical_role = self._canonical_family_role(relation_type)
+        mirror_map = {
+            "parents": "children",
+            "children": "parents",
+            "siblings": "siblings",
+            "partners": "partners",
+            "kin": "kin",
+        }
+        mirror_role = mirror_map.get(canonical_role, canonical_role)
+
+        if relative_name in subject.family_members:
+            subject.family_members.remove(relative_name)
+        if subject.name in relative.family_members:
+            relative.family_members.remove(subject.name)
+
+        if hasattr(subject, "deregister_family_role"):
+            subject.deregister_family_role(canonical_role, relative.name)
+        if hasattr(relative, "deregister_family_role"):
+            relative.deregister_family_role(mirror_role, subject.name)
+
+        subject_entry = self._ensure_lineage_entry(subject.name)
+        relative_entry = self._ensure_lineage_entry(relative.name)
+
+        if canonical_role == "parents":
+            subject_entry["parents"].discard(relative.name)
+            relative_entry["children"].discard(subject.name)
+        elif canonical_role == "children":
+            subject_entry["children"].discard(relative.name)
+            relative_entry["parents"].discard(subject.name)
+        elif canonical_role == "siblings":
+            subject_entry["siblings"].discard(relative.name)
+            relative_entry["siblings"].discard(subject.name)
+        elif canonical_role == "partners":
+            subject_entry["partners"].discard(relative.name)
+            relative_entry["partners"].discard(subject.name)
+        else:
+            subject_entry.setdefault(canonical_role, set()).discard(relative.name)
+            relative_entry.setdefault(mirror_role, set()).discard(subject.name)
 
         if refresh_profiles:
             self._rebuild_family_profiles()
@@ -1258,7 +2744,40 @@ class World:
                     details={"partners": [partner_a.name, partner_b.name], "ceremony": ceremony_label},
                     dedupe_key=f"witnessed_union:{partner_a.name}:{partner_b.name}:{witness.name}",
                 )
+        if hasattr(partner_a, "handle_union_formed"):
+            partner_a.handle_union_formed(self, partner_b.name, ceremony=ceremony_label)
+        if hasattr(partner_b, "handle_union_formed"):
+            partner_b.handle_union_formed(self, partner_a.name, ceremony=ceremony_label)
 
+        return True
+
+    def dissolve_union(
+        self,
+        partner_one: str,
+        partner_two: str,
+        *,
+        reason: str = "grew apart",
+        divorce: bool = False,
+    ) -> bool:
+        partner_a = self.get_character_by_name(partner_one)
+        partner_b = self.get_character_by_name(partner_two)
+        if not partner_a or not partner_b:
+            return False
+
+        removed = self.deregister_family_link(partner_a.name, partner_b.name, "partner", refresh_profiles=False)
+        if not removed:
+            return False
+        self._rebuild_family_profiles()
+
+        if hasattr(partner_a, "note_romance_ended"):
+            partner_a.note_romance_ended(self, partner_b.name, reason, committed=True, divorce=divorce)
+        if hasattr(partner_b, "note_romance_ended"):
+            partner_b.note_romance_ended(self, partner_a.name, reason, committed=True, divorce=divorce)
+
+        descriptor = "divorced" if divorce else "separated"
+        self.add_event_log_message(
+            f"{partner_a.name} and {partner_b.name} {descriptor} ({reason})."
+        )
         return True
 
     def _rebuild_family_profiles(self) -> None:
@@ -1501,16 +3020,43 @@ class World:
             "families": families[:8],
             "recent_history": [deepcopy(evt) for evt in self.family_history[-10:]],
         }
+
     def get_characters_at_location(self, x: int, y: int) -> List['Character']:
-        return [char for char in self.characters if char.x == x and char.y == y]
+        occupants = self._characters_by_tile.get((x, y))
+        if not occupants:
+            return []
+        found: List['Character'] = []
+        for name in occupants:
+            character = self._characters_by_name.get(name)
+            if character:
+                found.append(character)
+        return found
 
     def get_nearby_characters(self, character: 'Character', radius: int = 1) -> List['Character']:
-        nearby = []
-        for other_char in self.characters:
-            if other_char.name == character.name: continue
-            if abs(other_char.x - character.x) + abs(other_char.y - character.y) <= radius:
-                nearby.append(other_char)
-        return nearby
+        if radius <= 0:
+            return []
+
+        origin = (character.x, character.y)
+        seen: Set[str] = set()
+        neighbors: List['Character'] = []
+
+        for dx in range(-radius, radius + 1):
+            for dy in range(-radius, radius + 1):
+                if abs(dx) + abs(dy) > radius:
+                    continue
+                tile = (origin[0] + dx, origin[1] + dy)
+                occupants = self._characters_by_tile.get(tile)
+                if not occupants:
+                    continue
+                for name in occupants:
+                    if name == character.name or name in seen:
+                        continue
+                    other = self._characters_by_name.get(name)
+                    if other:
+                        neighbors.append(other)
+                        seen.add(name)
+
+        return neighbors
 
     def add_notable_event(self, event_type: str, details: Dict[str, Any], max_events: int = 10):
         """Adds a notable event to the world's recent memory, used for rumor spreading."""
@@ -1537,8 +3083,11 @@ class World:
         if stockpile not in self.stockpiles:
             self.stockpiles.append(stockpile)
             if self.game_time:
-                 self.ledger.update_stockpile_record(stockpile.name, stockpile.inventory, self.game_time.current_day)
+                self.ledger.update_stockpile_record(
+                    stockpile.name, stockpile.inventory, self.game_time.current_day
+                )
             x, y, w, h = stockpile.rect
+            self.ensure_passable_patch((x, y), (w, h))
             for r_offset in range(h):
                 for c_offset in range(w):
                     tile_x, tile_y = x + c_offset, y + r_offset
@@ -1591,10 +3140,7 @@ class World:
         return None
 
     def get_character_by_name(self, name: str) -> Optional['Character']: # Added utility
-        for char in self.characters:
-            if char.name == name:
-                return char
-        return None
+        return self._characters_by_name.get(name)
 
     def _next_crime_id(self) -> str:
         self._crime_incident_counter += 1
@@ -1992,10 +3538,31 @@ class World:
             for assignment in self.pending_interviews
             if assignment.get("status") in {"queued", "assigned"}
         ]
+        oversight_snapshot: List[Dict[str, Any]] = []
+        for entry in self.leadership_oversight_report:
+            record = {
+                "leader": entry.get("leader"),
+                "role": entry.get("role"),
+                "score": entry.get("score"),
+                "actions": entry.get("actions"),
+                "skill": entry.get("skill"),
+                "relationships": entry.get("relationships"),
+                "subordinates": entry.get("subordinates"),
+                "flags": list(entry.get("flags", [])),
+            }
+            if entry.get("notes"):
+                record["notes"] = list(entry.get("notes", []))
+            if entry.get("neglected"):
+                record["neglected"] = list(entry.get("neglected", []))
+            if entry.get("incidents"):
+                record["incidents"] = list(entry.get("incidents", []))
+            oversight_snapshot.append(record)
         return {
             "laws": laws_snapshot,
             "petitions": petitions_snapshot,
             "interviews": interviews_snapshot,
+            "oversight": oversight_snapshot,
+            "military": self.get_military_snapshot(),
         }
 
     def get_crime_by_id(self, crime_id: str) -> Optional[Dict[str, Any]]:
@@ -2832,6 +4399,48 @@ class World:
         day = self.game_time.current_day
         new_cases: List[str] = []
         worsened_cases: List[str] = []
+        health_events: List[Dict[str, Any]] = []
+        recoveries: List[Dict[str, Any]] = []
+        at_risk: List[Dict[str, Any]] = []
+        vitality_samples: List[float] = []
+        stress_samples: List[float] = []
+        immunity_samples: List[float] = []
+
+        for char in self.characters:
+            if hasattr(char, "evaluate_daily_health"):
+                try:
+                    events = char.evaluate_daily_health(self)
+                except Exception as exc:  # noqa: BLE001
+                    self.add_event_log_message(
+                        f"Health evaluation failed for {char.name}: {exc}"
+                    )
+                    events = []
+                for entry in events:
+                    if not entry:
+                        continue
+                    event_payload = deepcopy(entry)
+                    event_payload.setdefault("character", char.name)
+                    health_events.append(event_payload)
+                    if event_payload.get("type") in {"recovered", "injury_healed"}:
+                        recoveries.append(event_payload)
+
+            profile = getattr(char, "health_profile", None)
+            if profile:
+                vitality_samples.append(float(profile.get("vitality", 0.0)))
+                stress_samples.append(float(profile.get("stress", 0.0)))
+                immunity_samples.append(float(profile.get("immune_resilience", 0.0)))
+                if (
+                    profile.get("vitality", 100.0) <= getattr(config, "HEALTH_CRITICAL_VITALITY", 30)
+                    or (char.is_sick and char.sickness_severity >= getattr(config, "HEALTH_CRITICAL_SEVERITY", 7))
+                    or (char.is_injured and char.injury_severity >= getattr(config, "HEALTH_CRITICAL_SEVERITY", 7))
+                ):
+                    at_risk.append(
+                        {
+                            "name": char.name,
+                            "vitality": round(float(profile.get("vitality", 0.0)), 1),
+                            "conditions": deepcopy(profile.get("active_conditions", [])),
+                        }
+                    )
 
         for char in self.characters:
             if char.is_sick and char.sickness_severity > 0:
@@ -2944,12 +4553,27 @@ class World:
                         f"Clinic restocked {resource} (now {quantity})."
                     )
 
+        if health_events:
+            self.health_event_history.extend(health_events)
+            if len(self.health_event_history) > 80:
+                self.health_event_history = self.health_event_history[-80:]
+
+        avg_vitality = round(sum(vitality_samples) / len(vitality_samples), 1) if vitality_samples else None
+        avg_stress = round(sum(stress_samples) / len(stress_samples), 3) if stress_samples else None
+        avg_immunity = round(sum(immunity_samples) / len(immunity_samples), 3) if immunity_samples else None
+
         self.latest_healthcare_report = {
             "day": day,
             "new_cases": new_cases,
             "worsened_cases": worsened_cases,
             "active_cases": len(self.medical_cases),
             "supply_alerts": supply_alerts,
+            "health_events": health_events[-12:],
+            "recoveries": recoveries[-6:],
+            "at_risk": at_risk[:6],
+            "average_vitality": avg_vitality,
+            "average_stress": avg_stress,
+            "average_immunity": avg_immunity,
         }
 
     # Event related methods (can be kept minimal if EventManager is not fully used)
@@ -3964,6 +5588,7 @@ class World:
         report["water_deficit"] = total_deficit
 
     def _evaluate_housing_daily(self, report: Dict[str, Any]) -> Dict[str, Any]:
+        self._maintain_household_comforts(report)
         snapshot = self.get_housing_snapshot()
         report["housing"] = snapshot
         self.latest_housing_snapshot = snapshot
@@ -4009,8 +5634,647 @@ class World:
                     continue
                 character.update_mood_score(rest_bonus, "Recovered in warm shelter")
 
+        if self._synchronize_estate_expectations(snapshot):
+            snapshot = self.latest_housing_snapshot
+            report["housing"] = snapshot
+
+        stories = self._resolve_household_evenings(snapshot, report)
+        if stories:
+            report.setdefault("household_vignettes", stories)
+        gatherings = self._resolve_neighborhood_gatherings(snapshot, report)
+        if gatherings:
+            report.setdefault("neighborhood_gatherings", gatherings)
+        self.latest_housing_snapshot = snapshot
+
         self.last_housing_evaluation_day = today
         return snapshot
+
+    def _next_business_id(self) -> str:
+        self._business_counter += 1
+        return f"biz_{self._business_counter}"
+
+    def launch_business(
+        self,
+        owner: 'Character',
+        template: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        if owner is None:
+            return None
+
+        templates = list(getattr(config, "BUSINESS_TEMPLATES", []))
+        if template is None:
+            if not templates:
+                return None
+            template = random.choice(templates)
+
+        startup_cost = int(template.get("startup_cost", getattr(config, "BUSINESS_STARTUP_COST", 0)))
+        if owner.money < startup_cost:
+            return None
+
+        owner.money -= startup_cost
+        business_id = self._next_business_id()
+        display_name = template.get("display_name", template.get("key", "Enterprise"))
+        business_name = f"{owner.name}'s {display_name}"
+        base_capital = int(template.get("base_capital", startup_cost))
+        revenue_range = template.get("revenue_range") or getattr(config, "BUSINESS_DAILY_REVENUE_RANGE", (4, 9))
+        business = {
+            "id": business_id,
+            "name": business_name,
+            "owner": owner.name,
+            "industry": template.get("industry", "general"),
+            "capital": base_capital,
+            "revenue_range": tuple(revenue_range),
+            "status": "active",
+            "founded_day": self.game_time.current_day if self.game_time else 0,
+            "employees": [],
+            "cash_reserve": 0,
+            "history": [],
+            "inventory": {},
+        }
+        self.businesses[business_id] = business
+
+        owner.assign_business_role(business_id, "owner")
+        owner.add_memory(f"Invested {startup_cost} coins to establish {business_name}.")
+        owner.record_life_event(
+            self,
+            "business_founded",
+            f"Founded {business_name} in the {business['industry']} trade.",
+            tags=["business"],
+            significance=3,
+            details={"business_id": business_id, "industry": business["industry"]},
+        )
+        owner.update_mood_score(getattr(config, "MOOD_CHANGE_STARTED_PROJECT", 5), f"Founded {business_name}")
+        owner.update_reputation(getattr(config, "BUSINESS_REPUTATION_BONUS", 0), f"Founded {business_name}", self)
+
+        self.add_event_log_message(f"{owner.name} establishes {business_name} ({business['industry']}).")
+        self.add_notable_event(
+            "BusinessFounded",
+            {
+                "summary": f"{owner.name} opened {business_name}.",
+                "owner": owner.name,
+                "industry": business["industry"],
+                "business_id": business_id,
+            },
+        )
+
+        max_employees = getattr(config, "BUSINESS_MAX_EMPLOYEES", 0)
+        if max_employees > 0:
+            candidate_pool: List['Character'] = []
+            for character in self.characters:
+                if character.name == owner.name:
+                    continue
+                if getattr(character, "retired", False):
+                    continue
+                if business_id in getattr(character, "business_roles", {}):
+                    continue
+                if character.job in {"Unemployed", "Laborer", "Apprentice", None}:
+                    candidate_pool.append(character)
+            random.shuffle(candidate_pool)
+            for candidate in candidate_pool:
+                if len(business["employees"]) >= max_employees:
+                    break
+                business["employees"].append(candidate.name)
+                candidate.assign_business_role(business_id, "employee")
+                candidate.add_memory(f"Hired to work at {business_name}.")
+                candidate.record_life_event(
+                    self,
+                    "business_employment",
+                    f"Began working at {business_name}.",
+                    tags=["business", "employment"],
+                    significance=2,
+                    details={"business_id": business_id, "role": "employee"},
+                )
+
+        return business
+
+    def _handle_character_departure_from_business(
+        self,
+        business_id: str,
+        character_name: str,
+        owner_departure: bool = False,
+    ) -> None:
+        business = self.businesses.get(business_id)
+        if not business:
+            return
+
+        if owner_departure:
+            self._close_business(business, f"owner {character_name} departed")
+            return
+
+        if character_name in business.get("employees", []):
+            business["employees"] = [name for name in business["employees"] if name != character_name]
+            employee = self.get_character_by_name(character_name)
+            if employee:
+                employee.leave_business_role(business_id, f"Left employment at {business['name']}.")
+
+    def _restock_business_inputs(
+        self,
+        business: Dict[str, Any],
+        profile: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        inventory: Dict[str, int] = business.setdefault("inventory", {})
+        restock_days = max(1, int(profile.get("restock_days", 1) or 1))
+        procurement_multiplier = max(
+            0.0, float(profile.get("procurement_cost_multiplier", 0.0) or 0.0)
+        )
+
+        restocked: Dict[str, int] = {}
+        shortages: Dict[str, int] = {}
+        total_cost = 0
+
+        for resource_name, per_cycle in profile.get("inputs", {}).items():
+            required_per_cycle = int(math.ceil(per_cycle)) if per_cycle else 0
+            if required_per_cycle <= 0:
+                continue
+            target_quantity = required_per_cycle * restock_days
+            current_quantity = int(inventory.get(resource_name, 0))
+            needed = max(0, target_quantity - current_quantity)
+            if needed <= 0:
+                continue
+
+            taken = self._withdraw_from_stockpiles(resource_name, needed)
+            if taken > 0:
+                inventory[resource_name] = current_quantity + taken
+                restocked[resource_name] = restocked.get(resource_name, 0) + taken
+                unit_price = self.get_market_price(resource_name)
+                total_cost += int(round(unit_price * procurement_multiplier * taken))
+            shortage = needed - taken
+            if shortage > 0:
+                shortages[resource_name] = shortage
+
+        return {
+            "restocked": restocked,
+            "shortages": shortages,
+            "procurement_cost": total_cost,
+        }
+
+    def _run_business_industry_cycle(
+        self,
+        business: Dict[str, Any],
+        profile: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        inventory: Dict[str, int] = business.setdefault("inventory", {})
+        report: Dict[str, Any] = {
+            "restocked": {},
+            "shortages": {},
+            "inputs_consumed": {},
+            "outputs_created": {},
+            "notes": [],
+            "procurement_cost": 0,
+            "sale_value": 0,
+            "cycles": 0,
+            "supply_ratio": 0.0,
+            "efficiency_multiplier": float(profile.get("base_efficiency", 1.0)),
+        }
+
+        restock_report = self._restock_business_inputs(business, profile)
+        report["restocked"] = restock_report.get("restocked", {})
+        report["shortages"] = dict(restock_report.get("shortages", {}))
+        report["procurement_cost"] = restock_report.get("procurement_cost", 0)
+
+        active_employees: List['Character'] = []
+        for employee_name in business.get("employees", []):
+            employee = self.get_character_by_name(employee_name)
+            if not employee or getattr(employee, "retired", False):
+                continue
+            active_employees.append(employee)
+
+        available_cycles = max(0.0, float(profile.get("base_cycles", 1.0)))
+        available_cycles += len(active_employees) * float(profile.get("per_employee_cycles", 0.0))
+
+        owner = self.get_character_by_name(business.get("owner", ""))
+        participants: List['Character'] = []
+        if owner and not getattr(owner, "retired", False):
+            participants.append(owner)
+        participants.extend(active_employees)
+
+        skill_weights = profile.get("skill_weights", {})
+        raw_skill = 0.0
+        for character in participants:
+            skills = getattr(character, "skills", {})
+            for skill_name, weight in skill_weights.items():
+                if weight <= 0:
+                    continue
+                skill_entry = skills.get(skill_name, 0)
+                if isinstance(skill_entry, dict):
+                    skill_level = skill_entry.get("level", 0)
+                else:
+                    skill_level = skill_entry
+                raw_skill += float(skill_level) * float(weight)
+
+        skill_target = max(1.0, float(profile.get("skill_target", 8.0)))
+        normalized_skill = raw_skill / skill_target
+        available_cycles += normalized_skill * float(profile.get("skill_cycle_bonus", 0.0))
+
+        max_cycles = int(round(available_cycles))
+        if available_cycles > 0 and max_cycles == 0:
+            max_cycles = 1
+        if max_cycles < 0:
+            max_cycles = 0
+
+        inputs: Dict[str, int] = {}
+        inventory_levels: Dict[str, int] = {}
+        for resource_name, amount in profile.get("inputs", {}).items():
+            required = int(math.ceil(amount)) if amount else 0
+            if required <= 0:
+                continue
+            inputs[resource_name] = required
+            inventory_levels[resource_name] = int(inventory.get(resource_name, 0))
+
+        if inputs:
+            cycle_limits: List[int] = []
+            for resource_name, required in inputs.items():
+                available = inventory_levels.get(resource_name, 0)
+                if required <= 0:
+                    continue
+                cycle_limits.append(available // required)
+            max_cycles_by_inventory = min(cycle_limits) if cycle_limits else 0
+        else:
+            max_cycles_by_inventory = max_cycles
+
+        cycles = min(max_cycles, max_cycles_by_inventory)
+        supply_ratio = 0.0 if max_cycles <= 0 else cycles / max(1, max_cycles)
+        report["cycles"] = cycles
+        report["supply_ratio"] = supply_ratio
+
+        base_efficiency = float(profile.get("base_efficiency", 1.0))
+        supply_weight = float(profile.get("supply_weight", 0.0))
+        skill_weight = float(profile.get("skill_weight", 0.0))
+        efficiency = base_efficiency + (supply_ratio * supply_weight) + (max(0.0, normalized_skill) * skill_weight)
+        floor = float(profile.get("efficiency_floor", 0.0))
+        ceiling = float(profile.get("efficiency_ceiling", 2.0))
+        report["efficiency_multiplier"] = max(floor, min(ceiling, efficiency))
+
+        if cycles <= 0:
+            if max_cycles == 0:
+                report["notes"].append("No staffed shifts to run production.")
+            elif inputs:
+                lacking: List[tuple[str, int]] = []
+                for resource_name, required in inputs.items():
+                    available = inventory_levels.get(resource_name, 0)
+                    if available < required:
+                        deficit = required - available
+                        lacking.append((resource_name, deficit))
+                        report["shortages"][resource_name] = max(
+                            report["shortages"].get(resource_name, 0), deficit
+                        )
+                if lacking:
+                    formatted = ", ".join(f"{amount} {resource}" for resource, amount in lacking)
+                    report["notes"].append(f"Awaiting inputs: {formatted}")
+            return report
+
+        consumed: Dict[str, int] = {}
+        for resource_name, required in inputs.items():
+            if required <= 0:
+                continue
+            total_needed = required * cycles
+            if total_needed <= 0:
+                continue
+            current_quantity = inventory.get(resource_name, 0)
+            new_quantity = max(0, current_quantity - total_needed)
+            inventory[resource_name] = new_quantity
+            if new_quantity == 0:
+                inventory.pop(resource_name, None)
+            consumed[resource_name] = total_needed
+        if consumed:
+            report["inputs_consumed"] = consumed
+
+        sale_value = float(profile.get("sale_value_per_cycle", 0)) * cycles
+        sale_multiplier = float(profile.get("sale_value_multiplier", 0.0))
+        outputs_created: Dict[str, int] = {}
+        deposited: Dict[str, int] = {}
+
+        for resource_name, amount in profile.get("outputs", {}).items():
+            output_per_cycle = int(math.ceil(amount)) if amount else 0
+            if output_per_cycle <= 0:
+                continue
+            produced = output_per_cycle * cycles
+            if produced <= 0:
+                continue
+            outputs_created[resource_name] = produced
+            unit_price = self.get_market_price(resource_name)
+            if sale_multiplier:
+                sale_value += int(round(unit_price * sale_multiplier * produced))
+            if profile.get("store_outputs"):
+                inventory[resource_name] = inventory.get(resource_name, 0) + produced
+            if profile.get("deposit_outputs"):
+                deposit_result = self._deposit_work_output(resource_name, produced)
+                delivered = deposit_result.get("delivered", 0)
+                if delivered:
+                    deposited[resource_name] = deposited.get(resource_name, 0) + delivered
+                overflow = deposit_result.get("overflow", 0)
+                if overflow:
+                    report.setdefault("overflow", {})[resource_name] = overflow
+
+        if outputs_created:
+            report["outputs_created"] = outputs_created
+        if deposited:
+            report["deposited"] = deposited
+
+        report["sale_value"] = int(round(sale_value))
+
+        if report["shortages"]:
+            formatted = ", ".join(
+                f"{amount} {resource}" for resource, amount in report["shortages"].items()
+            )
+            report["notes"].append(f"Short on {formatted} for future orders.")
+
+        return report
+
+    def _close_business(self, business: Dict[str, Any], reason: str) -> None:
+        if business.get("status") == "closed":
+            return
+
+        business["status"] = "closed"
+        business["closed_day"] = self.game_time.current_day if self.game_time else 0
+        owner = self.get_character_by_name(business.get("owner", ""))
+        if owner:
+            owner.handle_business_closure(business["id"], self, f"{business['name']} closed ({reason}).")
+        for employee_name in list(business.get("employees", [])):
+            employee = self.get_character_by_name(employee_name)
+            if employee:
+                employee.handle_business_closure(business["id"], self, f"{business['name']} closed ({reason}).")
+        business["employees"] = []
+        business["cash_reserve"] = 0
+        self.add_event_log_message(f"{business['name']} closed: {reason}.")
+        self.add_notable_event(
+            "BusinessClosed",
+            {
+                "summary": f"{business['name']} closed due to {reason}.",
+                "business_id": business.get("id"),
+                "owner": business.get("owner"),
+                "reason": reason,
+            },
+        )
+
+    def _update_businesses(self, report: Dict[str, Any]) -> List[Dict[str, Any]]:
+        events: List[Dict[str, Any]] = []
+        if not self.businesses:
+            report["business_events"] = events
+            return events
+
+        revenue_variance = getattr(config, "BUSINESS_REVENUE_VARIANCE", 0.0)
+        retention = getattr(config, "BUSINESS_CAPITAL_RETENTION", 0.5)
+        base_cost = getattr(config, "BUSINESS_BASE_OPERATING_COST", 2)
+        wage = getattr(config, "BUSINESS_EMPLOYEE_WAGE", 3)
+        owner_draw_limit = getattr(config, "BUSINESS_OWNER_DRAW", 0)
+        capital_factor = getattr(config, "BUSINESS_CAPITAL_PROFIT_FACTOR", 0.0)
+        failure_threshold = getattr(config, "BUSINESS_FAILURE_THRESHOLD", -15)
+        recovery_bonus = getattr(config, "BUSINESS_RECOVERY_BONUS", 0.0)
+        reputation_bonus = getattr(config, "BUSINESS_REPUTATION_BONUS", 0)
+        industry_profiles = getattr(config, "BUSINESS_INDUSTRY_PROFILES", {})
+
+        supply_alerts: List[Dict[str, Any]] = report.setdefault("business_supply_alerts", [])
+        ledgers: List[Dict[str, Any]] = report.setdefault("business_ledgers", [])
+
+        for business_id, business in list(self.businesses.items()):
+            if business.get("status") != "active":
+                continue
+
+            revenue_range = business.get("revenue_range") or getattr(
+                config, "BUSINESS_DAILY_REVENUE_RANGE", (4, 9)
+            )
+            revenue_low, revenue_high = revenue_range
+            if revenue_low > revenue_high:
+                revenue_low, revenue_high = revenue_high, revenue_low
+
+            base_gross = random.randint(int(revenue_low), int(revenue_high))
+            base_gross += int(business.get("capital", 0) * capital_factor)
+            if revenue_variance:
+                base_gross = max(
+                    0, int(base_gross * random.uniform(1 - revenue_variance, 1 + revenue_variance))
+                )
+
+            profile = industry_profiles.get(business.get("industry"))
+            industry_report: Optional[Dict[str, Any]] = None
+            gross = base_gross
+            procurement_cost = 0
+            if profile:
+                industry_report = self._run_business_industry_cycle(business, profile)
+                procurement_cost = int(industry_report.get("procurement_cost", 0))
+                efficiency_multiplier = float(industry_report.get("efficiency_multiplier", 1.0) or 0.0)
+                gross = max(0, int(round(gross * efficiency_multiplier)))
+                gross += int(industry_report.get("sale_value", 0))
+            else:
+                business.pop("inventory", None)
+
+            payroll_total = 0
+            paid_workers: List[str] = []
+            for employee_name in list(business.get("employees", [])):
+                employee = self.get_character_by_name(employee_name)
+                if not employee or getattr(employee, "retired", False):
+                    continue
+                employee.receive_income(wage, f"work at {business['name']}")
+                payroll_total += wage
+                paid_workers.append(employee.name)
+
+            expenses = base_cost + payroll_total + procurement_cost
+            owner_draw = 0
+            owner = self.get_character_by_name(business.get("owner", ""))
+            if owner and gross > expenses and owner_draw_limit > 0:
+                available_profit = gross - expenses
+                owner_draw = min(owner_draw_limit, available_profit)
+                if owner_draw > 0:
+                    owner.receive_income(owner_draw, f"profits from {business['name']}")
+                    expenses += owner_draw
+
+            net_profit = gross - expenses
+            if net_profit >= 0:
+                retained = int(net_profit * retention)
+                bonus = int(gross * recovery_bonus)
+                business["capital"] = business.get("capital", 0) + retained + bonus
+            else:
+                business["capital"] = business.get("capital", 0) + net_profit
+            business["cash_reserve"] = max(0, business.get("cash_reserve", 0) + net_profit)
+
+            if industry_report:
+                business["last_industry_report"] = dict(industry_report)
+            elif "last_industry_report" in business:
+                del business["last_industry_report"]
+
+            if owner and net_profit > 0 and reputation_bonus:
+                owner.update_reputation(reputation_bonus, f"Profitable day at {business['name']}", self)
+
+            history_entry = {
+                "day": self.game_time.current_day if self.game_time else -1,
+                "gross": gross,
+                "net": net_profit,
+                "payroll": payroll_total,
+                "owner_draw": owner_draw,
+                "procurement": procurement_cost,
+            }
+            if industry_report:
+                history_entry["supply_ratio"] = industry_report.get("supply_ratio")
+                history_entry["cycles"] = industry_report.get("cycles")
+            business.setdefault("history", []).append(history_entry)
+            business["history"] = business["history"][-14:]
+
+            if industry_report and industry_report.get("shortages"):
+                shortages = {
+                    resource: amount
+                    for resource, amount in industry_report.get("shortages", {}).items()
+                    if amount > 0
+                }
+                if shortages:
+                    supply_alerts.append(
+                        {
+                            "id": business_id,
+                            "name": business.get("name"),
+                            "industry": business.get("industry"),
+                            "shortages": shortages,
+                        }
+                    )
+
+            ledger_entry: Dict[str, Any] = {
+                "id": business_id,
+                "name": business.get("name"),
+                "industry": business.get("industry"),
+                "gross": gross,
+                "net": net_profit,
+                "payroll": payroll_total,
+                "procurement": procurement_cost,
+            }
+            if industry_report:
+                ledger_entry["supply_ratio"] = industry_report.get("supply_ratio")
+                ledger_entry["notes"] = list(industry_report.get("notes", []))
+                ledger_entry["outputs"] = dict(industry_report.get("outputs_created", {}))
+            ledgers.append(ledger_entry)
+
+            if business.get("capital", 0) <= failure_threshold:
+                self._close_business(business, "insolvency")
+                events.append(
+                    {
+                        "id": business_id,
+                        "name": business.get("name"),
+                        "status": "closed",
+                        "net": net_profit,
+                        "reason": "insolvency",
+                    }
+                )
+                continue
+
+            event_payload: Dict[str, Any] = {
+                "id": business_id,
+                "name": business.get("name"),
+                "gross": gross,
+                "net": net_profit,
+                "payroll": payroll_total,
+                "owner_draw": owner_draw,
+                "status": "active",
+                "employees_paid": paid_workers,
+                "industry": business.get("industry"),
+            }
+            if industry_report:
+                event_payload["industry_report"] = industry_report
+            events.append(event_payload)
+
+        report["business_events"] = events
+        return events
+
+    def _update_character_wealth(self, report: Dict[str, Any]) -> Dict[str, Any]:
+        wealth_events: List[Dict[str, Any]] = []
+        wealth_entries: List[Dict[str, Any]] = []
+        for character in self.characters:
+            if not hasattr(character, "evaluate_daily_wealth"):
+                continue
+            updates = character.evaluate_daily_wealth(self)
+            net = updates.get("net_worth", getattr(character, "net_worth", character.money))
+            wealth_entries.append(
+                {
+                    "name": character.name,
+                    "net_worth": net,
+                    "status": getattr(character, "wealth_status", "modest"),
+                }
+            )
+            event_payload = {k: v for k, v in updates.items() if k not in {"net_worth", "previous_net_worth"}}
+            if event_payload:
+                wealth_events.append({"character": character.name, **event_payload})
+
+        wealth_entries.sort(key=lambda entry: entry["net_worth"])
+        richest = sorted(wealth_entries, key=lambda entry: entry["net_worth"], reverse=True)[:3]
+        poorest = wealth_entries[:3]
+
+        snapshot = {
+            "entries": wealth_entries,
+            "richest": richest,
+            "poorest": poorest,
+        }
+        self.latest_wealth_snapshot = snapshot
+        report["wealth_snapshot"] = snapshot
+        if wealth_events:
+            report["wealth_events"] = wealth_events
+        return snapshot
+
+    def _update_professions(self, report: Dict[str, Any]) -> List[Dict[str, Any]]:
+        profession_events: List[Dict[str, Any]] = []
+        for character in self.characters:
+            if not hasattr(character, "evaluate_profession_daily"):
+                continue
+            updates = character.evaluate_profession_daily(self)
+            if updates:
+                profession_events.append({"character": character.name, **updates})
+
+        if profession_events:
+            report["profession_events"] = profession_events
+        return profession_events
+
+    def _evaluate_wealth_tensions(
+        self,
+        report: Dict[str, Any],
+        wealth_data: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if not self.game_time:
+            return
+        if wealth_data is None:
+            wealth_data = self.latest_wealth_snapshot
+        if not wealth_data:
+            return
+
+        today = self.game_time.current_day
+        if self._last_wealth_tension_day == today:
+            return
+        threshold = getattr(config, "WEALTH_JEALOUSY_THRESHOLD", 0)
+        if threshold <= 0:
+            return
+
+        richest = wealth_data.get("richest", [])
+        jealousy_records: List[Dict[str, Any]] = []
+        for character in self.characters:
+            if not hasattr(character, "net_worth"):
+                continue
+            target_name = None
+            gap_value = 0
+            for entry in richest:
+                if entry["name"] == character.name:
+                    continue
+                diff = entry["net_worth"] - getattr(character, "net_worth", character.money)
+                if diff > gap_value:
+                    gap_value = diff
+                    target_name = entry["name"]
+            if target_name and gap_value >= threshold:
+                if character._last_jealousy_day == today:
+                    continue
+                character._last_jealousy_day = today
+                character.add_memory(
+                    f"Jealous of {target_name}'s fortune (gap {gap_value} coins)."
+                )
+                character.update_mood_score(
+                    getattr(config, "WEALTH_JEALOUSY_MOOD_PENALTY", -3),
+                    f"Jealous of {target_name}'s wealth",
+                )
+                character.modify_relationship(
+                    target_name,
+                    getattr(config, "WEALTH_JEALOUSY_RELATIONSHIP_HIT", -2),
+                    self,
+                    reason="Envious of their wealth",
+                )
+                jealousy_records.append(
+                    {"character": character.name, "target": target_name, "gap": gap_value}
+                )
+
+        if jealousy_records:
+            report.setdefault("wealth_tensions", []).extend(jealousy_records)
+            self._last_wealth_tension_day = today
 
     def _get_security_modifier(self) -> float:
         modifier = 1.0
@@ -4018,6 +6282,16 @@ class World:
             modifier *= 0.6
         if any(char.job == "Deputy" for char in self.characters):
             modifier *= 0.75
+        militia_readiness = 0.0
+        if self.military_structure and isinstance(self.military_structure, dict):
+            militia_readiness = float(self.military_structure.get("readiness", 0.0) or 0.0)
+        elif self._militia_readiness:
+            militia_readiness = sum(self._militia_readiness.values()) / len(self._militia_readiness)
+        militia_modifier = float(getattr(config, "MILITIA_SECURITY_MODIFIER", 0.3))
+        if militia_readiness > 0:
+            modifier *= max(0.35, 1.0 - (militia_readiness * militia_modifier))
+        else:
+            modifier *= 1.0 + (militia_modifier * 0.15)
         return modifier
 
     def _select_theft_target(self) -> Optional[Tuple[str, Stockpile]]:
@@ -4064,6 +6338,20 @@ class World:
                 desperation += (hunger_threshold - hunger) / max(1, hunger_threshold)
             if character.money < low_funds_threshold:
                 desperation += 0.5
+            if self.latest_wealth_snapshot:
+                richest_list = self.latest_wealth_snapshot.get("richest", [])
+                richest_entry = next(
+                    (entry for entry in richest_list if entry.get("name") != character.name),
+                    None,
+                )
+                if richest_entry:
+                    wealth_gap = richest_entry.get("net_worth", 0) - getattr(
+                        character, "net_worth", character.money
+                    )
+                    if wealth_gap > 0:
+                        jealousy_pressure = getattr(config, "JEALOUSY_THEFT_PRESSURE", 0.0)
+                        threshold = getattr(config, "WEALTH_JEALOUSY_THRESHOLD", 1)
+                        desperation += (wealth_gap / max(1, threshold)) * jealousy_pressure
             if desperation <= 0:
                 continue
 
@@ -4780,6 +7068,135 @@ class World:
     def get_training_snapshot(self) -> Dict[str, Any]:
         return deepcopy(self.latest_training_report)
 
+    def _initiate_romance(
+        self,
+        actor_name: str,
+        target_name: str,
+        compatibility: float,
+        impetus: str,
+    ) -> Optional[Dict[str, Any]]:
+        initiator = self.get_character_by_name(actor_name)
+        target = self.get_character_by_name(target_name)
+        if not initiator or not target:
+            return None
+        if not hasattr(initiator, "note_romance_started") or not hasattr(target, "note_romance_started"):
+            return None
+        if not initiator.is_single() or not target.is_single():
+            return None
+        initiator.note_romance_started(self, target.name, compatibility, impetus)
+        target.note_romance_started(self, initiator.name, compatibility, impetus)
+        summary = f"{initiator.name} and {target.name} began courting."
+        self.add_event_log_message(summary)
+        return {
+            "type": "romance_started",
+            "partners": [initiator.name, target.name],
+            "compatibility": round(compatibility, 3),
+            "impetus": impetus,
+            "day": self.game_time.current_day if self.game_time else None,
+        }
+
+    def _end_courtship(self, actor_name: str, partner_name: str, reason: str) -> Optional[Dict[str, Any]]:
+        actor = self.get_character_by_name(actor_name)
+        partner = self.get_character_by_name(partner_name)
+        if not actor or not partner:
+            return None
+        if partner_name not in getattr(actor, "active_romances", {}):
+            return None
+        if actor_name not in getattr(partner, "active_romances", {}):
+            return None
+        actor.note_romance_ended(self, partner_name, reason)
+        partner.note_romance_ended(self, actor_name, reason)
+        self.add_event_log_message(f"{actor.name} and {partner.name} ended their courtship ({reason}).")
+        return {
+            "type": "romance_ended",
+            "partners": [actor.name, partner.name],
+            "reason": reason,
+            "day": self.game_time.current_day if self.game_time else None,
+        }
+
+    def process_family_dynamics_daily(self) -> List[Dict[str, Any]]:
+        if not self.game_time:
+            return []
+
+        proposed_actions: List[Dict[str, Any]] = []
+        for character in self.characters:
+            if hasattr(character, "evaluate_family_daily"):
+                actions = character.evaluate_family_daily(self)
+                for action in actions or []:
+                    entry = dict(action)
+                    entry["actor"] = character.name
+                    proposed_actions.append(entry)
+
+        if not proposed_actions:
+            return []
+
+        handled: Set[Tuple[str, Tuple[str, ...]]] = set()
+        family_events: List[Dict[str, Any]] = []
+
+        for action in proposed_actions:
+            action_type = action.get("type")
+            actor = action.get("actor")
+            target = action.get("with")
+            if not action_type or not actor:
+                continue
+            if target:
+                pair_tuple = tuple(sorted((actor, target)))
+            else:
+                pair_tuple = (actor,)
+            dedupe_key = (action_type, pair_tuple)
+            if dedupe_key in handled:
+                continue
+            handled.add(dedupe_key)
+
+            if action_type == "start_romance" and target:
+                compatibility = action.get("compatibility", 0.3)
+                impetus = action.get("impetus", "chance")
+                event = self._initiate_romance(actor, target, compatibility, impetus)
+                if event:
+                    family_events.append(event)
+            elif action_type == "propose_union" and target:
+                if self.register_union(actor, target):
+                    self.add_event_log_message(f"{actor} and {target} pledged themselves together.")
+                    family_events.append(
+                        {
+                            "type": "union",
+                            "partners": [actor, target],
+                            "day": self.game_time.current_day,
+                        }
+                    )
+            elif action_type == "end_romance" and target:
+                reason = action.get("reason", "drifted apart")
+                event = self._end_courtship(actor, target, reason)
+                if event:
+                    family_events.append(event)
+            elif action_type == "dissolve_union" and target:
+                reason = action.get("reason", "grew apart")
+                divorce = bool(action.get("divorce", False))
+                success = self.dissolve_union(actor, target, reason=reason, divorce=divorce)
+                if success:
+                    family_events.append(
+                        {
+                            "type": "union_dissolved",
+                            "partners": [actor, target],
+                            "reason": reason,
+                            "divorce": divorce,
+                            "day": self.game_time.current_day,
+                        }
+                    )
+            elif action_type == "plan_child" and target:
+                child = self.record_birth(actor, other_parent=target)
+                if child:
+                    family_events.append(
+                        {
+                            "type": "new_child",
+                            "parents": [actor, target],
+                            "child": child.name,
+                            "day": self.game_time.current_day,
+                        }
+                    )
+
+        return family_events
+
     def process_workforce_daily(
         self, economy_report: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
@@ -5126,12 +7543,22 @@ class World:
         self._apply_daily_food_consumption(report)
         self._apply_daily_water_consumption(report)
         housing_snapshot = self._evaluate_housing_daily(report)
+        business_events = self._update_businesses(report)
+        wealth_snapshot = self._update_character_wealth(report)
+        profession_events = self._update_professions(report)
         self._resolve_theft_attempts(report)
+        self._evaluate_wealth_tensions(report, wealth_snapshot)
         self.process_workforce_daily(report)
         report["pending_crimes"] = len(self.pending_crimes)
         report["surplus_trades"] = list(self.today_surplus_sales)
         self.evaluate_population_dynamics(report, housing_snapshot)
         training_report = self.process_training_daily(report)
+        family_events = self.process_family_dynamics_daily()
+        if family_events:
+            report["family_events"] = family_events
+        personal_events = self.process_personal_pursuits_daily()
+        if personal_events:
+            report["personal_pursuits"] = personal_events
 
         summary = (
             f"Economic summary — Treasury {self.treasury_coins}c "
@@ -5162,6 +7589,31 @@ class World:
                     f"Training grounds: {active_count} session{'s' if active_count != 1 else ''} active, "
                     f"{queued_total} queued for instruction."
                 )
+        for business_event in business_events:
+            if business_event.get("status") == "closed":
+                self.add_event_log_message(
+                    f"Business closed: {business_event.get('name')} ({business_event.get('reason', 'closure')})."
+                )
+            else:
+                net = business_event.get("net", 0)
+                self.add_event_log_message(
+                    f"{business_event.get('name')} netted {net} coin{'s' if net != 1 else ''} after payroll."
+                )
+                industry_report = business_event.get("industry_report") or {}
+                notes = industry_report.get("notes") or []
+                for note in notes:
+                    self.add_event_log_message(f"{business_event.get('name')}: {note}")
+                outputs_created = industry_report.get("outputs_created") or {}
+                if outputs_created:
+                    output_summary = ", ".join(
+                        f"{amount} {resource}"
+                        for resource, amount in outputs_created.items()
+                        if amount
+                    )
+                    if output_summary:
+                        self.add_event_log_message(
+                            f"{business_event.get('name')} produced {output_summary}."
+                        )
         for crime_event in report.get("crime_events", []):
             self.add_event_log_message(f"Security report: {crime_event['description']}.")
 
@@ -5172,8 +7624,124 @@ class World:
             )
             self.add_event_log_message(f"Trade ledger: {trade_summaries} exported to market.")
 
+        for wealth_event in report.get("wealth_events", []):
+            if "business_started" in wealth_event:
+                started = wealth_event["business_started"]
+                self.add_event_log_message(
+                    f"{wealth_event['character']} opened {started.get('name')} ({started.get('industry')})."
+                )
+            if "retired" in wealth_event:
+                retired = wealth_event["retired"]
+                self.add_event_log_message(
+                    f"{wealth_event['character']} retires from {retired.get('former_job')} with {retired.get('net_worth')} coins saved."
+                )
+            if "nobility" in wealth_event:
+                nobility = wealth_event["nobility"]
+                self.add_event_log_message(
+                    f"{wealth_event['character']} earns the title {nobility.get('title')} through amassed wealth."
+                )
+        for profession_event in profession_events:
+            name = profession_event.get("character")
+            if not name:
+                continue
+            current_char = self.get_character_by_name(name)
+            if "job_change" in profession_event:
+                change = profession_event["job_change"]
+                from_job = change.get("from", "Unassigned")
+                to_job = change.get("to", "Unassigned")
+                tenure = change.get("tenure")
+                if isinstance(tenure, (int, float)):
+                    self.add_event_log_message(
+                        f"{name} transitioned from {from_job} to {to_job} after {int(tenure)} day{'s' if tenure != 1 else ''}."
+                    )
+                else:
+                    self.add_event_log_message(f"{name} assumed the role of {to_job}.")
+            if "stage_change" in profession_event:
+                stage_data = profession_event["stage_change"]
+                new_stage = stage_data.get("to") or "Skilled"
+                job_label = current_char.job if current_char else "their craft"
+                self.add_event_log_message(f"{name} is now a {new_stage} {job_label}.")
+            if "tenure_milestones" in profession_event:
+                for milestone in profession_event["tenure_milestones"]:
+                    self.add_event_log_message(
+                        f"{name} has served {milestone} day{'s' if milestone != 1 else ''} as {current_char.job if current_char else 'their role'}."
+                    )
+            if "burnout" in profession_event:
+                burn = profession_event["burnout"]
+                self.add_event_log_message(
+                    f"{name} struggles with their duties (satisfaction {burn.get('satisfaction', 0):.2f})."
+                )
+            if "thriving" in profession_event:
+                high = profession_event["thriving"]
+                self.add_event_log_message(
+                    f"{name} thrives in their work (satisfaction {high.get('satisfaction', 0):.2f})."
+                )
+        if report.get("wealth_tensions"):
+            for tension in report["wealth_tensions"]:
+                self.add_event_log_message(
+                    f"Jealousy simmers: {tension['character']} eyes {tension['target']}'s fortune (gap {tension['gap']}c)."
+                )
+        if family_events:
+            for event in family_events:
+                event_type = event.get("type")
+                if event_type == "union":
+                    partners = event.get("partners", [])
+                    if partners:
+                        self.add_event_log_message(
+                            f"Union celebrated: {' & '.join(partners)}."
+                        )
+                elif event_type == "new_child":
+                    parents = event.get("parents", [])
+                    child = event.get("child")
+                    if len(parents) == 2 and child:
+                        self.add_event_log_message(
+                            f"{parents[0]} and {parents[1]} welcome {child}."
+                        )
+        if personal_events:
+            for event in personal_events:
+                event_type = event.get("type")
+                pursuit_name = event.get("name") or event.get("pursuit")
+                actor = event.get("character")
+                if event_type == "pursuit_milestone":
+                    if pursuit_name and actor:
+                        stage = event.get("stage")
+                        self.add_event_log_message(
+                            f"{actor} reached {pursuit_name} stage {stage}."
+                        )
+                elif event_type == "pursuit_engaged":
+                    if pursuit_name and actor:
+                        self.add_event_log_message(
+                            f"{actor} dedicated time to {pursuit_name} (progress {event.get('progress')})."
+                        )
+                elif event_type == "pursuit_skipped":
+                    if pursuit_name and actor:
+                        reason = event.get("reason", "tired")
+                        self.add_event_log_message(
+                            f"{actor} deferred {pursuit_name} today ({reason})."
+                        )
+
         self.last_daily_economic_report = report
         self.today_surplus_sales = []
+
+    def process_personal_pursuits_daily(self) -> List[Dict[str, Any]]:
+        if not self.game_time:
+            return []
+
+        pursuit_events: List[Dict[str, Any]] = []
+        for character in self.characters:
+            if not hasattr(character, "evaluate_personal_pursuits_daily"):
+                continue
+            updates = character.evaluate_personal_pursuits_daily(self)
+            for update in updates or []:
+                payload = dict(update)
+                payload.setdefault("character", character.name)
+                pursuit_events.append(payload)
+
+        if pursuit_events:
+            self.latest_personal_pursuit_events = pursuit_events
+        else:
+            self.latest_personal_pursuit_events = []
+        return pursuit_events
 
     # --- Governance & Campaign Management ---
 
@@ -5390,6 +7958,365 @@ class World:
                 )
                 promise["status"] = "enacted"
                 promise["fulfilled_day"] = self.game_time.current_day
+
+        self._process_leadership_management_cycle()
+
+    def _process_leadership_management_cycle(self) -> None:
+        if not self.game_time:
+            return
+
+        oversight_entries: List[Dict[str, Any]] = []
+        neglect_threshold = getattr(config, "LEADERSHIP_NEGLECT_THRESHOLD", 0.45)
+
+        for character in self.characters:
+            if not hasattr(character, "evaluate_leadership_oversight_daily"):
+                continue
+            if not character.holds_leadership_role():
+                continue
+
+            summary = character.evaluate_leadership_oversight_daily(self)
+            if not summary:
+                continue
+
+            oversight_score = float(summary.get("score", 0.0))
+            flags = summary.setdefault("flags", [])
+            neglected: List[str] = []
+            incidents: List[str] = []
+
+            for subordinate_name in getattr(character, "subordinates_names", []):
+                subordinate = self.get_character_by_name(subordinate_name)
+                if not subordinate:
+                    continue
+                subordinate.receive_oversight_update(character, oversight_score, self, summary)
+                if oversight_score < neglect_threshold:
+                    neglected.append(subordinate.name)
+                incident = subordinate.consider_misconduct_due_to_neglect(self, character, oversight_score)
+                if incident:
+                    incidents.append(incident.get("id"))
+
+            if neglected:
+                summary["neglected"] = neglected
+                if "neglect" not in flags:
+                    flags.append("neglect")
+            if incidents:
+                summary["incidents"] = incidents
+                if "incident" not in flags:
+                    flags.append("incident")
+
+            oversight_entries.append(summary)
+
+        oversight_entries.sort(key=lambda entry: entry.get("score", 0.0), reverse=True)
+        self.leadership_oversight_report = oversight_entries
+
+    # --- Military Command & Threats -------------------------------------------------
+
+    def _drain_resource_for_raid(self, resource_name: str, amount: int) -> int:
+        removed_total = 0
+        if amount <= 0:
+            return 0
+        for stockpile in self.stockpiles:
+            available = stockpile.inventory.get(resource_name, 0)
+            if available <= 0:
+                continue
+            take = min(amount - removed_total, available)
+            if take <= 0:
+                continue
+            success, removed = stockpile.remove_item(resource_name, take)
+            if success and removed:
+                removed_total += removed
+                if self.game_time:
+                    self.ledger.update_stockpile_record(
+                        stockpile.name,
+                        stockpile.inventory,
+                        self.game_time.current_day,
+                    )
+            if removed_total >= amount:
+                break
+        return removed_total
+
+    def process_military_daily(self) -> None:
+        if not self.game_time:
+            return
+
+        defaults = getattr(config, "MILITIA_STRUCTURE_DEFAULTS", {})
+        baseline = float(defaults.get("readiness_baseline", 0.3))
+        skill_weight = float(defaults.get("skill_weight", 0.08))
+        captain_weight = float(defaults.get("captain_skill_weight", 0.05))
+        oversight_weight = float(defaults.get("oversight_weight", 0.18))
+        persistence = max(0.0, min(0.98, float(defaults.get("persistence", 0.7))))
+        squad_size = max(1, int(defaults.get("squad_size", 6)))
+        minimum_squads = max(0, int(defaults.get("minimum_squads", 0)))
+        alert_threshold = float(defaults.get("alert_threshold", 0.45))
+        critical_threshold = float(defaults.get("critical_threshold", 0.25))
+        max_skill_benchmark = max(1.0, float(defaults.get("max_skill_benchmark", 6.0)))
+
+        commander_candidates = [
+            char for char in self.characters if getattr(char, "job", None) == "Militia Commander"
+        ]
+        commander: Optional['Character'] = None
+        if commander_candidates:
+            commander = max(
+                commander_candidates,
+                key=lambda c: (
+                    c.skills.get("Leadership", {}).get("level", 0),
+                    c.skills.get("Security", {}).get("level", 0),
+                    getattr(c, "net_worth", c.money),
+                ),
+            )
+
+        captains = [
+            char for char in self.characters if getattr(char, "job", None) == "Militia Captain"
+        ]
+        captains.sort(
+            key=lambda c: (
+                c.skills.get("Leadership", {}).get("level", 0),
+                c.skills.get("Security", {}).get("level", 0),
+            ),
+            reverse=True,
+        )
+
+        squad_roles = set(getattr(config, "MILITIA_SQUAD_ROLES", ["Militia Soldier", "Scout"]))
+        militia_members = [
+            char
+            for char in self.characters
+            if getattr(char, "job", None) in squad_roles and char is not commander
+        ]
+        militia_members.sort(
+            key=lambda c: (
+                c.skills.get("Security", {}).get("level", 0),
+                c.skills.get("Leadership", {}).get("level", 0),
+            ),
+            reverse=True,
+        )
+
+        total_squads = 0
+        if militia_members:
+            total_squads = math.ceil(len(militia_members) / squad_size)
+        total_squads = max(total_squads, minimum_squads)
+        if total_squads == 0 and (commander or captains):
+            total_squads = max(1, len(captains))
+
+        squads: List[Dict[str, Any]] = []
+        if total_squads:
+            for idx in range(total_squads):
+                assigned_captain: Optional['Character'] = None
+                if captains:
+                    assigned_captain = captains[idx % len(captains)]
+                squads.append(
+                    {
+                        "id": f"Squad {idx + 1}",
+                        "captain": assigned_captain,
+                        "members": [],
+                    }
+                )
+
+            for idx, member in enumerate(militia_members):
+                squad = squads[idx % len(squads)]
+                squad["members"].append(member)
+
+        militia_alerts: List[str] = []
+        if not commander:
+            militia_alerts.append("No militia commander appointed.")
+        if commander and not captains:
+            militia_alerts.append("Militia commander lacks captains to direct squads.")
+        if not commander and captains:
+            militia_alerts.append("Captains are operating without a commander.")
+
+        commander_oversight = getattr(commander, "leadership_oversight_score", 0.0) if commander else 0.0
+        squad_summaries: List[Dict[str, Any]] = []
+        readiness_values: List[float] = []
+
+        for squad in squads:
+            squad_id = squad["id"]
+            members: List['Character'] = squad.get("members", [])
+            captain_obj: Optional['Character'] = squad.get("captain")
+            average_security = 0.0
+            if members:
+                security_total = sum(member.skills.get("Security", {}).get("level", 0) for member in members)
+                average_security = security_total / len(members)
+            normalized_security = min(1.0, average_security / max_skill_benchmark)
+            captain_security = 0.0
+            captain_oversight = 0.0
+            if captain_obj:
+                captain_security = min(
+                    1.0,
+                    captain_obj.skills.get("Security", {}).get("level", 0) / max_skill_benchmark,
+                )
+                captain_oversight = getattr(captain_obj, "leadership_oversight_score", 0.0)
+
+            base_component = baseline + (normalized_security * skill_weight) + (captain_security * captain_weight)
+            oversight_component = (commander_oversight * oversight_weight * 0.6) + (captain_oversight * oversight_weight * 0.4)
+            fresh_score = base_component + oversight_component
+            previous = self._militia_readiness.get(squad_id, baseline)
+            readiness = previous * persistence + fresh_score * (1.0 - persistence)
+            readiness = max(0.0, min(1.0, readiness))
+            self._militia_readiness[squad_id] = readiness
+
+            status = "ready"
+            if readiness < critical_threshold:
+                status = "critical"
+                militia_alerts.append(f"{squad_id} readiness critical ({readiness:.0%}).")
+            elif readiness < alert_threshold:
+                status = "undermanned"
+                militia_alerts.append(f"{squad_id} readiness low ({readiness:.0%}).")
+            elif readiness < 0.6:
+                status = "training"
+
+            readiness_values.append(readiness)
+            squad_summary = {
+                "id": squad_id,
+                "captain": captain_obj.name if captain_obj else None,
+                "members": [member.name for member in members],
+                "size": len(members),
+                "readiness": readiness,
+                "status": status,
+            }
+            squad_summaries.append(squad_summary)
+
+        captain_summaries: List[Dict[str, Any]] = []
+        for captain_obj in captains:
+            captain_squads = [
+                squad["id"]
+                for squad in squad_summaries
+                if squad.get("captain") == captain_obj.name
+            ]
+            if not captain_squads and squads:
+                continue
+            captain_readiness = [
+                squad["readiness"] for squad in squad_summaries if squad.get("captain") == captain_obj.name
+            ]
+            average_readiness = sum(captain_readiness) / len(captain_readiness) if captain_readiness else 0.0
+            captain_summaries.append(
+                {
+                    "name": captain_obj.name,
+                    "oversight": getattr(captain_obj, "leadership_oversight_score", 0.0),
+                    "leadership": captain_obj.skills.get("Leadership", {}).get("level", 0),
+                    "security": captain_obj.skills.get("Security", {}).get("level", 0),
+                    "squads": captain_squads,
+                    "readiness": average_readiness,
+                }
+            )
+
+        overall_readiness = sum(readiness_values) / len(readiness_values) if readiness_values else 0.0
+
+        raid_profile = getattr(config, "ENEMY_RAID_PROFILE", {})
+        base_chance = float(raid_profile.get("base_chance", 0.02))
+        readiness_factor = float(raid_profile.get("readiness_factor", 0.5))
+        raid_difficulty = float(raid_profile.get("difficulty", 1.0))
+        severity_weights: Dict[str, float] = dict(raid_profile.get("severity_weights", {}))
+        severity_difficulty: Dict[str, float] = dict(raid_profile.get("severity_difficulty", {}))
+        resource_targets: List[str] = list(raid_profile.get("resource_targets", []))
+        loss_profiles: Dict[str, Tuple[int, int]] = dict(raid_profile.get("losses", {}))
+        max_log_entries = int(raid_profile.get("max_log_entries", 6))
+
+        adjusted_chance = base_chance
+        if overall_readiness > 0:
+            adjusted_chance *= max(0.05, 1.0 - overall_readiness * readiness_factor)
+        else:
+            adjusted_chance *= 1.2
+        if not commander or not captains:
+            adjusted_chance *= 1.25
+        if not squads:
+            adjusted_chance *= 1.4
+
+        enemy_activity_entries: List[Dict[str, Any]] = []
+        raid_trigger = self._military_rng.random() if adjusted_chance > 0 else 1.0
+        if raid_trigger < adjusted_chance:
+            severity_pick = "skirmish"
+            if severity_weights:
+                total_weight = sum(max(weight, 0.0) for weight in severity_weights.values())
+                roll = self._military_rng.uniform(0.0, total_weight) if total_weight > 0 else 0.0
+                cumulative = 0.0
+                for label, weight in severity_weights.items():
+                    cumulative += max(weight, 0.0)
+                    if roll <= cumulative:
+                        severity_pick = label
+                        break
+            loss_range = loss_profiles.get(severity_pick, (2, 5))
+            loss_amount = int(
+                self._military_rng.randint(
+                    max(0, int(loss_range[0])),
+                    max(max(0, int(loss_range[0])), int(loss_range[1])),
+                )
+            )
+            severity_pressure = severity_difficulty.get(severity_pick, 1.0)
+            defending_strength = overall_readiness * max(1, len(squads))
+            raid_threshold = severity_pressure * raid_difficulty
+            outcome = "repelled" if defending_strength >= raid_threshold else "breached"
+            plundered: Dict[str, int] = {}
+
+            if outcome == "breached" and resource_targets:
+                targets = resource_targets[:]
+                self._military_rng.shuffle(targets)
+                for resource in targets[:2]:
+                    removed = self._drain_resource_for_raid(resource, max(1, loss_amount // 2))
+                    if removed > 0:
+                        plundered[resource] = removed
+            elif outcome == "repelled":
+                loss_amount = max(0, loss_amount - 1)
+
+            raid_entry = {
+                "day": self.game_time.current_day,
+                "severity": severity_pick,
+                "outcome": outcome,
+                "losses": loss_amount,
+            }
+            if plundered:
+                raid_entry["plundered"] = plundered
+
+            enemy_activity_entries.append(raid_entry)
+            summary = (
+                f"Enemy {severity_pick} {'repelled' if outcome == 'repelled' else 'raid breaches defenses'}"
+            )
+            if outcome == "repelled":
+                detail = f"Militia drives off attackers with {loss_amount} wounded."
+            else:
+                if plundered:
+                    loot = ", ".join(f"{amt} {res}" for res, amt in plundered.items())
+                    detail = f"Raiders escape with {loot}."
+                else:
+                    detail = "Raiders caused damage before withdrawing."
+            self.add_event_log_message(f"{summary}: {detail}")
+            militia_alerts.append(summary)
+
+            self.enemy_activity_log.append(raid_entry)
+            if len(self.enemy_activity_log) > max(1, max_log_entries):
+                self.enemy_activity_log = self.enemy_activity_log[-max_log_entries:]
+            self._last_enemy_activity_day = self.game_time.current_day
+
+        if not enemy_activity_entries and self.enemy_activity_log:
+            recent_entries = [entry for entry in self.enemy_activity_log if entry.get("day") == self.game_time.current_day]
+            if recent_entries:
+                enemy_activity_entries.extend(deepcopy(recent_entries))
+
+        self.military_structure = {
+            "commander": (
+                {
+                    "name": commander.name,
+                    "oversight": commander_oversight,
+                    "leadership": commander.skills.get("Leadership", {}).get("level", 0) if commander else 0,
+                    "security": commander.skills.get("Security", {}).get("level", 0) if commander else 0,
+                    "subordinates": len(getattr(commander, "subordinates_names", [])) if commander else 0,
+                }
+                if commander
+                else None
+            ),
+            "captains": captain_summaries,
+            "squads": squad_summaries,
+            "readiness": overall_readiness,
+            "alerts": militia_alerts,
+            "enemy_activity": (
+                deepcopy(enemy_activity_entries)
+                if enemy_activity_entries
+                else deepcopy(self.enemy_activity_log[-3:])
+                if self.enemy_activity_log
+                else []
+            ),
+            "updated_day": self.game_time.current_day,
+        }
+
+    def get_military_snapshot(self) -> Dict[str, Any]:
+        return deepcopy(self.military_structure)
 
     def manage_economy(self):
         if not self.game_time:

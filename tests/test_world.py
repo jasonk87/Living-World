@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections import Counter
+from copy import deepcopy
 from typing import Any, Dict, List
 from unittest.mock import patch
 
@@ -26,7 +28,11 @@ def _residential_building(location: tuple[int, int] = (0, 0), capacity: int = 4)
         location=location,
         size=(1, 1),
         required_resources={},
-        functionality={"provides_shelter": capacity, "tags": ["residential"]},
+        functionality={
+            "provides_shelter": capacity,
+            "tags": ["residential"],
+            "wealth_tier": "modest",
+        },
         required_skill={},
     )
     building.is_operational = True
@@ -45,6 +51,46 @@ def _standard_needs() -> Dict[str, int]:
     }
 
 
+def test_initial_landscape_has_resources_and_variety():
+    game_time = Time(ticks_per_day=config.TICKS_PER_DAY)
+    world = World(grid_size=(24, 24), game_time_ref=game_time, map_seed=1337)
+
+    tile_counter: Counter[str] = Counter()
+    for x in range(world.grid_size[0]):
+        for y in range(world.grid_size[1]):
+            tile_counter[world.grid[x][y]] += 1
+
+    assert len([tile for tile, count in tile_counter.items() if count > 0]) > 1
+    assert tile_counter.get("Grass", 0) < world.grid_size[0] * world.grid_size[1]
+
+    resource_snapshot = world.get_resource_nodes_snapshot()
+    resource_types = {node.get("resource") for node in resource_snapshot}
+    for expected in {"Wood", "Stone", "Herbs", "Food"}:
+        assert expected in resource_types
+
+    landscape_profile = world.get_landscape_profile()
+    assert landscape_profile.get("resources", {}).get("Wood", 0) >= 1
+    assert landscape_profile.get("reserved", 0) > 0
+
+
+def test_reserved_clearing_tiles_are_walkable():
+    radius = getattr(config, "MAP_RESERVED_CLEARING_RADIUS", 0)
+    if radius <= 0:
+        pytest.skip("No reserved clearing configured")
+
+    game_time = Time(ticks_per_day=config.TICKS_PER_DAY)
+    world = World(grid_size=(20, 20), game_time_ref=game_time, map_seed=2024)
+    center = (world.grid_size[0] // 2, world.grid_size[1] // 2)
+
+    for dx in range(-radius, radius + 1):
+        for dy in range(-radius, radius + 1):
+            x = center[0] + dx
+            y = center[1] + dy
+            if not (0 <= x < world.grid_size[0] and 0 <= y < world.grid_size[1]):
+                continue
+            assert world.grid[x][y] not in config.IMPASSABLE_TERRAINS
+
+
 def test_update_day_phase_records_single_entry_per_phase():
     world, game_time = _make_world()
     target_phase = config.DAY_PHASE_CONFIG[2]
@@ -61,6 +107,31 @@ def test_update_day_phase_records_single_entry_per_phase():
     # Same phase within the same day should not spam the log/history.
     assert len(world.event_log) == initial_log_count
     assert world.phase_history.count(world.current_phase) == 1
+
+
+def test_healthcare_report_tracks_vitals_and_events():
+    world, game_time = _make_world()
+    patient_needs = _standard_needs()
+    patient_needs.update({"Hunger": 20, "Thirst": 25, "Energy": 35, "Safety": 35})
+    patient = Character(
+        name="Orin",
+        personality="Stoic",
+        traits=[],
+        skills={},
+        needs=patient_needs,
+    )
+    world.add_character(patient)
+    patient.health_profile["vitality"] = 48.0
+    patient.health_profile["immune_resilience"] = 0.22
+
+    with patch("random.random", side_effect=[0.0, 1.0]), patch("random.uniform", return_value=3.1):
+        world.process_healthcare_daily()
+
+    report = world.latest_healthcare_report
+    assert report.get("health_events")
+    assert any(evt.get("type") == "fell_ill" for evt in report.get("health_events", []))
+    assert report.get("average_vitality") is not None
+    assert report.get("new_cases")
 
 
 @patch("random.random", return_value=0.99)
@@ -196,6 +267,283 @@ def test_population_migration_when_surplus_resources_exist():
     assert report["population_snapshot"]["population"] == len(world.characters)
 
 
+def test_building_tile_layout_used_for_map_tiles():
+    world, _ = _make_world()
+    layout = [["WoodWall", "Bedroll"], ["Hearth", "Bed"]]
+    building = Building(
+        structure_type="House",
+        display_name="Layout House",
+        location=(1, 2),
+        size=(2, 2),
+        required_resources={},
+        functionality={"provides_shelter": 2, "tags": ["residential"], "wealth_tier": "modest"},
+        required_skill={},
+        tile_layout=layout,
+    )
+    building.is_operational = True
+    world.add_building(building)
+
+    assert world.get_tile(1, 2) == "WoodWall"
+    assert world.get_tile(2, 2) == "Bedroll"
+    assert world.get_tile(1, 3) == "Hearth"
+    assert world.get_tile(2, 3) == "Bed"
+
+
+def test_leadership_cycle_records_commendable_oversight():
+    world, game_time = _make_world()
+    game_time.current_day = 3
+
+    mayor = Character(
+        name="Alina",
+        personality="Charismatic",
+        traits=["Diligent"],
+        skills={"Leadership": 3},
+        job="Mayor",
+        needs=_standard_needs(),
+    )
+    steward = Character(
+        name="Bren",
+        personality="Calm",
+        traits=[],
+        skills={},
+        job="Steward",
+        needs=_standard_needs(),
+        supervisor_name=mayor.name,
+    )
+
+    world.add_character(mayor)
+    world.add_character(steward)
+    mayor.subordinates_names.append(steward.name)
+    mayor.relationships[steward.name] = 20
+
+    mayor._record_management_activity(world, "rounds", 1.2)
+    mayor._record_management_activity(world, "briefing", 0.8)
+
+    world._process_leadership_management_cycle()
+
+    assert len(world.leadership_oversight_report) >= 1
+    mayor_entry = next((entry for entry in world.leadership_oversight_report if entry["leader"] == "Alina"), None)
+    assert mayor_entry is not None
+    assert mayor_entry["role"] == "Mayor"
+    assert mayor_entry["actions"] == pytest.approx(2.0)
+    assert "commendable" in mayor_entry["flags"]
+    assert mayor.leadership_oversight_score == pytest.approx(mayor_entry["score"])
+    assert mayor_entry.get("notes") == ["rounds", "briefing"]
+
+
+@patch("random.random", return_value=0.0)
+def test_leadership_cycle_flags_neglect_and_records_incident(mock_random):  # noqa: ARG001
+    world, game_time = _make_world()
+    game_time.current_day = 6
+
+    steward = Character(
+        name="Garrick",
+        personality="Lenient",
+        traits=["Lazy", "Careless"],
+        skills={},
+        job="Steward",
+        needs=_standard_needs(),
+    )
+    worker = Character(
+        name="Hale",
+        personality="Rebellious",
+        traits=["Greedy"],
+        skills={},
+        job="Laborer",
+        needs=_standard_needs(),
+        supervisor_name=steward.name,
+        money=0,
+    )
+
+    world.add_character(steward)
+    world.add_character(worker)
+    steward.subordinates_names.append(worker.name)
+    steward.relationships[worker.name] = -80
+
+    world._process_leadership_management_cycle()
+
+    assert len(world.leadership_oversight_report) == 1
+    entry = world.leadership_oversight_report[0]
+    assert entry["leader"] == "Garrick"
+    assert "neglect" in entry["flags"]
+    assert "incident" in entry["flags"]
+    assert entry.get("incidents")
+    assert any(crime.get("suspect") == worker.name for crime in world.pending_crimes)
+    assert worker.supervisor_oversight == pytest.approx(entry["score"])
+    assert worker.money > 0
+
+
+@patch("random.choice", side_effect=lambda options: options[0])
+def test_household_evening_generates_story_and_bonuses(mock_choice):  # noqa: ARG001
+    world, game_time = _make_world()
+    game_time.current_day = 5
+    layout = [["WoodWall", "Bedroll"], ["Hearth", "Bed"]]
+    building = Building(
+        structure_type="House",
+        display_name="Hearthstead",
+        location=(2, 2),
+        size=(2, 2),
+        required_resources={},
+        functionality={"provides_shelter": 2, "tags": ["residential"], "wealth_tier": "modest"},
+        required_skill={},
+        tile_layout=layout,
+        household_style="hearthfire",
+    )
+    building.is_operational = True
+    world.add_building(building)
+
+    resident = Character(
+        name="Rhea",
+        personality="Warm",
+        traits=["Compassionate"],
+        skills={},
+        needs=_standard_needs(),
+        job="Farmer",
+    )
+    world.add_character(resident)
+    building.add_occupant(resident.name)
+    resident.home_location = building.location
+
+    baseline_mood = resident.mood_score
+    baseline_belonging = resident.needs.get("Belonging", 0)
+
+    snapshot = world.get_housing_snapshot()
+    report: Dict[str, Any] = {}
+    world._resolve_household_evenings(snapshot, report)
+
+    assert world._latest_household_vignettes, "Expected a household vignette to be recorded."
+    story = world._latest_household_vignettes[0]
+    assert story["building"] == "Hearthstead"
+    assert resident.mood_score > baseline_mood
+    assert resident.needs["Belonging"] >= baseline_belonging
+    assert "housing_highlights" in report
+
+
+def test_household_comfort_cycle_consumes_resources_and_updates_mood():
+    world, game_time = _make_world()
+    stockpile = Stockpile(
+        name="CentralStore",
+        x=0,
+        y=0,
+        width=1,
+        height=1,
+        allowed_resources=None,
+        total_capacity=200,
+    )
+    stockpile.add_item("Wood", 12)
+    stockpile.add_item("Furniture", 4)
+    world.add_stockpile(stockpile)
+
+    cottage = _residential_building(location=(2, 2), capacity=2)
+    cottage.household_style = "hearthfire"
+    cottage.amenities = ["Shared hearth"]
+    world.add_building(cottage)
+
+    resident = Character(
+        name="June",
+        personality="Cheerful",
+        traits=[],
+        skills={},
+        needs=_standard_needs(),
+    )
+    world.add_character(resident)
+    world.claim_residential_spot(resident)
+
+    resident.mood_score = config.MOOD_SCORE_NEUTRAL_START
+    initial_mood = resident.mood_score
+    game_time.current_day = 1
+
+    report: Dict[str, Any] = {}
+    updates = world._maintain_household_comforts(report)
+
+    hearth_events = [entry for entry in updates if entry.get("rule") == "hearth_fire"]
+    assert hearth_events, "Expected hearth comfort routine to resolve."
+    hearth_event = hearth_events[0]
+    assert 0 < hearth_event["withdrawn"] <= hearth_event["required"]
+    assert resident.mood_score > initial_mood
+    assert cottage.comfort_score > 0
+    assert report["household_comfort_summary"]["satisfied"] >= 1
+    assert stockpile.inventory.get("Wood", 0) < 12
+    assert any("warm hearth" in memory.lower() for memory in resident.memory)
+
+    stockpile.inventory["Wood"] = 0
+    previous_mood = resident.mood_score
+    game_time.current_day += 1
+
+    report_shortage: Dict[str, Any] = {}
+    updates_shortage = world._maintain_household_comforts(report_shortage)
+    hearth_follow_up = [entry for entry in updates_shortage if entry.get("rule") == "hearth_fire"]
+    assert hearth_follow_up, "Expected hearth comfort routine to be evaluated again."
+    outcome = hearth_follow_up[0]["outcome"]
+    assert outcome in {"partial", "missed"}
+    assert resident.mood_score <= previous_mood
+    summary = report_shortage["household_comfort_summary"]
+    assert summary["partial"] + summary["missed"] >= 1
+
+
+@patch("random.choice", side_effect=lambda options: options[0])
+def test_neighborhood_gathering_records_story(mock_choice):  # noqa: ARG001
+    world, game_time = _make_world()
+    game_time.current_day = 9
+
+    names = ["Caro", "Devi", "Eamon"]
+    baseline_moods = {}
+    buildings: List[Building] = []
+
+    for idx, name in enumerate(names):
+        building = Building(
+            structure_type="House",
+            display_name=f"Lane Home {idx + 1}",
+            location=(idx * 2, 3),
+            size=(2, 2),
+            required_resources={},
+            functionality={"provides_shelter": 2, "tags": ["residential"], "wealth_tier": "modest"},
+            required_skill={},
+            tile_layout=[["WoodWall", "Bedroll"], ["Hearth", "Bed"]],
+        )
+        building.is_operational = True
+        world.add_building(building)
+        buildings.append(building)
+
+        resident = Character(
+            name=name,
+            personality="Cheerful",
+            traits=[],
+            skills={},
+            job="Laborer",
+            needs=_standard_needs(),
+        )
+        resident.net_worth = 50 + (len(names) - idx) * 5
+        world.add_character(resident)
+        building.add_occupant(resident.name)
+        resident.home_location = building.location
+        baseline_moods[name] = resident.mood_score
+
+    snapshot = world.get_housing_snapshot()
+    report: Dict[str, Any] = {}
+    baseline_spirit = world.community_spirit
+
+    with patch.object(config, "NEIGHBORHOOD_GATHERING_BASE_CHANCE", 1.0), patch(
+        "random.random", return_value=0.0
+    ):
+        gatherings = world._resolve_neighborhood_gatherings(snapshot, report)
+
+    assert gatherings, "Expected a neighborhood gathering to be recorded."
+    story = gatherings[0]
+    assert story["host"] in {building.display_name for building in buildings}
+    assert len(story["attendees"]) == len(names)
+    assert snapshot["neighborhood_gatherings"], "Snapshot should include neighborhood gatherings"
+    assert world._latest_neighborhood_gatherings, "World should track recent neighborhood gatherings"
+    assert "neighborhood_gatherings" in report
+
+    for name in names:
+        character = world.get_character_by_name(name)
+        assert character is not None
+        assert character.mood_score >= baseline_moods[name]
+
+    assert world.community_spirit >= baseline_spirit
+
+
 def test_population_departure_under_hardship_and_low_mood():
     world, _ = _make_world()
     names = ["Hard Luck", "Ally", "Brooke", "Cedar"]
@@ -224,6 +572,60 @@ def test_population_departure_under_hardship_and_low_mood():
     assert world.population_stats["departures_today"] == 1
     assert "Hard Luck" not in [char.name for char in world.characters]
     assert any(event["type"] == "departure" for event in report.get("population_events", []))
+
+
+def test_estate_allocation_matches_wealth_tiers():
+    world, _ = _make_world()
+
+    comfortable = Character(
+        name="Clara",
+        personality="Pragmatic",
+        traits=[],
+        skills={},
+        job="Craftswoman",
+        needs=_standard_needs(),
+    )
+    comfortable.wealth_status = "comfortable"
+
+    prosperous = Character(
+        name="Merin",
+        personality="Ambitious",
+        traits=[],
+        skills={},
+        job="Merchant",
+        needs=_standard_needs(),
+    )
+    prosperous.wealth_status = "prosperous"
+
+    noble = Character(
+        name="Lord Bren",
+        personality="Stoic",
+        traits=[],
+        skills={},
+        job="Noble",
+        needs=_standard_needs(),
+        rank="Noble Lord",
+    )
+    noble.wealth_status = "prosperous"
+
+    world.add_character(comfortable)
+    world.add_character(prosperous)
+    world.add_character(noble)
+
+    report: Dict[str, Any] = {"food_deficit": 0, "water_deficit": 0}
+    world._evaluate_housing_daily(report)
+
+    assignments = report["housing"]["assignments"]
+    assert assignments[comfortable.name].startswith("Stone Cottage")
+    assert assignments[prosperous.name].startswith("Merchant Manor")
+    assert assignments[noble.name].startswith("Noble Estate")
+
+    tiers = {
+        building.functionality.get("wealth_tier")
+        for building in world.buildings
+        if world._is_residential(building)
+    }
+    assert {"comfortable", "prosperous", "noble"}.issubset(tiers)
 
 
 def test_cultural_snapshot_lists_upcoming_events():
@@ -573,6 +975,95 @@ def test_manufacturing_crews_surface_shortages():
     assert report["alerts"] and any("Lumber" in alert for alert in report["alerts"])
     assert "inputs_consumed" not in carpentry_entry or not carpentry_entry["inputs_consumed"]
 
+
+def test_business_industry_consumes_inputs_and_reports():
+    world, _ = _make_world()
+
+    stockpile = Stockpile(
+        "Central",
+        0,
+        0,
+        2,
+        2,
+        allowed_resources=None,
+    )
+    world.add_stockpile(stockpile)
+    stockpile.add_item("Wood", 12)
+
+    owner = Character(
+        name="Mae",
+        personality="Driven",
+        traits=[],
+        skills={"Woodcutting": 2, "Carpentry": 3},
+        job="Sawyer",
+        needs=_standard_needs(),
+    )
+    owner.money = 100
+    world.add_character(owner)
+
+    template = {
+        "key": "test_lumber",
+        "display_name": "Test Lumberyard",
+        "industry": "lumberworks",
+        "startup_cost": 0,
+        "base_capital": 10,
+        "revenue_range": (0, 0),
+    }
+    business = world.launch_business(owner, template=template)
+    assert business is not None
+
+    report: Dict[str, Any] = {}
+    events = world._update_businesses(report)
+    assert events
+    event = next(evt for evt in events if evt["id"] == business["id"])
+    industry_report = event.get("industry_report")
+    assert industry_report
+    assert industry_report.get("cycles", 0) >= 1
+    assert industry_report.get("inputs_consumed", {}).get("Wood", 0) > 0
+    assert industry_report.get("outputs_created", {}).get("Lumber", 0) >= 1
+    assert stockpile.inventory.get("Wood", 0) < 12
+    assert not report.get("business_supply_alerts")
+
+
+def test_business_industry_shortage_creates_alert():
+    world, _ = _make_world()
+
+    owner = Character(
+        name="Darin",
+        personality="Steady",
+        traits=[],
+        skills={"Woodcutting": 1},
+        job="Sawyer",
+        needs=_standard_needs(),
+    )
+    owner.money = 50
+    world.add_character(owner)
+
+    template = {
+        "key": "test_lumber",
+        "display_name": "Test Lumberyard",
+        "industry": "lumberworks",
+        "startup_cost": 0,
+        "base_capital": 5,
+        "revenue_range": (0, 0),
+    }
+    business = world.launch_business(owner, template=template)
+    assert business is not None
+
+    report: Dict[str, Any] = {}
+    events = world._update_businesses(report)
+    assert events
+    event = next(evt for evt in events if evt["id"] == business["id"])
+    industry_report = event.get("industry_report")
+    assert industry_report
+    assert industry_report.get("cycles", 0) == 0
+    alerts = report.get("business_supply_alerts")
+    assert alerts
+    alert = next(alert for alert in alerts if alert["id"] == business["id"])
+    assert alert["shortages"].get("Wood", 0) > 0
+    assert any("Awaiting" in note for note in industry_report.get("notes", []))
+
+
 def test_family_arrival_event_and_profile():
     world, _ = _make_world()
     alice = Character(
@@ -845,3 +1336,191 @@ def test_interview_result_boosts_case_evidence():
 
     assert updated["evidence_strength"] > base_strength
     assert updated["interview_statements"]
+
+
+def test_dissolve_union_tracks_ex_partners():
+    world, _ = _make_world()
+    alice = Character(
+        name="Alice",
+        personality="Romantic",
+        traits=["Affectionate"],
+        skills={},
+        job="Tailor",
+        needs=_standard_needs(),
+    )
+    borin = Character(
+        name="Borin",
+        personality="Stoic",
+        traits=["Loyal"],
+        skills={},
+        job="Smith",
+        needs=_standard_needs(),
+    )
+    world.add_character(alice)
+    world.add_character(borin)
+
+    assert world.register_union(alice.name, borin.name)
+    assert borin.name in alice.romantic_partners
+    assert alice.name in borin.romantic_partners
+
+    world.dissolve_union(alice.name, borin.name, reason="irreconcilable", divorce=True)
+
+    assert borin.name not in alice.get_romantic_partners()
+    assert alice.name not in borin.get_romantic_partners()
+    assert borin.name in alice.ex_partners
+    assert alice.name in borin.ex_partners
+    assert not alice.family_roles.get("partners")
+    assert not borin.family_roles.get("partners")
+
+
+def test_process_family_dynamics_starts_romance():
+    world, _ = _make_world()
+    aisling = Character(
+        name="Aisling",
+        personality="Romantic",
+        traits=["Charming"],
+        skills={},
+        job="Baker",
+        needs=_standard_needs(),
+    )
+    borin = Character(
+        name="Borin",
+        personality="Dreamer",
+        traits=["Loyal"],
+        skills={},
+        job="Farmer",
+        needs=_standard_needs(),
+    )
+    world.add_character(aisling)
+    world.add_character(borin)
+
+    aisling.relationships[borin.name] = 80
+    borin.relationships[aisling.name] = 78
+
+    with patch("random.random", return_value=0.0):
+        family_events = world.process_family_dynamics_daily()
+
+    assert any(event.get("type") == "romance_started" for event in family_events)
+    assert borin.name in aisling.active_romances
+    assert aisling.name in borin.active_romances
+
+
+def test_world_daily_report_includes_personal_pursuits():
+    world, _ = _make_world()
+    resident = Character(
+        name="Caro",
+        personality="Curious",
+        traits=["Resourceful"],
+        skills={},
+        needs=_standard_needs(),
+    )
+    world.add_character(resident)
+
+    assert resident.personal_pursuits
+
+    pursuit = resident.personal_pursuits[0]
+    threshold = getattr(config, "PERSONAL_PURSUIT_LIFE_EVENT_PROGRESS", 1.0)
+    pursuit["progress"] = threshold - 0.05
+    pursuit["progress_per_day"] = threshold
+    pursuit["affinity"] = 2.0
+
+    world.process_daily_economy()
+
+    report = world.last_daily_economic_report
+    assert "personal_pursuits" in report
+    assert world.latest_personal_pursuit_events
+    assert any(event.get("type") == "pursuit_engaged" for event in report["personal_pursuits"])
+
+
+def test_military_process_builds_chain_and_readiness():
+    world, game_time = _make_world()
+    game_time.current_day = 4
+
+    commander = Character(
+        name="Darin",
+        personality="Resolute",
+        traits=[],
+        skills={"Leadership": 5, "Security": 3},
+        job="Militia Commander",
+    )
+    captain = Character(
+        name="Lysa",
+        personality="Calm",
+        traits=[],
+        skills={"Leadership": 4, "Security": 4},
+        job="Militia Captain",
+    )
+    soldier = Character(
+        name="Holt",
+        personality="Stoic",
+        traits=[],
+        skills={"Security": 3},
+        job="Militia Soldier",
+    )
+    scout = Character(
+        name="Risa",
+        personality="Bold",
+        traits=[],
+        skills={"Security": 2},
+        job="Scout",
+    )
+
+    for character in (commander, captain, soldier, scout):
+        world.add_character(character)
+
+    commander.leadership_oversight_score = 0.6
+    captain.leadership_oversight_score = 0.52
+
+    world.process_military_daily()
+    snapshot = world.get_military_snapshot()
+
+    assert snapshot["commander"]["name"] == commander.name
+    captain_names = [entry["name"] for entry in snapshot["captains"]]
+    assert captain.name in captain_names
+    assert snapshot["squads"], "Expected at least one squad to be formed"
+    assert snapshot["readiness"] > 0
+    assert any(squad["size"] >= 1 for squad in snapshot["squads"])
+
+
+def test_enemy_raid_logs_activity_when_forced(monkeypatch):
+    world, game_time = _make_world()
+    game_time.current_day = 7
+
+    commander = Character(
+        name="Serra",
+        personality="Resolute",
+        traits=[],
+        skills={"Leadership": 3, "Security": 2},
+        job="Militia Commander",
+    )
+    captain = Character(
+        name="Bryn",
+        personality="Stoic",
+        traits=[],
+        skills={"Leadership": 2, "Security": 3},
+        job="Militia Captain",
+    )
+    soldier = Character(
+        name="Olan",
+        personality="Steady",
+        traits=[],
+        skills={"Security": 3},
+        job="Militia Soldier",
+    )
+
+    for character in (commander, captain, soldier):
+        world.add_character(character)
+
+    forced_profile = deepcopy(config.ENEMY_RAID_PROFILE)
+    forced_profile["base_chance"] = 1.0
+    forced_profile["readiness_factor"] = 0.0
+    forced_profile["severity_weights"] = {"raid": 1.0}
+    forced_profile["losses"] = {"raid": (1, 1)}
+    monkeypatch.setattr(config, "ENEMY_RAID_PROFILE", forced_profile, raising=False)
+
+    world.process_military_daily()
+    snapshot = world.get_military_snapshot()
+
+    assert snapshot["enemy_activity"], "Enemy activity should be recorded when raids are forced"
+    entry = snapshot["enemy_activity"][0]
+    assert entry["severity"] == "raid"

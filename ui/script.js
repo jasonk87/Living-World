@@ -2,12 +2,15 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Element Selectors ---
     const gameStatusHeader = document.getElementById('game-status-header');
     const mapStage = document.getElementById('map-stage');
+    const mapCanvas = document.getElementById('map-canvas');
     const mapViewport = document.getElementById('map-viewport');
     const mapGridDiv = document.getElementById('game-map');
     const mapCharactersLayer = document.getElementById('map-characters');
     const eventLogDiv = document.getElementById('event-log');
-    const pauseButton = document.getElementById('pause-button');
-    const speedButtons = document.querySelectorAll('.speed-button');
+    const playbackButton = document.getElementById('playback-button');
+    const playbackIcon = document.getElementById('playback-icon');
+    const playbackStateLabel = document.getElementById('playback-state-label');
+    const playbackSpeedLabel = document.getElementById('playback-speed-label');
     const overlayButtons = document.querySelectorAll('.overlay-toggle');
     const overlayPanels = document.querySelectorAll('.overlay-panel');
     const panelCloseButtons = document.querySelectorAll('.panel-close');
@@ -26,15 +29,30 @@ document.addEventListener('DOMContentLoaded', () => {
     const hudRationsValue = document.getElementById('hud-rations-value');
     const hudHydrationValue = document.getElementById('hud-hydration-value');
     const hudHousingValue = document.getElementById('hud-housing-value');
+    const hudResourceWoodValue = document.getElementById('hud-resource-wood-value');
+    const hudResourceStoneValue = document.getElementById('hud-resource-stone-value');
+    const hudResourceFoodValue = document.getElementById('hud-resource-food-value');
+    const hudResourceHerbsValue = document.getElementById('hud-resource-herbs-value');
+    const hudResourceWaterValue = document.getElementById('hud-resource-water-value');
+    const hudBadgeWorld = document.getElementById('hud-badge-world');
+    const hudBadgeEconomy = document.getElementById('hud-badge-economy');
+    const hudBadgeCivic = document.getElementById('hud-badge-civic');
+    const hudBadgeHealth = document.getElementById('hud-badge-health');
+    const hudBadgeFamilies = document.getElementById('hud-badge-families');
     const economyMarketList = document.getElementById('economy-market-list');
     const economyPressureList = document.getElementById('economy-pressure-list');
     const economyWageList = document.getElementById('economy-wage-list');
+    const economyIndustryList = document.getElementById('economy-industry-list');
     const economyCrimeNote = document.getElementById('economy-crime-note');
     const economyCampaignList = document.getElementById('economy-campaign-list');
     const environmentModifierList = document.getElementById('environment-modifier-list');
     const rumorFeedList = document.getElementById('rumor-feed-list');
     const housingStatusList = document.getElementById('housing-status-list');
+    const housingStoryList = document.getElementById('housing-story-list');
+    const housingComfortList = document.getElementById('housing-comfort-list');
+    const neighborhoodGatheringList = document.getElementById('neighborhood-gathering-list');
     const resourceNodeList = document.getElementById('resource-node-list');
+    const landscapeSummaryList = document.getElementById('landscape-summary-list');
     const populationEventList = document.getElementById('population-event-list');
     const weatherEventNote = document.getElementById('environment-weather-event');
     const workCrewNote = document.getElementById('work-crew-note');
@@ -49,8 +67,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const lawCodeList = document.getElementById('law-code-list');
     const lawPetitionList = document.getElementById('law-petition-list');
     const lawInvestigationList = document.getElementById('law-investigation-list');
+    const leadershipOversightList = document.getElementById('leadership-oversight-list');
+    const militaryChainList = document.getElementById('military-chain-list');
+    const militarySquadList = document.getElementById('military-squad-list');
+    const militaryActivityList = document.getElementById('military-activity-list');
+    const healthOverviewList = document.getElementById('health-overview-list');
+    const healthAtRiskList = document.getElementById('health-at-risk-list');
+    const healthRecoveryList = document.getElementById('health-recovery-list');
+    const healthEventsList = document.getElementById('health-event-list');
     const characterSearchInput = document.getElementById('character-search');
     const infoPanel = document.getElementById('info-panel');
+    const hudPopoverButtons = document.querySelectorAll('[data-popover-target]');
+    const hudPopovers = document.querySelectorAll('.hud-popover');
+    const hudPopoverContainer = document.getElementById('hud-popover-container');
 
     // --- API & State ---
     const DEFAULT_API_BASE_URL = 'http://localhost:5000';
@@ -69,6 +98,20 @@ document.addEventListener('DOMContentLoaded', () => {
     let characterSearchTerm = '';
     let pendingAutoCenter = false;
     let autoFollowCamera = true;
+    let worldBadgeBase = 0;
+    let worldBadgeSupplement = 0;
+    const SPEED_PRESETS = [0.5, 1, 2, 5];
+    const SPEED_KEY_LOOKUP = {
+        Digit1: 0,
+        Digit2: 1,
+        Digit3: 2,
+        Digit4: 3,
+        Numpad1: 0,
+        Numpad2: 1,
+        Numpad3: 2,
+        Numpad4: 3,
+    };
+    let playbackSpeedIndex = SPEED_PRESETS.indexOf(1);
 
     const characterMarkers = new Map();
     let mapDimensions = { rows: 0, cols: 0 };
@@ -78,6 +121,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let lastPointerPosition = { x: 0, y: 0 };
     let mapTerrainCache = [];
     let mapOverlayCache = [];
+    let mapResourceCache = [];
     let mapRevisionStamp = null;
 
     const rosterCardCache = new Map();
@@ -93,6 +137,112 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Utility Helpers ---
     const getTileSize = () => parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--tile-size')) || 48;
+
+    function isTypingContext(element) {
+        if (!element) return false;
+        const tagName = element.tagName;
+        return tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT' || element.isContentEditable;
+    }
+
+    function formatCoins(value) {
+        if (typeof value !== 'number' || Number.isNaN(value)) return null;
+        return `${Math.round(value).toLocaleString()}c`;
+    }
+
+    function formatSatisfaction(value) {
+        if (typeof value !== 'number' || Number.isNaN(value)) return '—';
+        const percent = Math.max(0, Math.min(100, Math.round(value * 100)));
+        return `${percent}%`;
+    }
+
+    function formatSpeedMultiplier(value) {
+        if (!Number.isFinite(value)) return '—';
+        const rounded = Number.isInteger(value) ? value : Number(value.toFixed(1));
+        return `${rounded}×`;
+    }
+
+    function updateResourceChip(element, value) {
+        if (!element) return;
+        const hostChip = element.closest('.hud-chip');
+        const safeValue = Number.isFinite(value) ? value : 0;
+        element.textContent = safeValue.toLocaleString();
+        if (hostChip) {
+            hostChip.classList.toggle('muted', safeValue <= 0);
+        }
+    }
+
+    function updateHudBadge(element, count) {
+        if (!element) return;
+        const safeCount = Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
+        if (safeCount > 0) {
+            element.textContent = safeCount > 99 ? '99+' : String(safeCount);
+            element.classList.add('active');
+        } else {
+            element.textContent = '';
+            element.classList.remove('active');
+        }
+    }
+
+    function refreshWorldBadge() {
+        updateHudBadge(hudBadgeWorld, worldBadgeBase + worldBadgeSupplement);
+    }
+
+    function prepareOversightNotes(notes) {
+        if (!Array.isArray(notes)) return [];
+        const MAX_LENGTH = 140;
+        return notes
+            .map(note => (typeof note === 'string' ? note.trim() : ''))
+            .filter(Boolean)
+            .map(note => (note.length > MAX_LENGTH ? `${note.slice(0, MAX_LENGTH - 1)}…` : note));
+    }
+
+    function closeHudPopovers(exceptId = null) {
+        hudPopovers.forEach(popover => {
+            const shouldOpen = exceptId && popover.id === exceptId;
+            popover.classList.toggle('open', shouldOpen);
+            popover.setAttribute('aria-hidden', shouldOpen ? 'false' : 'true');
+        });
+        hudPopoverButtons.forEach(button => {
+            const targetId = button.dataset.popoverTarget;
+            const expanded = exceptId && targetId === exceptId;
+            button.classList.toggle('active', Boolean(expanded));
+            button.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+        });
+    }
+
+    function setupHudPopovers() {
+        if (!hudPopoverButtons.length) return;
+        hudPopoverButtons.forEach(button => {
+            button.setAttribute('aria-expanded', 'false');
+            button.addEventListener('click', event => {
+                event.stopPropagation();
+                const targetId = button.dataset.popoverTarget;
+                if (!targetId) return;
+                const target = document.getElementById(targetId);
+                if (!target) return;
+                const isOpen = target.classList.contains('open');
+                if (isOpen) {
+                    closeHudPopovers(null);
+                } else {
+                    closeHudPopovers(targetId);
+                }
+            });
+        });
+
+        document.addEventListener('click', event => {
+            if (event.target.closest('[data-popover-target]')) return;
+            if (event.target.closest('.hud-popover')) return;
+            closeHudPopovers(null);
+        });
+
+        document.addEventListener('keydown', event => {
+            if (event.key === 'Escape') {
+                closeHudPopovers(null);
+            }
+        });
+
+        closeHudPopovers(null);
+    }
 
     function openPanel(panelId) {
         const panel = document.getElementById(panelId);
@@ -240,6 +390,99 @@ document.addEventListener('DOMContentLoaded', () => {
         rosterWindowEl.replaceChildren(fragment);
     }
 
+    function updateHealthcareIntel(gameState) {
+        if (!gameState) return;
+
+        const report = gameState.healthcare_report || {};
+        const supplyAlerts = Array.isArray(report.supply_alerts) ? report.supply_alerts : [];
+        const healthEvents = Array.isArray(report.health_events) ? report.health_events : [];
+        const atRiskEntries = Array.isArray(report.at_risk) ? report.at_risk : [];
+        const recoveryEntries = Array.isArray(report.recoveries) ? report.recoveries : [];
+
+        let healthBadgeCount = 0;
+        healthBadgeCount += supplyAlerts.length;
+        healthBadgeCount += atRiskEntries.length;
+        healthBadgeCount += healthEvents.filter(evt => evt && ['sickness_worsened', 'injury_worsened'].includes(evt.type)).length;
+
+        if (healthOverviewList) {
+            const lines = [];
+            if (Number.isFinite(report.average_vitality)) {
+                lines.push(`<li><strong>Avg Vitality</strong>: ${report.average_vitality.toFixed(1)}</li>`);
+            }
+            if (Number.isFinite(report.average_stress)) {
+                lines.push(`<li><strong>Avg Stress</strong>: ${(report.average_stress * 100).toFixed(0)}%</li>`);
+            }
+            if (Number.isFinite(report.average_immunity)) {
+                lines.push(`<li><strong>Avg Immunity</strong>: ${(report.average_immunity * 100).toFixed(0)}%</li>`);
+            }
+            supplyAlerts.forEach(alert => {
+                const resource = alert.resource || 'Supplies';
+                const current = Number.isFinite(alert.current) ? alert.current : '0';
+                const threshold = Number.isFinite(alert.threshold) ? alert.threshold : '0';
+                lines.push(`<li class="alert">Low ${resource}: ${current}/${threshold}</li>`);
+            });
+            healthOverviewList.innerHTML = lines.length
+                ? lines.join('')
+                : '<li class="empty">Vital signs stable.</li>';
+        }
+
+        if (healthAtRiskList) {
+            if (!atRiskEntries.length) {
+                healthAtRiskList.innerHTML = '<li class="empty">No critical patients.</li>';
+            } else {
+                healthAtRiskList.innerHTML = atRiskEntries.slice(0, 6)
+                    .map(entry => {
+                        const conditions = Array.isArray(entry.conditions)
+                            ? entry.conditions.map(cond => {
+                                if (!cond || typeof cond !== 'object') return 'condition';
+                                const label = cond.type ? cond.type.replace(/_/g, ' ') : 'condition';
+                                const severity = Number.isFinite(cond.severity) ? ` (sev ${cond.severity})` : '';
+                                return `${label}${severity}`;
+                            }).join(', ')
+                            : '—';
+                        const vitality = Number.isFinite(entry.vitality) ? entry.vitality.toFixed(1) : '—';
+                        return `<li><strong>${entry.name}</strong> • Vitality ${vitality}<br><span class="meta">${conditions}</span></li>`;
+                    })
+                    .join('');
+            }
+        }
+
+        if (healthRecoveryList) {
+            if (!recoveryEntries.length) {
+                healthRecoveryList.innerHTML = '<li class="empty">No recoveries logged today.</li>';
+            } else {
+                healthRecoveryList.innerHTML = recoveryEntries.slice(-6).reverse()
+                    .map(entry => {
+                        const who = entry.character || entry.name || 'Patient';
+                        const summary = entry.summary || 'Recovery noted.';
+                        const dayLabel = Number.isFinite(entry.day) ? `Day ${entry.day}` : 'Recent';
+                        return `<li><strong>${who}</strong> — ${summary} <span class="meta subtle">${dayLabel}</span></li>`;
+                    })
+                    .join('');
+            }
+        }
+
+        if (healthEventsList) {
+            if (!healthEvents.length) {
+                healthEventsList.innerHTML = '<li class="empty">No medical events logged.</li>';
+            } else {
+                healthEventsList.innerHTML = healthEvents.slice(-8).reverse()
+                    .map(event => {
+                        const who = event.character || event.name || 'Patient';
+                        const dayLabel = Number.isFinite(event.day)
+                            ? `Day ${event.day}`
+                            : (Number.isFinite(report.day) ? `Day ${report.day}` : 'Recent');
+                        const summary = event.summary || event.type || 'Health event recorded.';
+                        const severity = Number.isFinite(event.severity) ? ` • Sev ${event.severity}` : '';
+                        return `<li><strong>${who}</strong>: ${summary}<span class="meta subtle"> ${dayLabel}${severity}</span></li>`;
+                    })
+                    .join('');
+            }
+        }
+
+        updateHudBadge(hudBadgeHealth, healthBadgeCount);
+    }
+
     function updateEconomyIntel(gameState) {
         if (!gameState) return;
         const report = gameState.daily_economy_report || {};
@@ -248,7 +491,61 @@ document.addEventListener('DOMContentLoaded', () => {
         const populationSnapshot = gameState.population || report.population_snapshot || {};
         const trainingReport = gameState.training || report.training || {};
         const workforceReport = gameState.workforce || report.workforce || {};
+        const landscape = gameState.landscape || report.landscape || {};
         const governance = gameState.governance || {};
+        const neighborhoodGatherings = Array.isArray(housingSnapshot.neighborhood_gatherings)
+            ? housingSnapshot.neighborhood_gatherings
+            : [];
+        let economyBadgeCount = 0;
+        let civicBadgeCount = 0;
+        let worldBadgeExtras = 0;
+
+        const normalizeCount = (value) => {
+            if (Array.isArray(value)) return value.length;
+            if (typeof value === 'number' && Number.isFinite(value)) return value;
+            return 0;
+        };
+
+        const addEconomyCount = (value) => {
+            const amount = normalizeCount(value);
+            if (amount > 0) {
+                economyBadgeCount += amount;
+            }
+        };
+
+        const addCivicCount = (value) => {
+            const amount = normalizeCount(value);
+            if (amount > 0) {
+                civicBadgeCount += amount;
+            }
+        };
+
+        const addWorldExtra = (value) => {
+            const amount = normalizeCount(value);
+            if (amount > 0) {
+                worldBadgeExtras += amount;
+            }
+        };
+
+        const formatResourceMap = (mapping) => {
+            if (!mapping || typeof mapping !== 'object') {
+                return '';
+            }
+            return Object.entries(mapping)
+                .filter(([, amount]) => amount)
+                .map(([resource, amount]) => `${amount} ${resource}`)
+                .join(', ');
+        };
+
+        const businessLedgers = Array.isArray(report.business_ledgers) ? report.business_ledgers : [];
+        const businessSupplyAlerts = Array.isArray(report.business_supply_alerts)
+            ? report.business_supply_alerts
+            : [];
+        const findSupplyAlert = (id) => businessSupplyAlerts.find(alert => alert.id === id) || null;
+
+        addEconomyCount(businessSupplyAlerts);
+
+        addEconomyCount(neighborhoodGatherings.length);
 
         if (hudPopulationValue) {
             const totalPopulation = typeof populationSnapshot.population === 'number'
@@ -351,6 +648,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (lawPetitionList) {
             const petitions = Array.isArray(governance.petitions) ? governance.petitions : [];
+            const activePetitions = petitions.filter(petition => petition.status !== 'enacted');
+            addCivicCount(activePetitions);
             if (!petitions.length) {
                 lawPetitionList.innerHTML = '<li class="empty">No petitions awaiting review.</li>';
             } else {
@@ -372,6 +671,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (lawInvestigationList) {
             const interviews = Array.isArray(governance.interviews) ? governance.interviews : [];
+            addCivicCount(interviews);
             if (!interviews.length) {
                 lawInvestigationList.innerHTML = '<li class="empty">No interviews assigned.</li>';
             } else {
@@ -382,6 +682,242 @@ document.addEventListener('DOMContentLoaded', () => {
                         return `<li><strong>${interview.witness || 'Witness'}</strong><small>Case ${interview.case_id} • ${status}${assigned}</small></li>`;
                     })
                     .join('');
+            }
+        }
+
+        const military = governance.military || {};
+
+        if (leadershipOversightList) {
+            const oversightEntries = Array.isArray(governance.oversight) ? governance.oversight : [];
+            const badgeFlags = new Set(['neglect', 'incident']);
+            const oversightFlagLabel = (flag) => {
+                switch (flag) {
+                    case 'neglect':
+                        return 'Neglect';
+                    case 'incident':
+                        return 'Misconduct';
+                    case 'commendable':
+                        return 'Hands-on';
+                    case 'no_actions':
+                        return 'Idle';
+                    default:
+                        return flag.replace(/_/g, ' ');
+                }
+            };
+            const oversightFlagClass = (flag) => {
+                switch (flag) {
+                    case 'neglect':
+                        return 'status-tag warn';
+                    case 'incident':
+                        return 'status-tag alert';
+                    case 'commendable':
+                        return 'status-tag good';
+                    case 'no_actions':
+                        return 'status-tag muted';
+                    default:
+                        return 'status-tag';
+                }
+            };
+
+            const atRiskCount = oversightEntries
+                .filter(entry => Array.isArray(entry.flags) && entry.flags.some(flag => badgeFlags.has(flag)))
+                .length;
+            addCivicCount(atRiskCount);
+
+            if (!oversightEntries.length) {
+                leadershipOversightList.innerHTML = '<li class="empty">No oversight data.</li>';
+            } else {
+                leadershipOversightList.innerHTML = oversightEntries.slice(0, 5)
+                    .map(entry => {
+                        const leaderName = entry.leader || 'Unknown';
+                        const role = entry.role || 'Leader';
+                        const score = Number.isFinite(entry.score)
+                            ? `${Math.round(entry.score * 100)}%`
+                            : '—';
+                        const actions = Number.isFinite(entry.actions)
+                            ? `${entry.actions}`
+                            : null;
+                        const neglectedCount = Array.isArray(entry.neglected) ? entry.neglected.length : 0;
+                        const incidentCount = Array.isArray(entry.incidents) ? entry.incidents.length : 0;
+                        const detailParts = [`Oversight ${score}`];
+                        if (actions !== null) {
+                            detailParts.push(`${actions} actions`);
+                        }
+                        if (neglectedCount) {
+                            detailParts.push(`Neglect ${neglectedCount}`);
+                        }
+                        if (incidentCount) {
+                            detailParts.push(`Incidents ${incidentCount}`);
+                        }
+                        const detailLine = detailParts.length
+                            ? `<small>${detailParts.join(' • ')}</small>`
+                            : '';
+                        const oversightNotes = prepareOversightNotes(entry.notes).slice(0, 3);
+                        const notes = oversightNotes.length
+                            ? `<small class="muted">${oversightNotes.join(' / ')}</small>`
+                            : '';
+                        const flags = Array.isArray(entry.flags) ? entry.flags : [];
+                        const tagLine = flags.length
+                            ? `<div class="status-tag-row">${flags.map(flag => `<span class="${oversightFlagClass(flag)}">${oversightFlagLabel(flag)}</span>`).join(' ')}</div>`
+                            : '';
+                        return `
+                            <li>
+                                <strong>${leaderName}</strong>
+                                <small>${role}</small>
+                                ${tagLine}
+                                ${detailLine}
+                                ${notes}
+                            </li>
+                        `;
+                    })
+                    .join('');
+            }
+        }
+
+        if (militaryChainList) {
+            const commander = military.commander || null;
+            const captains = Array.isArray(military.captains) ? military.captains : [];
+            const alerts = Array.isArray(military.alerts) ? military.alerts : [];
+            addCivicCount(alerts);
+            const rows = [];
+            if (commander && commander.name) {
+                const oversight = Number.isFinite(commander.oversight)
+                    ? `${Math.round(commander.oversight * 100)}%`
+                    : '—';
+                const leadership = Number.isFinite(commander.leadership)
+                    ? `Leadership ${commander.leadership}`
+                    : null;
+                const security = Number.isFinite(commander.security)
+                    ? `Security ${commander.security}`
+                    : null;
+                const subordinates = Number.isFinite(commander.subordinates)
+                    ? `Directs ${commander.subordinates} staff`
+                    : null;
+                const detailParts = [`Oversight ${oversight}`];
+                if (leadership) detailParts.push(leadership);
+                if (security) detailParts.push(security);
+                if (subordinates) detailParts.push(subordinates);
+                rows.push(`
+                    <li>
+                        <strong>${commander.name}</strong>
+                        <small>Commander • ${detailParts.join(' • ')}</small>
+                    </li>
+                `);
+            }
+            if (captains.length) {
+                captains.slice(0, 6).forEach(captain => {
+                    const oversight = Number.isFinite(captain.oversight)
+                        ? `${Math.round(captain.oversight * 100)}%`
+                        : '—';
+                    const readiness = Number.isFinite(captain.readiness)
+                        ? `${Math.round(captain.readiness * 100)}%`
+                        : '—';
+                    const squads = Array.isArray(captain.squads) ? captain.squads.join(', ') : '';
+                    const detailParts = [`Oversight ${oversight}`, `Readiness ${readiness}`];
+                    if (squads) {
+                        detailParts.push(`Leads ${squads}`);
+                    }
+                    rows.push(`
+                        <li>
+                            <strong>${captain.name}</strong>
+                            <small>Captain • ${detailParts.join(' • ')}</small>
+                        </li>
+                    `);
+                });
+            }
+            if (!rows.length) {
+                militaryChainList.innerHTML = '<li class="empty">No commander appointed.</li>';
+            } else {
+                militaryChainList.innerHTML = rows.join('');
+            }
+        }
+
+        if (militarySquadList) {
+            const squads = Array.isArray(military.squads) ? military.squads : [];
+            const readiness = Number.isFinite(military.readiness)
+                ? `${Math.round(military.readiness * 100)}%`
+                : null;
+            if (!squads.length) {
+                militarySquadList.innerHTML = '<li class="empty">No squads organized.</li>';
+            } else {
+                const statusTagClass = (status) => {
+                    switch (status) {
+                        case 'ready':
+                            return 'status-tag good';
+                        case 'training':
+                            return 'status-tag';
+                        case 'undermanned':
+                            return 'status-tag warn';
+                        case 'critical':
+                            return 'status-tag alert';
+                        default:
+                            return 'status-tag';
+                    }
+                };
+                const statusLabel = (status) => {
+                    switch (status) {
+                        case 'ready':
+                            return 'Ready';
+                        case 'training':
+                            return 'Drilling';
+                        case 'undermanned':
+                            return 'Thin';
+                        case 'critical':
+                            return 'Critical';
+                        default:
+                            return status ? status.replace(/_/g, ' ') : 'Active';
+                    }
+                };
+                const readinessHeader = readiness ? `<li class="header">Overall readiness ${readiness}</li>` : '';
+                const entries = squads.slice(0, 8).map(squad => {
+                    const squadReadiness = Number.isFinite(squad.readiness)
+                        ? `${Math.round(squad.readiness * 100)}%`
+                        : '—';
+                    const size = Number.isFinite(squad.size) ? `${squad.size} members` : '';
+                    const captain = squad.captain ? `Captain ${squad.captain}` : 'No captain';
+                    const status = squad.status ? `<span class="${statusTagClass(squad.status)}">${statusLabel(squad.status)}</span>` : '';
+                    return `
+                        <li>
+                            <strong>${squad.id}</strong>
+                            <small>${captain} • ${squadReadiness}${size ? ` • ${size}` : ''}</small>
+                            ${status}
+                        </li>
+                    `;
+                });
+                militarySquadList.innerHTML = `${readinessHeader}${entries.join('')}`;
+            }
+        }
+
+        if (militaryActivityList) {
+            const activity = Array.isArray(military.enemy_activity) ? military.enemy_activity : [];
+            if (!activity.length) {
+                militaryActivityList.innerHTML = '<li class="empty">No enemy sightings.</li>';
+            } else {
+                const entries = activity.slice(-6).reverse().map(entry => {
+                    const day = Number.isFinite(entry.day) ? `Day ${entry.day}` : 'Recent';
+                    const severity = entry.severity ? entry.severity.replace(/_/g, ' ') : 'Skirmish';
+                    const outcome = entry.outcome === 'breached' ? 'Breach' : 'Repelled';
+                    const outcomeClass = entry.outcome === 'breached' ? 'status-tag alert' : 'status-tag good';
+                    const losses = Number.isFinite(entry.losses) ? `${entry.losses} injured` : null;
+                    const plunder = entry.plundered && typeof entry.plundered === 'object'
+                        ? Object.entries(entry.plundered)
+                            .map(([resource, amount]) => `${amount} ${resource}`)
+                            .join(', ')
+                        : null;
+                    const detailParts = [];
+                    if (losses) detailParts.push(losses);
+                    if (plunder) detailParts.push(`Lost ${plunder}`);
+                    const detailText = detailParts.length ? `<small>${detailParts.join(' • ')}</small>` : '';
+                    return `
+                        <li>
+                            <strong>${severity}</strong>
+                            <small>${day}</small>
+                            <span class="${outcomeClass}">${outcome}</span>
+                            ${detailText}
+                        </li>
+                    `;
+                });
+                militaryActivityList.innerHTML = entries.join('');
             }
         }
 
@@ -409,6 +945,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (economyPressureList) {
             const pressures = Array.isArray(gameState.resource_pressures) ? gameState.resource_pressures : [];
+            addEconomyCount(pressures);
             if (!pressures.length) {
                 economyPressureList.innerHTML = '<li class="empty">No active pressures.</li>';
             } else {
@@ -424,6 +961,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (economyWageList) {
             const arrears = Array.isArray(gameState.pending_wages) ? gameState.pending_wages : [];
+            addEconomyCount(arrears);
             if (!arrears.length) {
                 economyWageList.innerHTML = '<li class="empty">No outstanding wages.</li>';
             } else {
@@ -438,6 +976,47 @@ document.addEventListener('DOMContentLoaded', () => {
                         return `<li><strong>${entry.character}</strong>: ${amount}c for ${reason}${day}</li>`;
                     })
                     .join('');
+            }
+        }
+
+        if (economyIndustryList) {
+            if (!businessLedgers.length) {
+                economyIndustryList.innerHTML = '<li class="empty">No workshops active.</li>';
+            } else {
+                const items = businessLedgers.slice(0, 6).map(entry => {
+                    const industryLabel = entry.industry
+                        ? entry.industry.replace(/_/g, ' ')
+                        : 'enterprise';
+                    const details = [];
+                    if (typeof entry.net === 'number') {
+                        details.push(`Net ${entry.net}c`);
+                    }
+                    if (typeof entry.procurement === 'number' && entry.procurement) {
+                        details.push(`Supply cost ${entry.procurement}c`);
+                    }
+                    if (typeof entry.supply_ratio === 'number') {
+                        details.push(`${Math.round(entry.supply_ratio * 100)}% supply`);
+                    }
+                    const alert = findSupplyAlert(entry.id);
+                    const shortages = alert ? formatResourceMap(alert.shortages) : '';
+                    if (shortages) {
+                        details.push(`Needs ${shortages}`);
+                    } else {
+                        const outputs = formatResourceMap(entry.outputs);
+                        if (outputs) {
+                            details.push(`Made ${outputs}`);
+                        }
+                    }
+                    const primaryNote = Array.isArray(entry.notes)
+                        ? entry.notes.find(note => typeof note === 'string' && note.trim())
+                        : null;
+                    if (primaryNote) {
+                        details.push(primaryNote);
+                    }
+                    const subtitle = details.length ? details.join(' • ') : 'Stable output';
+                    return `<li><strong>${entry.name}</strong><small>${industryLabel} • ${subtitle}</small></li>`;
+                });
+                economyIndustryList.innerHTML = items.join('');
             }
         }
 
@@ -481,11 +1060,51 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
+        const tileEntries = Object.entries(landscape.tiles || {});
+        const resourceCounts = landscape.resources || {};
+        const resourceEntries = Object.entries(resourceCounts);
+
+        if (landscapeSummaryList) {
+            if (!tileEntries.length && !resourceEntries.length) {
+                landscapeSummaryList.innerHTML = '<li class="empty">Landscape survey pending.</li>';
+            } else {
+                const tileHighlights = tileEntries
+                    .filter(([name]) => name && name !== 'Grass')
+                    .sort((a, b) => (b[1] || 0) - (a[1] || 0))
+                    .slice(0, 4)
+                    .map(([name, count]) => `${name} ${Number(count || 0).toLocaleString()}`);
+                const resourceHighlights = resourceEntries
+                    .sort((a, b) => (b[1] || 0) - (a[1] || 0))
+                    .slice(0, 4)
+                    .map(([name, count]) => `${name} ${Number(count || 0).toLocaleString()}`);
+                const rows = [];
+                if (tileHighlights.length) {
+                    rows.push(`<li><strong>Terrain</strong>: ${tileHighlights.join(', ')}</li>`);
+                }
+                if (resourceHighlights.length) {
+                    rows.push(`<li><strong>Resources</strong>: ${resourceHighlights.join(', ')}</li>`);
+                }
+                if (Number.isFinite(landscape.reserved) && landscape.reserved > 0) {
+                    rows.push(`<li class="muted">Reserved tiles: ${landscape.reserved}</li>`);
+                }
+                landscapeSummaryList.innerHTML = rows.length
+                    ? rows.join('')
+                    : '<li class="empty">Landscape survey pending.</li>';
+            }
+        }
+
+        updateResourceChip(hudResourceWoodValue, resourceCounts.Wood);
+        updateResourceChip(hudResourceStoneValue, resourceCounts.Stone);
+        updateResourceChip(hudResourceFoodValue, resourceCounts.Food);
+        updateResourceChip(hudResourceHerbsValue, resourceCounts.Herbs);
+        updateResourceChip(hudResourceWaterValue, resourceCounts.Water);
+
         if (workCrewNote) {
             const gatheredTotal = typeof workforceReport.gathered_total === 'number' ? workforceReport.gathered_total : 0;
             const deliveredTotal = typeof workforceReport.delivered_total === 'number' ? workforceReport.delivered_total : 0;
             const backlogTotal = typeof workforceReport.backlog_total === 'number' ? workforceReport.backlog_total : 0;
             const alerts = Array.isArray(workforceReport.alerts) ? workforceReport.alerts : [];
+            addEconomyCount(alerts);
 
             if (!gatheredTotal && !deliveredTotal && !backlogTotal && !alerts.length) {
                 workCrewNote.textContent = 'Crews waiting on orders.';
@@ -598,6 +1217,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (trainingWaitlistList) {
             const waitlists = Array.isArray(trainingReport.waitlists) ? trainingReport.waitlists : [];
             const queued = waitlists.filter(entry => Array.isArray(entry.queued) && entry.queued.length);
+            const queuedCount = queued.reduce((sum, entry) => sum + (Array.isArray(entry.queued) ? entry.queued.length : 0), 0);
+            addEconomyCount(queuedCount);
             if (!queued.length) {
                 trainingWaitlistList.innerHTML = '<li class="empty">No one queued.</li>';
             } else {
@@ -622,6 +1243,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const flagged = needs
                 .filter(entry => (entry.under_target || 0) > 0)
                 .sort((a, b) => (b.under_target || 0) - (a.under_target || 0));
+            addEconomyCount(flagged);
             if (!flagged.length) {
                 trainingNeedsNote.textContent = 'No programs flagged.';
                 trainingNeedsNote.classList.add('muted');
@@ -643,6 +1265,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (populationEventList) {
             const popEvents = Array.isArray(report.population_events) ? report.population_events : [];
+            addWorldExtra(popEvents);
             if (!popEvents.length) {
                 populationEventList.innerHTML = '<li class="empty">No changes today.</li>';
             } else {
@@ -714,6 +1337,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const homelessNames = Array.isArray(housingSnapshot.homeless_characters)
                 ? housingSnapshot.homeless_characters
                 : [];
+            addEconomyCount(homelessNames.length);
 
             if (totalBeds !== null && claimedBeds !== null && availableBeds !== null) {
                 const summaryBits = [`${claimedBeds}/${totalBeds} occupied`, `${availableBeds} open`];
@@ -733,10 +1357,23 @@ document.addEventListener('DOMContentLoaded', () => {
                 const occupantPreview = occupants.length
                     ? `${occupants.slice(0, 3).join(', ')}${occupants.length > 3 ? '…' : ''}`
                     : 'Vacant';
+                const tierLabel = structure.tier ? String(structure.tier) : '';
+                const amenities = Array.isArray(structure.amenities) ? structure.amenities : [];
+                const amenityPreview = amenities.length
+                    ? `${amenities.slice(0, 2).join(', ')}${amenities.length > 2 ? '…' : ''}`
+                    : '';
+                const metaParts = [`${available} open`];
+                if (occupantPreview && occupantPreview !== 'Vacant') {
+                    metaParts.push(occupantPreview);
+                }
+                const statusLine = metaParts.join(' • ');
+                const amenityLine = amenityPreview ? `<span class="meta subtle">${amenityPreview}</span>` : '';
+                const tierBadge = tierLabel ? `<span class="tier-label tier-${tierLabel}">${tierLabel}</span>` : '';
                 lines.push(`
                     <li class="${className}">
-                        <strong>${structure.name}</strong>: ${used}/${capacity} beds
-                        <span class="meta">${available} open • ${occupantPreview}</span>
+                        <strong>${structure.name}</strong>${tierBadge ? ` ${tierBadge}` : ''}: ${used}/${capacity} beds
+                        <span class="meta">${statusLine}</span>
+                        ${amenityLine}
                     </li>
                 `.trim());
             });
@@ -753,10 +1390,128 @@ document.addEventListener('DOMContentLoaded', () => {
                 : '<li class="empty">No housing data.</li>';
         }
 
+        if (housingComfortList) {
+            const comfortEntries = Array.isArray(report.household_comforts)
+                ? report.household_comforts
+                : Array.isArray(housingSnapshot.comfort_events)
+                    ? housingSnapshot.comfort_events
+                    : [];
+            const summary = report.household_comfort_summary
+                || housingSnapshot.comfort_summary
+                || {};
+            const lines = [];
+            const average = typeof summary.average_score === 'number' ? summary.average_score : null;
+            const totalHomes = typeof summary.total_households === 'number' ? summary.total_households : null;
+            if (average !== null || totalHomes !== null) {
+                const breakdown = [];
+                if (typeof summary.satisfied === 'number' && summary.satisfied) {
+                    breakdown.push(`${summary.satisfied} cozy`);
+                }
+                if (typeof summary.partial === 'number' && summary.partial) {
+                    breakdown.push(`${summary.partial} rationed`);
+                }
+                if (typeof summary.missed === 'number' && summary.missed) {
+                    breakdown.push(`${summary.missed} cold`);
+                }
+                const avgLabel = average !== null ? Math.round(average) : '–';
+                const homeLabel = totalHomes !== null ? `${totalHomes} homes` : '';
+                const metaBits = [];
+                if (homeLabel) {
+                    metaBits.push(homeLabel);
+                }
+                if (breakdown.length) {
+                    metaBits.push(breakdown.join(' • '));
+                }
+                const meta = metaBits.length ? `<span class="meta subtle">${metaBits.join(' • ')}</span>` : '';
+                lines.push(`<li><strong>Comfort Avg</strong>: ${avgLabel}${meta ? ` ${meta}` : ''}</li>`);
+            }
+
+            const recentComforts = comfortEntries.slice(-4).reverse();
+            recentComforts.forEach(entry => {
+                const buildingName = entry.building || 'Household';
+                const routineName = entry.name || (entry.rule ? entry.rule.replace(/_/g, ' ') : 'Routine');
+                const outcome = entry.outcome || 'resolved';
+                const outcomeLabel = outcome.charAt(0).toUpperCase() + outcome.slice(1);
+                const outcomeSymbol = outcome === 'satisfied' ? '✨' : outcome === 'partial' ? '⋯' : outcome === 'missed' ? '⚠️' : '•';
+                const details = [];
+                if (typeof entry.withdrawn === 'number' && typeof entry.required === 'number' && entry.required) {
+                    const resourceLabel = entry.resource ? entry.resource : 'goods';
+                    details.push(`${entry.withdrawn}/${entry.required} ${resourceLabel}`);
+                } else if (typeof entry.required === 'number' && entry.resource) {
+                    details.push(`${entry.required} ${entry.resource}`);
+                }
+                if (typeof entry.comfort_score === 'number') {
+                    details.push(`comfort ${Math.round(entry.comfort_score)}`);
+                }
+                if (typeof entry.occupants === 'number' && entry.occupants) {
+                    details.push(`${entry.occupants} residents`);
+                }
+                if (entry.shortage) {
+                    details.push(`short ${entry.shortage}`);
+                }
+                const meta = details.length ? `<span class="meta subtle">${details.join(' • ')}</span>` : '';
+                lines.push(`
+                    <li>
+                        ${outcomeSymbol} <strong>${buildingName}</strong>: ${outcomeLabel} ${routineName}${meta ? ` ${meta}` : ''}
+                    </li>
+                `.trim());
+            });
+
+            housingComfortList.innerHTML = lines.length
+                ? lines.join('')
+                : '<li class="empty">No comfort routines resolved.</li>';
+        }
+
+        if (housingStoryList) {
+            const stories = Array.isArray(housingSnapshot.household_vignettes)
+                ? housingSnapshot.household_vignettes
+                : [];
+            if (stories.length) {
+                const recent = stories.slice(-4).reverse();
+                housingStoryList.innerHTML = recent
+                    .map(story => {
+                        const summary = story.summary || 'Evening passed quietly.';
+                        const buildingName = story.building || 'Household';
+                        const dayLabel = typeof story.day === 'number' ? `Day ${story.day}` : 'Today';
+                        return `
+                            <li>
+                                <strong>${buildingName}</strong>: ${summary}
+                                <span class="meta subtle">${dayLabel}</span>
+                            </li>
+                        `.trim();
+                    })
+                    .join('');
+            } else {
+                housingStoryList.innerHTML = '<li class="empty">No household stories recorded today.</li>';
+            }
+        }
+
+        if (neighborhoodGatheringList) {
+            if (neighborhoodGatherings.length) {
+                const recentGatherings = neighborhoodGatherings.slice(-4).reverse();
+                neighborhoodGatheringList.innerHTML = recentGatherings
+                    .map(gathering => {
+                        const summary = gathering.summary || 'Neighbors spent time together.';
+                        const hostLabel = gathering.host || 'Neighbor';
+                        const dayLabel = typeof gathering.day === 'number' ? `Day ${gathering.day}` : 'Recent';
+                        return `
+                            <li>
+                                <strong>${hostLabel}</strong>: ${summary}
+                                <span class="meta subtle">${dayLabel}</span>
+                            </li>
+                        `.trim();
+                    })
+                    .join('');
+            } else {
+                neighborhoodGatheringList.innerHTML = '<li class="empty">No neighborhood gatherings yet.</li>';
+            }
+        }
+
         if (economyCrimeNote) {
             const reportCrimes = Array.isArray(report.crime_events) ? report.crime_events : [];
             const historyCrimes = Array.isArray(gameState.crime_reports) ? gameState.crime_reports : [];
             const pendingCrimes = Array.isArray(gameState.pending_crimes) ? gameState.pending_crimes : [];
+            addCivicCount(pendingCrimes);
             let latestCrime = null;
             if (reportCrimes.length) {
                 latestCrime = reportCrimes[reportCrimes.length - 1];
@@ -795,6 +1550,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const allPromises = Object.entries(promisesByCandidate)
                 .flatMap(([candidate, entries]) => (Array.isArray(entries) ? entries : [])
                     .map(promise => ({ ...promise, candidate })));
+            const outstandingPromises = allPromises.filter(promise => promise.status !== 'enacted');
+            addCivicCount(outstandingPromises);
 
             if (!allPromises.length) {
                 economyCampaignList.innerHTML = '<li class="empty">No promises active.</li>';
@@ -842,6 +1599,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (rumorFeedList) {
             const rumors = Array.isArray(gameState.rumors) ? gameState.rumors : [];
+            addWorldExtra(rumors);
             if (!rumors.length) {
                 rumorFeedList.innerHTML = '<li class="empty">No rumors circulating.</li>';
             } else {
@@ -859,6 +1617,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 }).join('');
             }
         }
+
+        worldBadgeSupplement = worldBadgeExtras;
+        refreshWorldBadge();
+        updateHudBadge(hudBadgeEconomy, economyBadgeCount);
+        updateHudBadge(hudBadgeCivic, civicBadgeCount);
     }
 
     function updateFamilyIntel(gameState) {
@@ -931,6 +1694,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 familySpotlight.textContent = `${dayLabel}: ${summary} (${familyLabel})`;
             }
         }
+
+        updateHudBadge(hudBadgeFamilies, recentHistory.length);
     }
 
     function togglePanel(panelId) {
@@ -972,19 +1737,71 @@ document.addEventListener('DOMContentLoaded', () => {
         updateVirtualizedRoster();
     }
 
+    function positionFollowOverlay(character) {
+        if (!followOverlay || !mapStage || !character) return;
+        const marker = characterMarkers.get(character.name);
+        if (!marker) return;
+
+        requestAnimationFrame(() => {
+            const markerRect = marker.getBoundingClientRect();
+            const stageRect = mapStage.getBoundingClientRect();
+            const overlayRect = followOverlay.getBoundingClientRect();
+            const offset = 16;
+
+            let top = markerRect.top - stageRect.top - overlayRect.height / 2 + markerRect.height / 2;
+            top = Math.max(16, Math.min(top, stageRect.height - overlayRect.height - 16));
+
+            let left = markerRect.right - stageRect.left + offset;
+            if (left + overlayRect.width + 16 > stageRect.width) {
+                left = markerRect.left - stageRect.left - overlayRect.width - offset;
+            }
+            left = Math.max(16, Math.min(left, stageRect.width - overlayRect.width - 16));
+
+            followOverlay.style.top = `${top}px`;
+            followOverlay.style.left = `${left}px`;
+            followOverlay.style.right = 'auto';
+        });
+    }
+
     function updateFollowedCharacterOverlay(character) {
         if (!followOverlay || !followOverlayBody) return;
 
         if (!character || character.name !== followedCharacterName) {
             followOverlay.classList.add('hidden');
             followOverlayBody.innerHTML = '<p>Select a character to follow.</p>';
+            followOverlay.style.top = '';
+            followOverlay.style.left = '';
+            followOverlay.style.right = '';
             return;
         }
 
         followOverlay.classList.remove('hidden');
         const sicknessText = character.is_sick ? `Sick${character.sickness_severity !== undefined ? ` (sev ${character.sickness_severity})` : ''}` : 'Well';
         const injuryText = character.is_injured ? `Injured${character.injury_severity !== undefined ? ` (sev ${character.injury_severity})` : ''}` : 'Unhurt';
-        const healthSummary = `Health: ${sicknessText}, ${injuryText}`;
+        const healthProfile = character.health_profile || {};
+        const vitalityValue = Number.isFinite(healthProfile.vitality) ? healthProfile.vitality.toFixed(1) : null;
+        const vitalityBand = healthProfile.vitality_band ? healthProfile.vitality_band : null;
+        const vitalityText = vitalityValue ? `${vitalityValue}${vitalityBand ? ` (${vitalityBand})` : ''}` : '—';
+        const immunityValue = Number.isFinite(healthProfile.immune_resilience)
+            ? (healthProfile.immune_resilience * 100).toFixed(0)
+            : null;
+        const immunityBand = healthProfile.immunity_band ? healthProfile.immunity_band : null;
+        const immunityText = immunityValue ? `${immunityValue}%${immunityBand ? ` (${immunityBand})` : ''}` : '—';
+        const stressValue = Number.isFinite(healthProfile.stress)
+            ? (healthProfile.stress * 100).toFixed(0)
+            : null;
+        const stressBand = healthProfile.stress_band ? healthProfile.stress_band : null;
+        const stressText = stressValue ? `${stressValue}%${stressBand ? ` (${stressBand})` : ''}` : '—';
+        const activeConditions = Array.isArray(healthProfile.active_conditions) ? healthProfile.active_conditions : [];
+        const conditionSummary = activeConditions.length
+            ? activeConditions.map(cond => {
+                if (!cond || typeof cond !== 'object') return 'Condition';
+                const type = cond.type ? cond.type.replace(/_/g, ' ') : 'Condition';
+                const severity = Number.isFinite(cond.severity) ? ` (sev ${cond.severity})` : '';
+                const status = cond.status ? ` • ${cond.status}` : '';
+                return `${type}${severity}${status}`;
+            }).join(', ')
+            : 'No active conditions';
         const goalDetails = extractGoal(character.current_goal);
         const goalSummary = `${goalDetails.type}${goalDetails.priority !== '—' ? ` (prio ${goalDetails.priority})` : ''}`;
         const energyText = typeof character.energy === 'number' ? character.energy : '—';
@@ -994,30 +1811,108 @@ document.addEventListener('DOMContentLoaded', () => {
             : Array.isArray(character.home_location)
                 ? `Sheltered at (${character.home_location[0]}, ${character.home_location[1]})`
                 : 'No assigned housing';
-        const lastDialogue = (character.dialogue_history || []).slice(-1)[0];
-        let dialogueSummary = 'No recent conversations logged.';
-        if (lastDialogue) {
-            const exchanges = Array.isArray(lastDialogue.dialogue_exchanges) ? lastDialogue.dialogue_exchanges : [];
-            if (exchanges.length) {
-                dialogueSummary = exchanges.map(line => `${line.speaker}: “${line.line}”`).join('<br>');
-            } else {
-                dialogueSummary = 'Conversation noted, but no transcript available.';
-            }
+        const ageText = typeof character.age === 'number' ? `${character.age}` : '—';
+        const originText = character.origin || 'Unknown origin';
+        const citizenshipText = character.citizenship || 'Resident';
+        const rankTitle = character.rank ? character.rank : null;
+        const netWorthValue = formatCoins(character.net_worth);
+        const netWorthText = netWorthValue
+            ? `${netWorthValue}${character.wealth_status ? ` (${character.wealth_status})` : ''}`
+            : 'Unknown';
+        const purseText = formatCoins(character.money) || '—';
+        const careerStage = character.career_stage || 'Apprentice';
+        const tenureValue = typeof character.profession_tenure === 'number' ? character.profession_tenure : null;
+        const tenureText = tenureValue !== null ? `${tenureValue} day${tenureValue === 1 ? '' : 's'}` : '—';
+        const satisfactionText = formatSatisfaction(character.job_satisfaction);
+        const focusSuffix = character.profession_focus ? ` • Focus ${character.profession_focus}` : '';
+
+        const ownedVentures = Array.isArray(character.businesses_owned) ? character.businesses_owned : [];
+        const businessRoles = Object.entries(character.business_roles || {});
+        const businessLines = [];
+        if (ownedVentures.length) {
+            businessLines.push(`Owns ${ownedVentures.length} venture${ownedVentures.length === 1 ? '' : 's'}`);
+        }
+        businessRoles.forEach(([businessId, role]) => {
+            const label = role.replace(/_/g, ' ');
+            businessLines.push(`${label} @ ${businessId}`);
+        });
+        const businessSummary = businessLines.length
+            ? `<ul class="mini-list">${businessLines.slice(0, 4).map(line => `<li>${line}</li>`).join('')}</ul>`
+            : '<p class="muted">No active business roles.</p>';
+
+        const familyMembers = Array.isArray(character.family_members)
+            ? character.family_members.filter(name => name && name !== character.name)
+            : [];
+        let familySummary = '<p class="muted">No immediate kin registered.</p>';
+        if (familyMembers.length) {
+            const preview = familyMembers.slice(0, 5);
+            const remainder = familyMembers.length - preview.length;
+            const namesText = preview.join(', ');
+            familySummary = `<p>${namesText}${remainder > 0 ? `, +${remainder} more` : ''}</p>`;
         }
 
-        const jobTitle = character.job || 'Unassigned';
+        const romanticPartners = Array.isArray(character.romantic_partners)
+            ? character.romantic_partners.filter(name => name && name !== character.name)
+            : [];
+        const courtingEntries = character.active_romances && typeof character.active_romances === 'object'
+            ? Object.entries(character.active_romances)
+            : [];
+        const courtingPreview = courtingEntries.slice(0, 3).map(([name, details]) => {
+            const compat = details && typeof details.compatibility === 'number'
+                ? `${Math.round(details.compatibility * 100)}%`
+                : '—';
+            return `${name} (${compat})`;
+        });
+        const partnerSummary = romanticPartners.length ? romanticPartners.join(', ') : 'None';
+        const courtingSummary = courtingPreview.length ? courtingPreview.join(', ') : 'None';
+
+        const highlights = Array.isArray(character.life_highlights) ? character.life_highlights : [];
+        const highlightSummary = highlights.length
+            ? `<ul class="mini-list compact">${highlights.slice(-3).reverse().map(evt => {
+                const when = evt.day !== undefined ? `Day ${evt.day}` : (evt.type || 'Milestone');
+                const summary = evt.summary || evt.type || 'Notable moment recorded.';
+                return `<li><strong>${when}</strong>: ${summary}</li>`;
+            }).join('')}</ul>`
+            : '<p class="muted">No highlights logged.</p>';
+
+        const pursuits = Array.isArray(character.personal_pursuits) ? character.personal_pursuits : [];
+        const pursuitPreview = pursuits.slice(0, 3).map(entry => {
+            const stage = typeof entry.level === 'number' ? entry.level : 0;
+            const label = entry.name || entry.key || 'Pursuit';
+            return `${label} (S${stage})`;
+        });
+        const pursuitsSummary = pursuitPreview.length ? pursuitPreview.join(', ') : 'None registered';
+        const activePursuit = pursuits.find(entry => entry.key === character.active_personal_project);
+        const activeLabel = activePursuit ? ` • Active: ${activePursuit.name}` : '';
 
         followOverlayBody.innerHTML = `
-            <p><strong>${character.name}</strong> — ${jobTitle}</p>
-            <p>Location: (${character.x}, ${character.y})</p>
-            <p>Goal: ${goalSummary}</p>
-            <p>${healthSummary}</p>
+            <p><strong>${character.name}</strong>${rankTitle ? ` • ${rankTitle}` : ''}</p>
+            <p>${character.job || 'Unassigned'} • Goal: ${goalSummary}</p>
+            <p>Stage: ${careerStage} • Tenure ${tenureText} • Satisfaction ${satisfactionText}${focusSuffix}</p>
+            <p>Coords: (${character.x}, ${character.y}) • Age ${ageText} • ${originText} • ${citizenshipText}</p>
+            <p>Health: ${sicknessText}, ${injuryText}</p>
+            <p>Vitals: Vitality ${vitalityText} • Immunity ${immunityText} • Stress ${stressText}</p>
+            <p>${conditionSummary}</p>
             <p>Needs: Energy ${energyText} • Thirst ${thirstText}</p>
             <p>Housing: ${housingSummary}</p>
             <hr>
-            <p><strong>Latest Social Exchange</strong></p>
-            <p class="dialogue-snippet">${dialogueSummary}</p>
+            <p><strong>Wealth</strong></p>
+            <p>Net Worth ${netWorthText} • Purse ${purseText}</p>
+            ${businessSummary}
+            <p><strong>Pursuits</strong></p>
+            <p>${pursuitsSummary}${activeLabel}</p>
+            <hr>
+            <p><strong>Family</strong></p>
+            ${familySummary}
+            <p><strong>Relationships</strong></p>
+            <p>Partners: ${partnerSummary}</p>
+            <p>Courtships: ${courtingSummary}</p>
+            <hr>
+            <p><strong>Highlights</strong></p>
+            ${highlightSummary}
         `;
+
+        positionFollowOverlay(character);
     }
 
     function updateWorldSummary(gameState) {
@@ -1100,7 +1995,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function updateEventFeed(log) {
         if (!eventFeedDiv) return;
-        if (!log || !log.length) {
+        const count = Array.isArray(log) ? log.length : 0;
+        worldBadgeBase = count;
+        refreshWorldBadge();
+        if (!count) {
             eventFeedDiv.innerHTML = '<p class="empty">No events logged yet.</p>';
             return;
         }
@@ -1288,6 +2186,110 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function buildOverviewContent(character) {
         const wrapper = document.createElement('div');
+
+        const profileSection = document.createElement('section');
+        profileSection.innerHTML = '<h4>Profile</h4>';
+        const ageLabel = typeof character.age === 'number' ? character.age : '—';
+        const originLabel = character.origin || 'Unknown';
+        const citizenshipLabel = character.citizenship || 'Resident';
+        const rankLabel = character.rank ? ` • ${character.rank}` : '';
+        const netWorthLabel = formatCoins(character.net_worth);
+        const purseLabel = formatCoins(character.money);
+        profileSection.innerHTML += `
+            <p><strong>Role:</strong> ${character.job || 'Unassigned'}${rankLabel}</p>
+            <p><strong>Age:</strong> ${ageLabel} • <strong>Origin:</strong> ${originLabel} • <strong>Citizenship:</strong> ${citizenshipLabel}</p>
+            <p><strong>Wealth:</strong> ${netWorthLabel ? netWorthLabel : 'Unknown'}${character.wealth_status ? ` (${character.wealth_status})` : ''} • <strong>Purse:</strong> ${purseLabel || '—'}</p>
+        `;
+
+        const healthSection = document.createElement('section');
+        healthSection.innerHTML = '<h4>Health</h4>';
+        const healthProfile = character.health_profile || {};
+        const vitalityValue = Number.isFinite(healthProfile.vitality) ? healthProfile.vitality.toFixed(1) : null;
+        const vitalityBand = healthProfile.vitality_band || null;
+        const immunityValue = Number.isFinite(healthProfile.immune_resilience)
+            ? (healthProfile.immune_resilience * 100).toFixed(0)
+            : null;
+        const immunityBand = healthProfile.immunity_band || null;
+        const stressValue = Number.isFinite(healthProfile.stress)
+            ? (healthProfile.stress * 100).toFixed(0)
+            : null;
+        const stressBand = healthProfile.stress_band || null;
+        if (vitalityValue || immunityValue || stressValue) {
+            const vitalityText = vitalityValue ? `${vitalityValue}${vitalityBand ? ` (${vitalityBand})` : ''}` : '—';
+            const immunityText = immunityValue ? `${immunityValue}%${immunityBand ? ` (${immunityBand})` : ''}` : '—';
+            const stressText = stressValue ? `${stressValue}%${stressBand ? ` (${stressBand})` : ''}` : '—';
+            healthSection.innerHTML += `<p><strong>Vitality:</strong> ${vitalityText} • <strong>Immunity:</strong> ${immunityText} • <strong>Stress:</strong> ${stressText}</p>`;
+        }
+        const activeConditions = Array.isArray(healthProfile.active_conditions) ? healthProfile.active_conditions : [];
+        if (activeConditions.length) {
+            const conditions = activeConditions
+                .map(cond => {
+                    if (!cond || typeof cond !== 'object') return 'Condition';
+                    const type = cond.type ? cond.type.replace(/_/g, ' ') : 'Condition';
+                    const severity = Number.isFinite(cond.severity) ? ` (sev ${cond.severity})` : '';
+                    const status = cond.status ? ` • ${cond.status}` : '';
+                    return `${type}${severity}${status}`;
+                })
+                .join(', ');
+            healthSection.innerHTML += `<p><strong>Conditions:</strong> ${conditions}</p>`;
+        } else {
+            healthSection.innerHTML += '<p class="muted">No active conditions.</p>';
+        }
+        const recentHealthEvents = Array.isArray(healthProfile.recent_events)
+            ? healthProfile.recent_events.slice(-4).reverse()
+            : [];
+        if (recentHealthEvents.length) {
+            const list = document.createElement('ul');
+            list.classList.add('mini-list', 'compact');
+            recentHealthEvents.forEach(event => {
+                const label = event.summary || event.type || 'Health update';
+                const dayLabel = Number.isFinite(event.day) ? `Day ${event.day}` : 'Recent';
+                const severity = Number.isFinite(event.severity) ? ` • Sev ${event.severity}` : '';
+                const li = document.createElement('li');
+                li.innerHTML = `<strong>${dayLabel}</strong>: ${label}${severity}`;
+                list.appendChild(li);
+            });
+            healthSection.appendChild(list);
+        }
+
+        const careerSection = document.createElement('section');
+        careerSection.innerHTML = '<h4>Career</h4>';
+        const stageLabel = character.career_stage || 'Apprentice';
+        const tenureDisplay = typeof character.profession_tenure === 'number'
+            ? `${character.profession_tenure} day${character.profession_tenure === 1 ? '' : 's'}`
+            : '—';
+        const satisfactionDisplay = formatSatisfaction(character.job_satisfaction);
+        const focusDisplay = character.profession_focus || 'Generalist';
+        careerSection.innerHTML += `
+            <p><strong>Stage:</strong> ${stageLabel} • <strong>Tenure:</strong> ${tenureDisplay}</p>
+            <p><strong>Satisfaction:</strong> ${satisfactionDisplay} • <strong>Focus:</strong> ${focusDisplay}</p>
+        `;
+        const careerHistory = Array.isArray(character.profession_history) ? character.profession_history : [];
+        if (careerHistory.length) {
+            const list = document.createElement('ul');
+            list.classList.add('mini-list', 'compact', 'subtle');
+            careerHistory.slice(-5).reverse().forEach(entry => {
+                const li = document.createElement('li');
+                const jobLabel = entry.job || 'Unassigned';
+                const stage = entry.stage || '—';
+                const tenure = typeof entry.tenure === 'number' ? `${entry.tenure}d` : '—';
+                const startDay = typeof entry.start_day === 'number' ? `Day ${entry.start_day}` : null;
+                const endDay = typeof entry.end_day === 'number' ? `Day ${entry.end_day}` : null;
+                const period = entry.status === 'current'
+                    ? (startDay ? `${startDay} → present` : 'current post')
+                    : (startDay && endDay ? `${startDay} → ${endDay}` : endDay ? `ended ${endDay}` : 'concluded');
+                const statusTag = entry.status === 'current' ? ' • current' : '';
+                li.innerHTML = `<strong>${jobLabel}</strong> • ${stage} • ${tenure}${period ? ` • ${period}` : ''}${statusTag}`;
+                list.appendChild(li);
+            });
+            careerSection.appendChild(list);
+        } else {
+            const empty = document.createElement('p');
+            empty.classList.add('muted');
+            empty.textContent = 'No recorded career history yet.';
+            careerSection.appendChild(empty);
+        }
+
         const needsSection = document.createElement('section');
         needsSection.innerHTML = '<h4>Needs</h4>';
         needsSection.appendChild(formatKeyValueList(character.needs));
@@ -1316,7 +2318,51 @@ document.addEventListener('DOMContentLoaded', () => {
             inventorySection.appendChild(empty);
         }
 
-        wrapper.append(needsSection, housingSection, skillsSection, inventorySection);
+        const venturesSection = document.createElement('section');
+        venturesSection.innerHTML = '<h4>Ventures</h4>';
+        const ventureLines = [];
+        (character.businesses_owned || []).forEach(name => {
+            ventureLines.push(`Owner • ${name}`);
+        });
+        Object.entries(character.business_roles || {}).forEach(([businessId, role]) => {
+            ventureLines.push(`${role.replace(/_/g, ' ')} • ${businessId}`);
+        });
+        if (ventureLines.length) {
+            const list = document.createElement('ul');
+            list.classList.add('mini-list');
+            ventureLines.forEach(line => {
+                const li = document.createElement('li');
+                li.textContent = line;
+                list.appendChild(li);
+            });
+            venturesSection.appendChild(list);
+        } else {
+            const empty = document.createElement('p');
+            empty.textContent = 'No current business roles.';
+            venturesSection.appendChild(empty);
+        }
+
+        const wealthHistorySection = document.createElement('section');
+        wealthHistorySection.innerHTML = '<h4>Wealth Trend</h4>';
+        const history = Array.isArray(character.wealth_history) ? character.wealth_history : [];
+        if (history.length) {
+            const list = document.createElement('ul');
+            list.classList.add('mini-list', 'compact', 'subtle');
+            history.slice(-6).reverse().forEach(entry => {
+                const li = document.createElement('li');
+                const day = typeof entry.day === 'number' ? entry.day : '—';
+                const worth = formatCoins(entry.net_worth);
+                li.innerHTML = `<strong>Day ${day}</strong>: ${worth || '—'}`;
+                list.appendChild(li);
+            });
+            wealthHistorySection.appendChild(list);
+        } else {
+            const empty = document.createElement('p');
+            empty.textContent = 'No wealth records logged yet.';
+            wealthHistorySection.appendChild(empty);
+        }
+
+        wrapper.append(profileSection, healthSection, careerSection, needsSection, housingSection, skillsSection, inventorySection, venturesSection, wealthHistorySection);
         return wrapper;
     }
 
@@ -1350,6 +2396,82 @@ document.addEventListener('DOMContentLoaded', () => {
             familySection.appendChild(sharedMoments);
         } else {
             familySection.innerHTML += '<p>No registered family ties.</p>';
+        }
+
+        const romanceSection = document.createElement('section');
+        romanceSection.innerHTML = '<h4>Romance & Partnerships</h4>';
+        const partners = Array.isArray(character.romantic_partners)
+            ? character.romantic_partners.filter(name => name && name !== character.name)
+            : [];
+        const courtships = character.active_romances && typeof character.active_romances === 'object'
+            ? Object.entries(character.active_romances)
+            : [];
+        const exPartners = Array.isArray(character.ex_partners)
+            ? character.ex_partners.filter(name => name && name !== character.name)
+            : [];
+        const children = Array.isArray(character.children)
+            ? character.children
+            : (Array.isArray(character.children_names) ? character.children_names : []);
+        const parents = Array.isArray(character.parents)
+            ? character.parents
+            : (Array.isArray(character.parent_names) ? character.parent_names : []);
+
+        const partnerPara = document.createElement('p');
+        partnerPara.innerHTML = `<strong>Partners:</strong> ${partners.length ? partners.join(', ') : 'None'}`;
+        romanceSection.appendChild(partnerPara);
+
+        const courtingList = document.createElement('div');
+        courtingList.classList.add('mini-note');
+        if (courtships.length) {
+            const list = document.createElement('ul');
+            list.classList.add('mini-list', 'compact');
+            courtships.forEach(([name, details]) => {
+                const li = document.createElement('li');
+                const compat = details && typeof details.compatibility === 'number'
+                    ? `${Math.round(details.compatibility * 100)}%`
+                    : '—';
+                const since = details && typeof details.since_day === 'number'
+                    ? ` • since Day ${details.since_day}`
+                    : '';
+                li.textContent = `${name} (${compat})${since}`;
+                list.appendChild(li);
+            });
+            courtingList.appendChild(list);
+        } else {
+            courtingList.textContent = 'No active courtships.';
+        }
+        romanceSection.appendChild(courtingList);
+
+        if (exPartners.length) {
+            const exPara = document.createElement('p');
+            exPara.innerHTML = `<strong>Former partners:</strong> ${exPartners.join(', ')}`;
+            romanceSection.appendChild(exPara);
+        }
+
+        if (character.marriage_history && character.marriage_history.length) {
+            const historyList = document.createElement('ul');
+            historyList.classList.add('mini-list', 'compact');
+            character.marriage_history.slice(-5).reverse().forEach(entry => {
+                const li = document.createElement('li');
+                const partnerName = entry.partner || 'Unknown';
+                const status = entry.status || 'history';
+                const dayText = typeof entry.day === 'number' ? `Day ${entry.day}` : 'Unknown day';
+                const endText = entry.ended_day !== undefined ? ` • ended Day ${entry.ended_day}` : '';
+                li.textContent = `${dayText}: ${partnerName} (${status})${endText}`;
+                historyList.appendChild(li);
+            });
+            romanceSection.appendChild(historyList);
+        }
+
+        if (children.length) {
+            const childrenPara = document.createElement('p');
+            childrenPara.innerHTML = `<strong>Children:</strong> ${children.join(', ')}`;
+            romanceSection.appendChild(childrenPara);
+        }
+        if (parents.length) {
+            const parentsPara = document.createElement('p');
+            parentsPara.innerHTML = `<strong>Parents:</strong> ${parents.join(', ')}`;
+            romanceSection.appendChild(parentsPara);
         }
 
         const knownSection = document.createElement('section');
@@ -1390,7 +2512,7 @@ document.addEventListener('DOMContentLoaded', () => {
         dialogueSection.innerHTML = '<h4>Recent Conversations</h4>';
         dialogueSection.appendChild(formatDialogueHistory(character.dialogue_history));
 
-        wrapper.append(familySection, knownSection, relationshipsSection, opinionsSection, dialogueSection);
+        wrapper.append(familySection, romanceSection, knownSection, relationshipsSection, opinionsSection, dialogueSection);
         return wrapper;
     }
 
@@ -1439,14 +2561,111 @@ document.addEventListener('DOMContentLoaded', () => {
         return wrapper;
     }
 
+    function buildPursuitsContent(character) {
+        const wrapper = document.createElement('div');
+
+        const pursuits = Array.isArray(character.personal_pursuits) ? character.personal_pursuits : [];
+        const logEntries = Array.isArray(character.personal_pursuit_log) ? character.personal_pursuit_log : [];
+        const activeKey = character.active_personal_project;
+
+        const summarySection = document.createElement('section');
+        summarySection.innerHTML = '<h4>Focus</h4>';
+        if (pursuits.length) {
+            const active = pursuits.find(entry => entry.key === activeKey);
+            const leading = [...pursuits].sort((a, b) => (b.level || 0) - (a.level || 0))[0];
+            const activeText = active ? `${active.name} (Stage ${active.level || 0})` : 'None set';
+            const accomplished = leading ? `${leading.name} (Stage ${leading.level || 0})` : '—';
+            summarySection.innerHTML += `
+                <p><strong>Active:</strong> ${activeText}</p>
+                <p><strong>Most seasoned:</strong> ${accomplished}</p>
+                <p><strong>Total pursuits:</strong> ${pursuits.length}</p>
+            `;
+        } else {
+            summarySection.innerHTML += '<p class="muted">No personal pursuits charted yet.</p>';
+        }
+
+        const pursuitSection = document.createElement('section');
+        pursuitSection.innerHTML = '<h4>Pursuits</h4>';
+        if (pursuits.length) {
+            const cards = document.createElement('div');
+            cards.classList.add('pursuit-grid');
+            pursuits.forEach(entry => {
+                const card = document.createElement('article');
+                card.classList.add('pursuit-card');
+                if (entry.key === activeKey) {
+                    card.classList.add('active');
+                }
+                const stage = typeof entry.level === 'number' ? entry.level : 0;
+                const streak = typeof entry.streak === 'number' ? entry.streak : 0;
+                const progress = typeof entry.progress === 'number' ? Math.max(0, Math.min(100, Math.round(entry.progress * 100))) : 0;
+                const affinity = typeof entry.affinity === 'number' ? entry.affinity.toFixed(2) : '—';
+                const focusLabel = entry.need_focus ? `Focuses ${entry.need_focus}` : 'Focus unknown';
+                const tags = Array.isArray(entry.tags) && entry.tags.length ? entry.tags.join(', ') : null;
+
+                card.innerHTML = `
+                    <header>
+                        <h5>${entry.name || entry.key || 'Personal pursuit'}</h5>
+                        <span class="tag">${entry.category || 'Personal'}</span>
+                    </header>
+                    <p class="pursuit-meta">Stage ${stage} • Streak ${streak}</p>
+                    <div class="progress-bar">
+                        <div class="fill" style="width: ${progress}%;"></div>
+                    </div>
+                    <p class="pursuit-footnote">${focusLabel} • Affinity ${affinity}</p>
+                    ${tags ? `<p class="mini-note">${tags}</p>` : ''}
+                `;
+
+                cards.appendChild(card);
+            });
+            pursuitSection.appendChild(cards);
+        } else {
+            pursuitSection.innerHTML += '<p class="muted">No passions discovered yet.</p>';
+        }
+
+        const logSection = document.createElement('section');
+        logSection.innerHTML = '<h4>Recent Notes</h4>';
+        if (logEntries.length) {
+            const list = document.createElement('ul');
+            list.classList.add('mini-list', 'compact');
+            logEntries.slice(-10).reverse().forEach(entry => {
+                const li = document.createElement('li');
+                const dayText = typeof entry.day === 'number' ? `Day ${entry.day}` : 'Day —';
+                if (entry.type === 'pursuit') {
+                    const stage = typeof entry.stage === 'number' ? entry.stage : '—';
+                    const progress = typeof entry.progress === 'number' ? Math.round(entry.progress * 100) : null;
+                    const progressText = progress !== null ? ` • ${progress}% toward next milestone` : '';
+                    li.innerHTML = `<strong>${dayText}</strong>: Practiced ${entry.pursuit}${progressText} (Stage ${stage}).`;
+                } else if (entry.type === 'milestone') {
+                    const stage = typeof entry.stage === 'number' ? entry.stage : '—';
+                    li.innerHTML = `<strong>${dayText}</strong>: Reached stage ${stage} in ${entry.pursuit}.`;
+                } else if (entry.type === 'skip') {
+                    const reason = entry.reason || 'took a rest';
+                    li.innerHTML = `<strong>${dayText}</strong>: Deferred ${entry.pursuit} (${reason}).`;
+                } else {
+                    li.innerHTML = `<strong>${dayText}</strong>: ${entry.pursuit || 'Pursuit'} noted.`;
+                }
+                list.appendChild(li);
+            });
+            logSection.appendChild(list);
+        } else {
+            logSection.innerHTML += '<p class="muted">No journal entries yet.</p>';
+        }
+
+        wrapper.append(summarySection, pursuitSection, logSection);
+        return wrapper;
+    }
+
     function buildCharacterDetails(character) {
         const wrapper = document.createElement('section');
         wrapper.classList.add('detail-tabs');
 
         const header = document.createElement('header');
+        const stageLabel = character.career_stage ? ` • ${character.career_stage}` : '';
+        const satisfactionLabel = formatSatisfaction(character.job_satisfaction);
+        const reputationLabel = character.reputation ?? '—';
         header.innerHTML = `
             <h3>${character.name}</h3>
-            <p>${character.job || 'Unassigned'} • Reputation ${character.reputation ?? '—'}</p>
+            <p>${character.job || 'Unassigned'}${stageLabel} • Reputation ${reputationLabel} • Satisfaction ${satisfactionLabel}</p>
         `;
 
         const followButton = document.createElement('button');
@@ -1482,6 +2701,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const tabs = [
             { label: 'Overview', builder: buildOverviewContent },
             { label: 'Social', builder: buildSocialContent },
+            { label: 'Pursuits', builder: buildPursuitsContent },
             { label: 'Activity', builder: buildActivityContent },
         ];
 
@@ -1512,12 +2732,144 @@ document.addEventListener('DOMContentLoaded', () => {
         return wrapper;
     }
 
+    function abbreviateTileName(name) {
+        if (typeof name !== 'string' || !name.length) return '';
+        const spaced = name.replace(/([a-z])([A-Z])/g, '$1 $2');
+        const parts = spaced.split(/\s+/).filter(Boolean);
+        if (!parts.length) return name.slice(0, 2).toUpperCase();
+        return parts
+            .map(part => part.charAt(0))
+            .join('')
+            .slice(0, 3)
+            .toUpperCase();
+    }
+
+    function buildBuildingPlan(tileLayout) {
+        if (!Array.isArray(tileLayout) || !tileLayout.length) return null;
+        const plan = document.createElement('div');
+        plan.classList.add('building-plan');
+        tileLayout.forEach(row => {
+            const rowEl = document.createElement('div');
+            rowEl.classList.add('building-plan-row');
+            const cells = Array.isArray(row) ? row : [];
+            cells.forEach(tileName => {
+                const cellEl = document.createElement('div');
+                cellEl.classList.add('building-plan-cell');
+                if (tileName) {
+                    const safeName = String(tileName);
+                    cellEl.classList.add('tile-chip');
+                    cellEl.classList.add(`tile-${safeName}`);
+                    cellEl.textContent = abbreviateTileName(safeName);
+                    cellEl.title = safeName.replace(/([a-z])([A-Z])/g, '$1 $2');
+                } else {
+                    cellEl.classList.add('empty');
+                }
+                rowEl.appendChild(cellEl);
+            });
+            plan.appendChild(rowEl);
+        });
+        return plan;
+    }
+
+    function buildBuildingDetails(building) {
+        const wrapper = document.createElement('div');
+        wrapper.classList.add('building-details');
+
+        const heading = document.createElement('h3');
+        heading.textContent = building.display_name || building.structure_type || 'Structure';
+        wrapper.appendChild(heading);
+
+        const dl = document.createElement('dl');
+        dl.innerHTML = `
+            <dt>Type</dt><dd>${building.structure_type || 'Unknown'}</dd>
+            <dt>Operational</dt><dd>${building.is_operational ? 'Yes' : 'No'}</dd>
+        `;
+        if (typeof building.provides_shelter === 'number') {
+            dl.innerHTML += `<dt>Shelter Capacity</dt><dd>${building.provides_shelter}</dd>`;
+        }
+        if (building.wealth_tier) {
+            dl.innerHTML += `<dt>Wealth Tier</dt><dd class="tier-text tier-${building.wealth_tier}">${building.wealth_tier}</dd>`;
+        }
+        if (building.household_style) {
+            dl.innerHTML += `<dt>Household Style</dt><dd>${building.household_style}</dd>`;
+        }
+        if (Array.isArray(building.amenities) && building.amenities.length) {
+            dl.innerHTML += `<dt>Amenities</dt><dd>${building.amenities.join(', ')}</dd>`;
+        }
+        if (Array.isArray(building.occupants)) {
+            const occupants = building.occupants.length
+                ? building.occupants.join(', ')
+                : 'None';
+            dl.innerHTML += `<dt>Occupants</dt><dd>${occupants}</dd>`;
+        }
+        wrapper.appendChild(dl);
+
+        if (Array.isArray(building.occupant_profiles) && building.occupant_profiles.length) {
+            const occupantSection = document.createElement('section');
+            occupantSection.classList.add('building-occupants');
+            occupantSection.innerHTML = '<h4>Residents</h4>';
+            const list = document.createElement('ul');
+            list.classList.add('mini-list', 'compact');
+            building.occupant_profiles.forEach(profile => {
+                const job = profile.job || 'Unassigned';
+                const wealth = profile.wealth_status ? ` • ${profile.wealth_status}` : '';
+                const mood = profile.mood ? ` • Mood: ${profile.mood}` : '';
+                list.innerHTML += `
+                    <li>
+                        <strong>${profile.name}</strong> — ${job}${wealth}${mood}
+                    </li>
+                `;
+            });
+            occupantSection.appendChild(list);
+            wrapper.appendChild(occupantSection);
+        }
+
+        if (Array.isArray(building.tile_layout) && building.tile_layout.length) {
+            const plan = buildBuildingPlan(building.tile_layout);
+            if (plan) {
+                const planSection = document.createElement('section');
+                planSection.classList.add('building-plan-section');
+                planSection.innerHTML = '<h4>Floor Plan</h4>';
+                planSection.appendChild(plan);
+                wrapper.appendChild(planSection);
+            }
+        }
+
+        if (building.latest_household_story) {
+            const story = building.latest_household_story;
+            const storySection = document.createElement('section');
+            storySection.classList.add('building-story');
+            const dayLabel = typeof story.day === 'number' ? `Day ${story.day}` : 'Recent';
+            storySection.innerHTML = `
+                <h4>Recent Evening</h4>
+                <p>${story.summary || 'A quiet night passed.'}</p>
+                <p class="meta subtle">${dayLabel}</p>
+            `;
+            wrapper.appendChild(storySection);
+        }
+
+        if (building.latest_neighborhood_story) {
+            const story = building.latest_neighborhood_story;
+            const section = document.createElement('section');
+            section.classList.add('building-story');
+            const dayLabel = typeof story.day === 'number' ? `Day ${story.day}` : 'Recent';
+            const neighborhood = story.neighborhood || 'Neighborhood';
+            section.innerHTML = `
+                <h4>Neighborhood Highlight</h4>
+                <p>${story.summary || 'Neighbors gathered nearby.'}</p>
+                <p class="meta subtle">${neighborhood} • ${dayLabel}</p>
+            `;
+            wrapper.appendChild(section);
+        }
+
+        return wrapper;
+    }
+
     function displayEntityDetails(entity, type, targetPanelId) {
         const targetPanel = document.getElementById(targetPanelId || 'entity-details');
         if (!targetPanel) return;
 
         targetPanel.innerHTML = '';
-        const dl = document.createElement('dl');
 
         if (type === 'character') {
             targetPanel.appendChild(buildCharacterDetails(entity));
@@ -1532,32 +2884,37 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (type === 'building') {
-            dl.innerHTML = `
-                <h3>${entity.display_name}</h3>
-                <dt>Type</dt><dd>${entity.structure_type}</dd>
-                <dt>Operational</dt><dd>${entity.is_operational}</dd>
-                ${entity.provides_shelter ? `<dt>Shelter Capacity</dt><dd>${entity.provides_shelter}</dd>` : ''}
-                ${Array.isArray(entity.occupants) ? `<dt>Occupants</dt><dd>${entity.occupants.length ? entity.occupants.join(', ') : 'None'}</dd>` : ''}
-                ${entity.inventory ? `<dt>Inventory</dt><dd>${JSON.stringify(entity.inventory)}</dd>` : ''}
-            `;
+            const details = buildBuildingDetails(entity);
+            if (entity.inventory) {
+                const inventorySection = document.createElement('section');
+                inventorySection.classList.add('building-inventory');
+                inventorySection.innerHTML = `<h4>Inventory</h4><pre>${JSON.stringify(entity.inventory, null, 2)}</pre>`;
+                details.appendChild(inventorySection);
+            }
+            targetPanel.appendChild(details);
+            openPanel('info-panel');
+            return;
         }
-        targetPanel.appendChild(dl);
         openPanel('info-panel');
     }
 
     function updateViewportTransform() {
         if (!mapViewport) return;
         mapViewport.style.transform = `translate(${viewportPan.x}px, ${viewportPan.y}px) scale(${viewportZoom})`;
+        if (followedCharacterName) {
+            positionFollowOverlay({ name: followedCharacterName });
+        }
     }
 
     function centerViewportOn(x, y) {
-        if (!mapStage || !mapViewport) return;
+        const surface = mapCanvas || mapStage;
+        if (!surface || !mapViewport) return;
         const tileSize = getTileSize();
-        const stageRect = mapStage.getBoundingClientRect();
+        const surfaceRect = surface.getBoundingClientRect();
         const targetX = (x + 0.5) * tileSize;
         const targetY = (y + 0.5) * tileSize;
-        viewportPan.x = stageRect.width / 2 - targetX * viewportZoom;
-        viewportPan.y = stageRect.height / 2 - targetY * viewportZoom;
+        viewportPan.x = surfaceRect.width / 2 - targetX * viewportZoom;
+        viewportPan.y = surfaceRect.height / 2 - targetY * viewportZoom;
         updateViewportTransform();
     }
 
@@ -1589,19 +2946,36 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const incomingRevision = typeof gameState.map_revision === 'number' ? gameState.map_revision : null;
         const revisionChanged = incomingRevision !== null && incomingRevision !== mapRevisionStamp;
-        if (needsRebuild || revisionChanged || mapTerrainCache.length !== totalCells || mapOverlayCache.length !== totalCells) {
+        if (
+            needsRebuild
+            || revisionChanged
+            || mapTerrainCache.length !== totalCells
+            || mapOverlayCache.length !== totalCells
+            || mapResourceCache.length !== totalCells
+        ) {
             mapTerrainCache = new Array(totalCells).fill(null);
             mapOverlayCache = new Array(totalCells).fill(null);
+            mapResourceCache = new Array(totalCells).fill(null);
         }
         mapRevisionStamp = incomingRevision;
 
         const tileSize = getTileSize();
         const width = cols * tileSize;
         const height = rows * tileSize;
+
         mapViewport.style.width = `${width}px`;
         mapViewport.style.height = `${height}px`;
         mapCharactersLayer.style.width = `${width}px`;
         mapCharactersLayer.style.height = `${height}px`;
+
+        if (mapGridDiv) {
+            mapGridDiv.style.width = `${width}px`;
+            mapGridDiv.style.height = `${height}px`;
+            mapGridDiv.style.setProperty('--map-cols', cols);
+            mapGridDiv.style.setProperty('--map-rows', rows);
+            mapGridDiv.style.gridTemplateColumns = `repeat(${cols}, var(--tile-size))`;
+            mapGridDiv.style.gridTemplateRows = `repeat(${rows}, var(--tile-size))`;
+        }
 
         const cells = mapGridDiv.children;
         for (let r = 0; r < rows; r++) {
@@ -1636,7 +3010,13 @@ document.addEventListener('DOMContentLoaded', () => {
             const heightCells = building.height ?? 1;
             const overlayType = building.structure_type === 'Stockpile' ? 'stockpile' : 'building';
             const label = building.display_name || building.structure_type || 'Structure';
-            const signature = `${overlayType}|${label}|${originX},${originY}`;
+            const rawType = building.structure_type || label;
+            const slug = rawType
+                ? String(rawType).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+                : '';
+            const tier = building.wealth_tier || '';
+            const style = building.household_style || '';
+            const signature = JSON.stringify({ overlayType, label, originX, originY, slug, tier, style });
             for (let r = 0; r < heightCells; r++) {
                 for (let c = 0; c < widthCells; c++) {
                     const x = originX + c;
@@ -1658,11 +3038,17 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             if (prevSignature && prevSignature !== nextSignature) {
-                cell.classList.remove('building-cell', 'stockpile-cell');
+                cell.classList.remove('building-cell', 'stockpile-cell', 'building-origin');
                 delete cell.dataset.building;
                 delete cell.dataset.buildingOriginX;
                 delete cell.dataset.buildingOriginY;
                 delete cell.dataset.buildingName;
+                delete cell.dataset.buildingType;
+                if (cell.dataset.buildingTierClass) {
+                    cell.classList.remove(cell.dataset.buildingTierClass);
+                    delete cell.dataset.buildingTierClass;
+                }
+                delete cell.dataset.householdStyle;
                 const baseTitle = cell.dataset.baseTitle || mapTerrainCache[index] || 'Unknown';
                 const x = index % cols;
                 const y = Math.floor(index / cols);
@@ -1679,20 +3065,130 @@ document.addEventListener('DOMContentLoaded', () => {
                 continue;
             }
 
-            const [type, label, origin] = nextSignature.split('|');
-            const [originX, originY] = origin.split(',').map(Number);
-            cell.classList.toggle('stockpile-cell', type === 'stockpile');
-            cell.classList.toggle('building-cell', type !== 'stockpile');
+            let overlayDescriptor;
+            try {
+                overlayDescriptor = JSON.parse(nextSignature);
+            } catch (error) {
+                overlayDescriptor = null;
+            }
+            if (!overlayDescriptor) {
+                continue;
+            }
+            const { overlayType, label, originX, originY, slug, tier, style } = overlayDescriptor;
+            const isStockpile = overlayType === 'stockpile';
+            cell.classList.toggle('stockpile-cell', isStockpile);
+            cell.classList.toggle('building-cell', !isStockpile);
             cell.dataset.building = 'true';
             cell.dataset.buildingOriginX = originX;
             cell.dataset.buildingOriginY = originY;
             cell.dataset.buildingName = label;
+            if (slug) {
+                cell.dataset.buildingType = slug;
+            } else {
+                delete cell.dataset.buildingType;
+            }
+            if (tier) {
+                const tierClass = `building-tier-${tier}`;
+                if (cell.dataset.buildingTierClass && cell.dataset.buildingTierClass !== tierClass) {
+                    cell.classList.remove(cell.dataset.buildingTierClass);
+                }
+                cell.classList.add(tierClass);
+                cell.dataset.buildingTierClass = tierClass;
+            } else if (cell.dataset.buildingTierClass) {
+                cell.classList.remove(cell.dataset.buildingTierClass);
+                delete cell.dataset.buildingTierClass;
+            }
+            if (style) {
+                cell.dataset.householdStyle = style;
+            } else {
+                delete cell.dataset.householdStyle;
+            }
             const x = index % cols;
             const y = Math.floor(index / cols);
+            cell.classList.toggle('building-origin', x === originX && y === originY);
             cell.title = `${label} (${x}, ${y})`;
         }
 
         mapOverlayCache = nextOverlayCache;
+
+        const resourceNodes = Array.isArray(gameState.resource_nodes) ? gameState.resource_nodes : [];
+        const nextResourceCache = new Array(totalCells).fill(null);
+
+        resourceNodes.forEach(node => {
+            if (!node || !Array.isArray(node.location) || node.location.length < 2) return;
+            const rawX = Number(node.location[0]);
+            const rawY = Number(node.location[1]);
+            if (!Number.isFinite(rawX) || !Number.isFinite(rawY)) return;
+            const x = Math.floor(rawX);
+            const y = Math.floor(rawY);
+            if (x < 0 || y < 0 || x >= cols || y >= rows) return;
+            const resourceName = typeof node.resource === 'string' ? node.resource : 'Resource';
+            const slug = resourceName
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, '-')
+                .replace(/^-+|-+$/g, '');
+            const depleted = Boolean(node.depleted);
+            const signature = `${resourceName}|${slug}|${depleted ? '1' : '0'}`;
+            const index = y * cols + x;
+            nextResourceCache[index] = signature;
+        });
+
+        for (let index = 0; index < totalCells; index++) {
+            const cell = cells[index];
+            if (!cell) continue;
+            const prevSignature = mapResourceCache[index];
+            const nextSignature = nextResourceCache[index];
+            if (prevSignature === nextSignature && !needsRebuild) {
+                continue;
+            }
+
+            if (prevSignature) {
+                const [, prevSlug = ''] = prevSignature.split('|');
+                cell.classList.remove('resource-node', 'resource-depleted');
+                if (prevSlug) {
+                    cell.classList.remove(`resource-${prevSlug}`);
+                }
+                if (cell.dataset.resource) {
+                    delete cell.dataset.resource;
+                    delete cell.dataset.resourceStatus;
+                }
+            }
+
+            if (nextSignature) {
+                const [resourceName = '', slug = '', flag = '0'] = nextSignature.split('|');
+                const isDepleted = flag === '1';
+                cell.classList.add('resource-node');
+                if (slug) {
+                    cell.classList.add(`resource-${slug}`);
+                }
+                cell.classList.toggle('resource-depleted', isDepleted);
+                cell.dataset.resource = resourceName;
+                cell.dataset.resourceStatus = isDepleted ? 'depleted' : 'active';
+                if (cell.dataset.building !== 'true') {
+                    const baseTitle = cell.dataset.baseTitle || mapTerrainCache[index] || 'Unknown';
+                    const x = index % cols;
+                    const y = Math.floor(index / cols);
+                    const label = isDepleted ? `${resourceName} (depleted)` : resourceName;
+                    cell.title = `${label} • ${baseTitle} (${x}, ${y})`;
+                }
+            } else {
+                const [ , prevSlug = '' ] = prevSignature ? prevSignature.split('|') : [];
+                if (prevSlug) {
+                    cell.classList.remove(`resource-${prevSlug}`);
+                }
+                cell.classList.remove('resource-node', 'resource-depleted');
+                delete cell.dataset.resource;
+                delete cell.dataset.resourceStatus;
+                if (cell.dataset.building !== 'true' && !needsRebuild) {
+                    const baseTitle = cell.dataset.baseTitle || mapTerrainCache[index] || 'Unknown';
+                    const x = index % cols;
+                    const y = Math.floor(index / cols);
+                    cell.title = `${baseTitle} (${x}, ${y})`;
+                }
+            }
+
+            mapResourceCache[index] = nextSignature;
+        }
     }
 
     function onMapCellClick(event) {
@@ -1776,18 +3272,45 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    function updatePlaybackControls(gameState) {
+        if (!playbackButton || !gameState) return;
+        const paused = Boolean(gameState.is_paused);
+        const speed = Number(gameState.current_speed_multiplier);
+        if (Number.isFinite(speed) && SPEED_PRESETS.includes(speed)) {
+            playbackSpeedIndex = SPEED_PRESETS.indexOf(speed);
+        }
+
+        if (playbackIcon) {
+            playbackIcon.textContent = paused ? '▶' : '⏸';
+        }
+
+        if (playbackStateLabel) {
+            playbackStateLabel.textContent = paused ? 'Paused' : 'Playing';
+        }
+
+        if (playbackSpeedLabel) {
+            playbackSpeedLabel.textContent = formatSpeedMultiplier(speed);
+        }
+
+        playbackButton.dataset.paused = paused ? 'true' : 'false';
+        playbackButton.setAttribute('aria-pressed', paused ? 'true' : 'false');
+        playbackButton.setAttribute('aria-label', paused ? 'Resume simulation' : 'Pause simulation');
+        playbackButton.title = paused
+            ? 'Click to resume. Shift+Click, scroll, or press 1-4 to change speed.'
+            : 'Click to pause. Shift+Click, scroll, or press 1-4 to change speed.';
+    }
+
     function updateGameInfo(gameState) {
         if (!gameStatusHeader || !gameState) return;
         const statusClass = gameState.is_paused ? 'status-pill muted' : 'status-pill';
+        const formattedSpeed = formatSpeedMultiplier(Number(gameState.current_speed_multiplier));
         gameStatusHeader.innerHTML = `
             <span class="status-pill">Day ${gameState.day}</span>
             <span class="status-pill">Tick ${gameState.tick}/${gameState.ticks_per_day}</span>
-            <span class="status-pill">Speed ${gameState.current_speed_multiplier}x</span>
+            <span class="status-pill">Speed ${formattedSpeed}</span>
             <span class="${statusClass}">${gameState.is_paused ? 'Paused' : 'Running'}</span>
         `;
-        if (pauseButton) {
-            pauseButton.textContent = gameState.is_paused ? 'Resume' : 'Pause';
-        }
+        updatePlaybackControls(gameState);
     }
 
     function updateEventLog(log) {
@@ -1912,11 +3435,35 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function performControlAction(url) {
         try {
-            await fetch(url, { method: 'POST' });
+            const response = await fetch(url, { method: 'GET' });
+            if (!response.ok) {
+                console.error(`Control action failed (${response.status}): ${url}`);
+                return;
+            }
             updateUI();
         } catch (error) {
             console.error('Error performing control action:', error);
         }
+    }
+
+    function togglePlayback() {
+        performControlAction(`${API_BASE_URL}/toggle_pause`);
+    }
+
+    function setPlaybackSpeed(multiplier) {
+        if (!Number.isFinite(multiplier)) return;
+        if (SPEED_PRESETS.includes(multiplier)) {
+            playbackSpeedIndex = SPEED_PRESETS.indexOf(multiplier);
+        }
+        performControlAction(`${API_BASE_URL}/set_speed?multiplier=${multiplier}`);
+    }
+
+    function cyclePlaybackSpeed(direction = 1) {
+        if (!SPEED_PRESETS.length) return;
+        const currentIndex = playbackSpeedIndex >= 0 ? playbackSpeedIndex : 0;
+        const normalized = ((currentIndex + direction) % SPEED_PRESETS.length + SPEED_PRESETS.length) % SPEED_PRESETS.length;
+        const nextSpeed = SPEED_PRESETS[normalized];
+        setPlaybackSpeed(nextSpeed);
     }
 
     async function updateUI() {
@@ -1927,6 +3474,7 @@ document.addEventListener('DOMContentLoaded', () => {
             updateGameInfo(gameState);
             updateEventFeed(gameState.event_log);
             updateWorldSummary(gameState);
+            updateHealthcareIntel(gameState);
             updateEconomyIntel(gameState);
             updateFamilyIntel(gameState);
             renderCharacterList(gameState.characters);
@@ -1941,9 +3489,11 @@ document.addEventListener('DOMContentLoaded', () => {
         event.preventDefault();
         const zoomFactor = event.deltaY < 0 ? 1.1 : 0.9;
         const newZoom = Math.min(3, Math.max(0.5, viewportZoom * zoomFactor));
-        const rect = mapStage.getBoundingClientRect();
-        const cursorX = event.clientX - rect.left;
-        const cursorY = event.clientY - rect.top;
+        const surfaceElement = mapCanvas || mapStage;
+        if (!surfaceElement) return;
+        const surfaceRect = surfaceElement.getBoundingClientRect();
+        const cursorX = event.clientX - surfaceRect.left;
+        const cursorY = event.clientY - surfaceRect.top;
         const offsetX = (cursorX - viewportPan.x) / viewportZoom;
         const offsetY = (cursorY - viewportPan.y) / viewportZoom;
         viewportZoom = newZoom;
@@ -1953,11 +3503,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function beginMapDrag(event) {
+        const dragSurface = mapCanvas || mapStage;
+        if (!dragSurface) return;
         if (event.pointerType === 'mouse' && event.button !== 0) return;
         if (activePointerId !== null) return;
         activePointerId = event.pointerId;
         lastPointerPosition = { x: event.clientX, y: event.clientY };
-        mapStage.setPointerCapture(activePointerId);
+        dragSurface.setPointerCapture(activePointerId);
         autoFollowCamera = false;
     }
 
@@ -1973,7 +3525,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function endMapDrag(event) {
         if (activePointerId !== event.pointerId) return;
-        mapStage.releasePointerCapture(activePointerId);
+        const dragSurface = mapCanvas || mapStage;
+        if (dragSurface) {
+            dragSurface.releasePointerCapture(activePointerId);
+        }
         activePointerId = null;
     }
 
@@ -2008,22 +3563,52 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    if (pauseButton) {
-        pauseButton.addEventListener('click', () => performControlAction(`${API_BASE_URL}/toggle_pause`));
+    if (playbackButton) {
+        playbackButton.addEventListener('click', event => {
+            if (event.shiftKey || event.altKey) {
+                event.preventDefault();
+                const direction = event.altKey ? -1 : 1;
+                cyclePlaybackSpeed(direction);
+                return;
+            }
+            togglePlayback();
+        });
+
+        playbackButton.addEventListener('contextmenu', event => {
+            event.preventDefault();
+            cyclePlaybackSpeed(1);
+        });
+
+        playbackButton.addEventListener('wheel', event => {
+            event.preventDefault();
+            const direction = event.deltaY > 0 ? -1 : 1;
+            cyclePlaybackSpeed(direction);
+        }, { passive: false });
     }
 
-    speedButtons.forEach(button => {
-        button.addEventListener('click', () => {
-            performControlAction(`${API_BASE_URL}/set_speed?multiplier=${button.dataset.speed}`);
-        });
+    window.addEventListener('keydown', event => {
+        if (isTypingContext(event.target)) return;
+        if (event.key === ' ' || event.code === 'Space') {
+            event.preventDefault();
+            togglePlayback();
+            return;
+        }
+        const keyIndex = SPEED_KEY_LOOKUP[event.code];
+        const fallbackIndex = ['1', '2', '3', '4'].includes(event.key) ? Number(event.key) - 1 : undefined;
+        const targetIndex = Number.isInteger(keyIndex) ? keyIndex : fallbackIndex;
+        if (targetIndex !== undefined && SPEED_PRESETS[targetIndex] !== undefined) {
+            event.preventDefault();
+            setPlaybackSpeed(SPEED_PRESETS[targetIndex]);
+        }
     });
 
-    if (mapStage) {
-        mapStage.addEventListener('pointerdown', beginMapDrag);
-        mapStage.addEventListener('pointermove', moveMapDrag);
-        mapStage.addEventListener('pointerup', endMapDrag);
-        mapStage.addEventListener('pointerleave', endMapDrag);
-        mapStage.addEventListener('wheel', handleWheelZoom, { passive: false });
+    const dragSurface = mapCanvas || mapStage;
+    if (dragSurface) {
+        dragSurface.addEventListener('pointerdown', beginMapDrag);
+        dragSurface.addEventListener('pointermove', moveMapDrag);
+        dragSurface.addEventListener('pointerup', endMapDrag);
+        dragSurface.addEventListener('pointerleave', endMapDrag);
+        dragSurface.addEventListener('wheel', handleWheelZoom, { passive: false });
     }
 
     if (followOverlay) {
@@ -2045,8 +3630,9 @@ document.addEventListener('DOMContentLoaded', () => {
         refreshMapLayout();
     });
 
+    setupHudPopovers();
+
     // --- Initial State ---
-    openPanel('hud-panel');
     updateViewportTransform();
 
     // --- Initial Load & Interval ---

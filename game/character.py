@@ -6,7 +6,13 @@ import random
 from .llm_integration import generate_dialogue # Kept as it's used
 # from .stockpile import Stockpile # Not directly used by Character methods
 # from .work_order import WorkOrder # Not directly used by Character methods
-from .data import BLUEPRINTS, JOB_TASK_DEFINITIONS, STRUCTURE_BLUEPRINTS, JOB_SALARIES
+from .data import (
+    BLUEPRINTS,
+    JOB_TASK_DEFINITIONS,
+    STRUCTURE_BLUEPRINTS,
+    JOB_SALARIES,
+    NOBLE_RANKS_OR_JOBS,
+)
 from . import config
 from .goal import Goal, GoalType, GoalStatus, DEFAULT_IDLE_GOAL, create_goal_from_job
 from .rumor import Rumor # Added for rumor generation
@@ -36,6 +42,15 @@ class Character:
                  arrival_day: Optional[int] = None):
         self.name = name; self.personality = personality; self.traits = traits;
         self.money: int = money
+        self.net_worth: int = money
+        self.wealth_status: str = "modest"
+        self.wealth_history: Deque[Tuple[int, int]] = deque(maxlen=getattr(config, "WEALTH_HISTORY_MAX_ENTRIES", 30))
+        self.businesses_owned: List[str] = []
+        self.business_roles: Dict[str, str] = {}
+        self.retired: bool = False
+        self._last_business_check_day: Optional[int] = None
+        self._last_wealth_evaluation_day: Optional[int] = None
+        self._last_jealousy_day: Optional[int] = None
         self.family_members: List[str] = family_members if family_members else []
         self.skills: Dict[str, Dict[str, Any]] = {}
         if skills:
@@ -52,6 +67,18 @@ class Character:
 
         self.relationships = {} # Initialize relationships first
         self.family_roles: Dict[str, Set[str]] = {}
+        self.romantic_partners: Set[str] = set()
+        self.ex_partners: Set[str] = set()
+        self.children_names: Set[str] = set()
+        self.parent_names: Set[str] = set()
+        self.active_romances: Dict[str, Dict[str, Any]] = {}
+        self.marriage_history: List[Dict[str, Any]] = []
+        self._last_family_daily_day: Optional[int] = None
+        self._last_child_day: Optional[int] = None
+        self._romance_cooldowns: Dict[str, int] = {}
+        self._romance_attempt_window: Deque[Tuple[int, str]] = deque(maxlen=10)
+        self._last_romance_eval_day: Optional[int] = None
+        self._last_commitment_check: Optional[int] = None
         if self.family_members: # Then set family scores
             for member_name in self.family_members:
                 if member_name != self.name:
@@ -84,6 +111,17 @@ class Character:
         self.managed_item_targets: Dict[str, int] = {}; self.order_cooldown: Dict[str, int] = {}
         self.active_work_order_id: Optional[str] = None; self.crafting_progress: int = 0
         self.materials_gathered_for_wo: bool = False; self.items_crafted_for_wo: bool = False
+        self.leadership_oversight_score: float = 0.0
+        self._last_oversight_evaluation_day: Optional[int] = None
+        self._last_oversight_summary: Optional[Dict[str, Any]] = None
+        self._last_oversight_memory_day: Optional[int] = None
+        self._last_management_day: Optional[int] = None
+        self._management_actions_today: float = 0.0
+        self._management_action_notes: List[str] = []
+        self.supervisor_oversight: float = 0.0
+        self.last_supervisor_oversight_day: Optional[int] = None
+        self._neglect_slack_pressure: float = 0.0
+        self._neglect_illegal_pressure: float = 0.0
 
         self.rank: str = rank
         self.liege: Optional[str] = liege
@@ -119,12 +157,73 @@ class Character:
         self.injury_severity: int = 0
         self.appointed_by: Optional[str] = None
 
+        health_defaults = getattr(config, "HEALTH_PROFILE_DEFAULTS", {})
+        base_vitality = float(health_defaults.get("base_vitality", 72))
+        vitality_variance = float(health_defaults.get("vitality_variance", 6))
+        base_immunity = float(health_defaults.get("base_immunity", 0.6))
+        immunity_variance = float(health_defaults.get("immunity_variance", 0.1))
+        base_stress = float(health_defaults.get("base_stress", 0.2))
+        vitality = max(
+            getattr(config, "HEALTH_VITALITY_FLOOR", 0.0),
+            min(
+                getattr(config, "HEALTH_VITALITY_CEILING", 100.0),
+                base_vitality + random.uniform(-vitality_variance, vitality_variance),
+            ),
+        )
+        immunity = max(
+            getattr(config, "HEALTH_IMMUNITY_FLOOR", 0.05),
+            min(
+                getattr(config, "HEALTH_IMMUNITY_CEILING", 0.95),
+                base_immunity + random.uniform(-immunity_variance, immunity_variance),
+            ),
+        )
+        stress = max(
+            getattr(config, "HEALTH_STRESS_FLOOR", 0.0),
+            min(
+                getattr(config, "HEALTH_STRESS_CEILING", 1.0),
+                base_stress + random.uniform(-0.05, 0.05),
+            ),
+        )
+        self.health_profile: Dict[str, Any] = {
+            "vitality": vitality,
+            "immune_resilience": immunity,
+            "stress": stress,
+            "chronic_conditions": [],
+            "recent_events": deque(maxlen=getattr(config, "HEALTH_RECENT_EVENT_LIMIT", 10)),
+            "condition_history": [],
+            "last_checkup_day": None,
+            "last_checkup_note_day": None,
+        }
+        self.health_profile["vitality_band"] = self._classify_vitality(vitality)
+        self.health_profile["stress_band"] = self._classify_stress(stress)
+        self.health_profile["immunity_band"] = self._classify_immunity(immunity)
+
         self.known_characters: List[str] = []
         self.opinions: Dict[str, Dict[str, int]] = {}
         self.dialogue_history: List[Dict[str, Any]] = []
         self.life_history: List[Dict[str, Any]] = []
         self._life_event_flags: Set[str] = set()
         self.known_events: List[str] = []
+
+        self.personal_pursuits: List[Dict[str, Any]] = []
+        self.personal_pursuit_log: Deque[Dict[str, Any]] = deque(
+            maxlen=getattr(config, "PERSONAL_PURSUIT_LOG_MAX", 12)
+        )
+        self.active_personal_project: Optional[str] = None
+        self._last_personal_pursuit_day: Optional[int] = None
+
+        self.profession_history: List[Dict[str, Any]] = []
+        self.career_stage: str = getattr(config, "CAREER_DEFAULT_STAGE", "Apprentice")
+        self.job_satisfaction: float = getattr(config, "CAREER_SATISFACTION_BASELINE", 0.6)
+        self.professional_focus: Optional[str] = None
+        self.current_profession_tenure: int = 0
+        self._current_profession_start_day: Optional[int] = None
+        self._last_profession_review_day: Optional[int] = None
+        self._last_career_stage_day: Optional[int] = None
+        self._last_career_high_day: Optional[int] = None
+        self._last_burnout_alert_day: Optional[int] = None
+        self._last_recorded_job: Optional[str] = self.job
+        self._triggered_tenure_milestones: Set[int] = set()
 
         self.age_years: int = age if age is not None else random.randint(18, 45)
         self.age_in_days: int = 0
@@ -156,6 +255,21 @@ class Character:
         self.mood: str = "Neutral" # Initial descriptive mood, will be updated by _determine_mood_level
         # self.mood_tendency: Optional[str] = None # Example: "Optimistic", "Pessimistic" - for future enhancement
         self._determine_mood_level() # Set initial mood string based on score
+
+        self._initialize_personal_pursuits()
+
+        base_decision_weights = getattr(config, "DECISION_BASE_WEIGHTS", None)
+        if base_decision_weights:
+            self._decision_profile: Dict[str, Any] = deepcopy(base_decision_weights)
+        else:
+            self._decision_profile = {
+                "work_focus": 1.0,
+                "social_focus": 1.0,
+                "rest_threshold_adjustment": 0.0,
+                "ask_for_help_multiplier": 1.0,
+                "risk_modifier": 1.0,
+            }
+        self._decision_profile_day: Optional[int] = None
 
         # Reputation attribute
         self.reputation_score: int = 0 # Initialize reputation
@@ -654,10 +768,16 @@ class Character:
             "rank": self.rank,
             "liege": self.liege,
             "vassals": self.vassals,
+            "career_stage": self.career_stage,
+            "job_satisfaction": self.job_satisfaction,
+            "profession_focus": self.professional_focus,
+            "profession_tenure": self.current_profession_tenure,
+            "profession_history": self.export_profession_history(limit=8),
             "is_sick": self.is_sick,
             "sickness_severity": self.sickness_severity,
             "is_injured": self.is_injured,
             "injury_severity": self.injury_severity,
+            "health_profile": self.get_health_snapshot(),
             "supervisor_name": self.supervisor_name,
             "subordinates_names": self.subordinates_names,
             "performance_rating": self.performance_rating,
@@ -665,8 +785,467 @@ class Character:
             "known_characters": self.known_characters,
             "relationships": self.relationships,
             "opinions": self.opinions,
-            "dialogue_history": self.dialogue_history[-10:] # Return last 10 for brevity
+            "dialogue_history": self.dialogue_history[-10:], # Return last 10 for brevity
+            "decision_profile": deepcopy(self._decision_profile) if self._decision_profile else None,
+            "personal_pursuits": self.export_personal_pursuits(),
+            "personal_pursuit_log": self.export_personal_pursuit_log(limit=8),
+            "active_personal_project": self.active_personal_project,
         }
+
+    @staticmethod
+    def _classify_vitality(value: float) -> str:
+        if value >= 85:
+            return "robust"
+        if value >= 70:
+            return "steady"
+        if value >= 50:
+            return "strained"
+        if value >= 30:
+            return "frail"
+        return "critical"
+
+    @staticmethod
+    def _classify_stress(value: float) -> str:
+        if value <= 0.18:
+            return "calm"
+        if value <= 0.32:
+            return "steady"
+        if value <= 0.55:
+            return "tense"
+        if value <= 0.75:
+            return "strained"
+        return "overwhelmed"
+
+    @staticmethod
+    def _classify_immunity(value: float) -> str:
+        if value >= 0.78:
+            return "resilient"
+        if value >= 0.6:
+            return "steady"
+        if value >= 0.45:
+            return "susceptible"
+        return "fragile"
+
+    def get_health_snapshot(self) -> Dict[str, Any]:
+        profile = getattr(self, "health_profile", None)
+        if not profile:
+            return {}
+
+        snapshot: Dict[str, Any] = {
+            "vitality": round(float(profile.get("vitality", 0.0)), 1),
+            "immune_resilience": round(float(profile.get("immune_resilience", 0.0)), 3),
+            "stress": round(float(profile.get("stress", 0.0)), 3),
+            "vitality_band": profile.get("vitality_band"),
+            "stress_band": profile.get("stress_band"),
+            "immunity_band": profile.get("immunity_band"),
+            "last_checkup_day": profile.get("last_checkup_day"),
+        }
+
+        events = profile.get("recent_events", [])
+        if isinstance(events, deque):
+            events_iterable = list(events)
+        else:
+            events_iterable = list(events)
+        snapshot["recent_events"] = [deepcopy(evt) for evt in events_iterable[-getattr(config, "HEALTH_RECENT_EVENT_LIMIT", 10):]]
+
+        condition_history = profile.get("condition_history", [])
+        snapshot["condition_history"] = [deepcopy(evt) for evt in condition_history[-12:]]
+        snapshot["chronic_conditions"] = [deepcopy(entry) for entry in profile.get("chronic_conditions", [])]
+        snapshot["active_conditions"] = [deepcopy(entry) for entry in profile.get("active_conditions", [])]
+
+        return snapshot
+
+    def record_health_event(
+        self,
+        world: Optional['World'],
+        event_type: str,
+        summary: str,
+        *,
+        severity: Optional[float] = None,
+        delta: Optional[float] = None,
+        tags: Optional[Iterable[str]] = None,
+    ) -> Dict[str, Any]:
+        profile = getattr(self, "health_profile", None)
+        if profile is None:
+            return {}
+
+        event_day = None
+        if world and world.game_time:
+            event_day = world.game_time.current_day
+
+        record = {
+            "day": event_day,
+            "type": event_type,
+            "summary": summary,
+        }
+        if severity is not None:
+            record["severity"] = round(float(severity), 2)
+        if delta is not None:
+            record["delta"] = round(float(delta), 2)
+        if tags:
+            record["tags"] = [str(tag) for tag in tags if tag]
+
+        significance = 1
+        if event_type in {"fell_ill", "injured", "recovered"}:
+            significance = 2
+
+        self.add_memory(summary)
+
+        life_event_logged = False
+        life_event_error: Optional[str] = None
+        try:
+            self.record_life_event(
+                world,
+                f"health_{event_type}",
+                summary,
+                tags=["health"] + list(record.get("tags", [])),
+                significance=significance,
+            )
+            life_event_logged = True
+        except Exception as exc:  # noqa: BLE001
+            life_event_error = f"{exc.__class__.__name__}: {exc}"
+            if world and hasattr(world, "add_event_log_message"):
+                world.add_event_log_message(
+                    f"Failed to log health life event '{event_type}' for {self.name}: {life_event_error}"
+                )
+
+        record["life_event_logged"] = life_event_logged
+        if life_event_error:
+            record["life_event_error"] = life_event_error
+
+        events_deque = profile.setdefault(
+            "recent_events",
+            deque(maxlen=getattr(config, "HEALTH_RECENT_EVENT_LIMIT", 10)),
+        )
+        events_deque.append(record)
+
+        history = profile.setdefault("condition_history", [])
+        history.append(dict(record))
+        if len(history) > 48:
+            del history[:-48]
+
+        return dict(record)
+
+    def evaluate_daily_health(self, world: Optional['World']) -> List[Dict[str, Any]]:
+        profile = getattr(self, "health_profile", None)
+        if profile is None:
+            return []
+
+        events: List[Dict[str, Any]] = []
+        need_thresholds = getattr(config, "HEALTH_NEED_THRESHOLDS", {})
+        need_margin = getattr(config, "HEALTH_NEED_RECOVERY_MARGIN", 15)
+        vitality_weights = getattr(config, "HEALTH_VITALITY_NEED_WEIGHTS", {})
+        stress_need_weight = getattr(config, "HEALTH_STRESS_NEED_WEIGHT", 0.1)
+        stress_recovery = getattr(config, "HEALTH_STRESS_RECOVERY_RATE", 0.05)
+        vitality_recovery_bonus = getattr(config, "HEALTH_VITALITY_RECOVERY_BONUS", 2.0)
+
+        vitality = float(profile.get("vitality", getattr(config, "HEALTH_PROFILE_DEFAULTS", {}).get("base_vitality", 70)))
+        stress = float(profile.get("stress", getattr(config, "HEALTH_PROFILE_DEFAULTS", {}).get("base_stress", 0.2)))
+        immunity = float(profile.get("immune_resilience", getattr(config, "HEALTH_PROFILE_DEFAULTS", {}).get("base_immunity", 0.6)))
+
+        vitality_delta = 0.0
+        stress_delta = 0.0
+
+        for need, threshold in need_thresholds.items():
+            current_value = self.needs.get(need, threshold)
+            if current_value < threshold:
+                deficit = (threshold - current_value) / 100.0
+                vitality_delta -= deficit * vitality_weights.get(need, 5.0)
+                stress_delta += deficit * stress_need_weight
+            elif current_value >= threshold + need_margin:
+                recovery_factor = (current_value - threshold) / 100.0
+                vitality_delta += recovery_factor * vitality_recovery_bonus
+                stress_delta -= stress_recovery
+
+        if self.is_sick and self.sickness_severity > 0:
+            vitality_delta -= 1.0 + 0.18 * float(self.sickness_severity)
+            stress_delta += 0.04 * float(self.sickness_severity)
+        if self.is_injured and self.injury_severity > 0:
+            vitality_delta -= 0.8 + 0.12 * float(self.injury_severity)
+            stress_delta += 0.035 * float(self.injury_severity)
+
+        vitality = max(
+            getattr(config, "HEALTH_VITALITY_FLOOR", 0.0),
+            min(
+                getattr(config, "HEALTH_VITALITY_CEILING", 100.0),
+                vitality + vitality_delta,
+            ),
+        )
+        stress = max(
+            getattr(config, "HEALTH_STRESS_FLOOR", 0.0),
+            min(
+                getattr(config, "HEALTH_STRESS_CEILING", 1.0),
+                stress + stress_delta,
+            ),
+        )
+
+        immunity += (vitality - getattr(config, "HEALTH_PROFILE_DEFAULTS", {}).get("base_vitality", 70)) / 100.0 * getattr(config, "HEALTH_IMMUNITY_VITALITY_WEIGHT", 0.32)
+        immunity -= stress * getattr(config, "HEALTH_IMMUNITY_STRESS_WEIGHT", 0.45)
+        if not self.is_sick and not self.is_injured and vitality_delta > 0:
+            immunity += 0.02
+        immunity = max(
+            getattr(config, "HEALTH_IMMUNITY_FLOOR", 0.05),
+            min(
+                getattr(config, "HEALTH_IMMUNITY_CEILING", 0.95),
+                immunity,
+            ),
+        )
+
+        profile["vitality"] = vitality
+        profile["stress"] = stress
+        profile["immune_resilience"] = immunity
+        profile["immunity_band"] = self._classify_immunity(immunity)
+
+        if world and world.game_time:
+            profile["last_evaluated_day"] = world.game_time.current_day
+
+        previous_band = profile.get("vitality_band")
+        new_band = self._classify_vitality(vitality)
+        if previous_band and new_band != previous_band:
+            change = vitality - profile.get("previous_vitality", vitality)
+            events.append(
+                self.record_health_event(
+                    world,
+                    "vitality_shift",
+                    f"Vitality is now {new_band} ({vitality:.0f}).",
+                    delta=change,
+                    tags=["vitality"],
+                )
+            )
+        profile["vitality_band"] = new_band
+        profile["previous_vitality"] = vitality
+
+        previous_stress_band = profile.get("stress_band")
+        new_stress_band = self._classify_stress(stress)
+        if previous_stress_band and new_stress_band != previous_stress_band:
+            events.append(
+                self.record_health_event(
+                    world,
+                    "stress_shift",
+                    f"Stress level is now {new_stress_band} ({stress:.2f}).",
+                    severity=stress,
+                    tags=["stress"],
+                )
+            )
+        profile["stress_band"] = new_stress_band
+
+        sickness_model = getattr(config, "HEALTH_SICKNESS_MODEL", {})
+        injury_model = getattr(config, "HEALTH_INJURY_MODEL", {})
+
+        # Sickness progression or onset
+        if not self.is_sick:
+            exposure_bonus = 0.0
+            if world:
+                for other in world.get_nearby_characters(self, radius=sickness_model.get("exposure_radius", 1)):
+                    if getattr(other, "is_sick", False):
+                        exposure_bonus += sickness_model.get("exposure_bonus", 0.05)
+            vitality_factor = max(0.0, (sickness_model.get("worsen_threshold", 40) - vitality) / 100.0)
+            immunity_factor = max(0.0, 1.0 - immunity)
+            sickness_chance = (
+                sickness_model.get("base_chance", 0.01)
+                + vitality_factor * sickness_model.get("vitality_weight", 0.2)
+                + immunity_factor * sickness_model.get("immunity_weight", 0.3)
+                + exposure_bonus
+            )
+            sickness_chance = min(0.95, max(0.0, sickness_chance))
+            if random.random() < sickness_chance:
+                severity_range = sickness_model.get("severity_range", (1.0, 3.0))
+                severity = max(0.5, random.uniform(*severity_range))
+                self.is_sick = True
+                self.sickness_severity = round(max(float(self.sickness_severity), severity), 1)
+                event = self.record_health_event(
+                    world,
+                    "fell_ill",
+                    f"Fell ill (severity {self.sickness_severity:.1f}).",
+                    severity=self.sickness_severity,
+                    tags=["illness"],
+                )
+                events.append(event)
+                if world:
+                    world.add_event_log_message(f"{self.name} has fallen ill (severity {self.sickness_severity:.1f}).")
+                    world.add_notable_event(
+                        "CharacterSickness",
+                        {
+                            "summary": f"{self.name} has fallen ill.",
+                            "character": self.name,
+                            "severity": self.sickness_severity,
+                        },
+                    )
+                    if world.game_time:
+                        new_rumor = Rumor(
+                            subject_char_id=self.name,
+                            content_key="has_fallen_ill_negative",
+                            initial_strength=config.RUMOR_INITIAL_STRENGTH_SMALL_EVENT,
+                            creation_day=world.game_time.current_day,
+                            is_positive=False,
+                            original_source_char_id=self.name,
+                        )
+                        world.add_rumor(new_rumor)
+                        self.known_rumor_ids.add(new_rumor.rumor_id)
+        else:
+            worsen_threshold = sickness_model.get("worsen_threshold", 40)
+            worsen_chance = sickness_model.get("worsen_chance", 0.2)
+            if vitality < worsen_threshold and random.random() < worsen_chance:
+                increase = random.choice([0.5, 1.0])
+                self.sickness_severity = round(min(10.0, self.sickness_severity + increase), 1)
+                events.append(
+                    self.record_health_event(
+                        world,
+                        "sickness_worsened",
+                        f"Illness worsened to severity {self.sickness_severity:.1f}.",
+                        severity=self.sickness_severity,
+                        tags=["illness", "worsened"],
+                    )
+                )
+            else:
+                recovery = sickness_model.get("recovery_rate", 0.8)
+                if vitality >= sickness_model.get("recovery_vitality", 70):
+                    recovery += 0.6
+                recovery += max(0.0, immunity - 0.55) * sickness_model.get("recovery_immunity_bonus", 0.05) * 5
+                previous_severity = self.sickness_severity
+                self.sickness_severity = round(max(0.0, self.sickness_severity - recovery), 1)
+                if self.sickness_severity <= 0:
+                    self.is_sick = False
+                    self.sickness_severity = 0
+                    events.append(
+                        self.record_health_event(
+                            world,
+                            "recovered",
+                            "Recovered from illness.",
+                            tags=["illness", "recovery"],
+                        )
+                    )
+                    immunity = min(
+                        getattr(config, "HEALTH_IMMUNITY_CEILING", 0.95),
+                        immunity + sickness_model.get("recovery_immunity_bonus", 0.05),
+                    )
+                    profile["immune_resilience"] = immunity
+                    profile["immunity_band"] = self._classify_immunity(immunity)
+                    if world:
+                        world.add_event_log_message(f"{self.name} has recovered from illness.")
+                elif previous_severity - self.sickness_severity >= 1.5:
+                    events.append(
+                        self.record_health_event(
+                            world,
+                            "sickness_improved",
+                            f"Illness eased to severity {self.sickness_severity:.1f}.",
+                            severity=self.sickness_severity,
+                            tags=["illness", "improving"],
+                        )
+                    )
+
+        # Injury progression or onset
+        if not self.is_injured:
+            job_modifier = injury_model.get("job_risk", {}).get(self.job, 0.0)
+            vitality_penalty = max(0.0, (injury_model.get("worsen_threshold", 45) - vitality) / 100.0) * injury_model.get("vitality_weight", 0.01)
+            injury_chance = min(0.9, max(0.0, injury_model.get("base_chance", 0.0015) + job_modifier + vitality_penalty))
+            if random.random() < injury_chance:
+                severity_range = injury_model.get("severity_range", (1.0, 4.0))
+                injury_severity = max(0.5, random.uniform(*severity_range))
+                self.is_injured = True
+                self.injury_severity = round(max(float(self.injury_severity), injury_severity), 1)
+                event = self.record_health_event(
+                    world,
+                    "injured",
+                    f"Sustained an injury (severity {self.injury_severity:.1f}).",
+                    severity=self.injury_severity,
+                    tags=["injury"],
+                )
+                events.append(event)
+                if world:
+                    world.add_event_log_message(f"{self.name} has been injured (severity {self.injury_severity:.1f}).")
+                    world.add_notable_event(
+                        "CharacterInjury",
+                        {
+                            "summary": f"{self.name} has been injured.",
+                            "character": self.name,
+                            "severity": self.injury_severity,
+                        },
+                    )
+                    if world.game_time:
+                        new_rumor = Rumor(
+                            subject_char_id=self.name,
+                            content_key="has_been_injured_negative",
+                            initial_strength=config.RUMOR_INITIAL_STRENGTH_SMALL_EVENT,
+                            creation_day=world.game_time.current_day,
+                            is_positive=False,
+                            original_source_char_id=self.name,
+                        )
+                        world.add_rumor(new_rumor)
+                        self.known_rumor_ids.add(new_rumor.rumor_id)
+        else:
+            worsen_threshold = injury_model.get("worsen_threshold", 45)
+            worsen_chance = injury_model.get("worsen_chance", 0.15)
+            if vitality < worsen_threshold and random.random() < worsen_chance:
+                increase = random.choice([0.5, 1.0])
+                self.injury_severity = round(min(10.0, self.injury_severity + increase), 1)
+                events.append(
+                    self.record_health_event(
+                        world,
+                        "injury_worsened",
+                        f"Injury worsened to severity {self.injury_severity:.1f}.",
+                        severity=self.injury_severity,
+                        tags=["injury", "worsened"],
+                    )
+                )
+            else:
+                recovery = injury_model.get("recovery_rate", 0.7)
+                if vitality >= injury_model.get("recovery_vitality", 65):
+                    recovery += 0.4
+                previous_severity = self.injury_severity
+                self.injury_severity = round(max(0.0, self.injury_severity - recovery), 1)
+                if self.injury_severity <= 0:
+                    self.is_injured = False
+                    self.injury_severity = 0
+                    events.append(
+                        self.record_health_event(
+                            world,
+                            "injury_healed",
+                            "Recovered from injury.",
+                            tags=["injury", "recovery"],
+                        )
+                    )
+                elif previous_severity - self.injury_severity >= 1.5:
+                    events.append(
+                        self.record_health_event(
+                            world,
+                            "injury_improved",
+                            f"Injury eased to severity {self.injury_severity:.1f}.",
+                            severity=self.injury_severity,
+                            tags=["injury", "improving"],
+                        )
+                    )
+
+        active_conditions: List[Dict[str, Any]] = []
+        if self.is_sick and self.sickness_severity > 0:
+            active_conditions.append({
+                "type": "illness",
+                "severity": self.sickness_severity,
+                "status": "active",
+            })
+        if self.is_injured and self.injury_severity > 0:
+            active_conditions.append({
+                "type": "injury",
+                "severity": self.injury_severity,
+                "status": "active",
+            })
+        chronic_conditions = profile.get("chronic_conditions", [])
+        profile["active_conditions"] = active_conditions + [deepcopy(cond) for cond in chronic_conditions]
+
+        if (self.is_sick or self.is_injured) and world and world.game_time:
+            note_day = profile.get("last_checkup_note_day")
+            if note_day is None or world.game_time.current_day - note_day >= 3:
+                events.append(
+                    self.record_health_event(
+                        world,
+                        "checkup_due",
+                        "Needs a clinic follow-up soon.",
+                        tags=["medical"],
+                    )
+                )
+                profile["last_checkup_note_day"] = world.game_time.current_day
+
+        return [event for event in events if event]
 
     def __str__(self):
         goal_str = str(self.current_goal) if self.current_goal else "None"
@@ -683,6 +1262,114 @@ class Character:
     def remove_subordinate(self, s: str): self.subordinates_names.remove(s) if s in self.subordinates_names else None
     def get_inventory_load(self) -> int: return sum(self.inventory.values())
     def add_memory(self, e: str): self.memory.append(e); self.memory=self.memory[-20:]
+
+    def _summarize_recent_memory(self) -> Dict[str, Any]:
+        lookback = getattr(config, "DECISION_MEMORY_LOOKBACK", 20)
+        keywords: Dict[str, Dict[str, float]] = getattr(config, "DECISION_MEMORY_KEYWORD_EFFECTS", {})
+        summary: Dict[str, Any] = {"keyword_hits": {}, "entries_considered": 0}
+        if not self.memory or not keywords:
+            return summary
+
+        recent_entries = self.memory[-lookback:]
+        summary["entries_considered"] = len(recent_entries)
+        keyword_hits: Dict[str, int] = {}
+        for entry in recent_entries:
+            entry_lower = entry.lower()
+            for keyword in keywords.keys():
+                if keyword in entry_lower:
+                    keyword_hits[keyword] = keyword_hits.get(keyword, 0) + 1
+        summary["keyword_hits"] = keyword_hits
+        return summary
+
+    def _build_decision_profile(self, world: 'World') -> Dict[str, Any]:
+        base_weights = getattr(config, "DECISION_BASE_WEIGHTS", None)
+        if base_weights:
+            profile: Dict[str, Any] = deepcopy(base_weights)
+        else:
+            profile = {
+                "work_focus": 1.0,
+                "social_focus": 1.0,
+                "rest_threshold_adjustment": 0.0,
+                "ask_for_help_multiplier": 1.0,
+                "risk_modifier": 1.0,
+            }
+
+        memory_summary = self._summarize_recent_memory()
+        profile["memory_summary"] = memory_summary
+        keyword_effects: Dict[str, Dict[str, float]] = getattr(config, "DECISION_MEMORY_KEYWORD_EFFECTS", {})
+        for keyword, count in memory_summary.get("keyword_hits", {}).items():
+            effects = keyword_effects.get(keyword)
+            if not effects:
+                continue
+            for effect_key, modifier in effects.items():
+                if effect_key == "rest_threshold_adjustment":
+                    profile[effect_key] = profile.get(effect_key, 0.0) + (modifier * count)
+                else:
+                    profile[effect_key] = profile.get(effect_key, 1.0 if effect_key != "rest_threshold_adjustment" else 0.0) + (modifier * count)
+
+        personality_biases: Dict[str, Dict[str, float]] = getattr(config, "DECISION_PERSONALITY_BIASES", {})
+        for key, value in personality_biases.get(self.personality, {}).items():
+            profile[key] = profile.get(key, 0.0 if key == "rest_threshold_adjustment" else 1.0) + value
+
+        trait_biases: Dict[str, Dict[str, float]] = getattr(config, "DECISION_TRAIT_BIASES", {})
+        for trait in self.traits:
+            for key, value in trait_biases.get(trait, {}).items():
+                profile[key] = profile.get(key, 0.0 if key == "rest_threshold_adjustment" else 1.0) + value
+
+        if self.job:
+            job_biases: Dict[str, Dict[str, float]] = getattr(config, "DECISION_JOB_FOCUS", {})
+            for key, value in job_biases.get(self.job, {}).items():
+                profile[key] = profile.get(key, 0.0 if key == "rest_threshold_adjustment" else 1.0) + value
+
+        positive_threshold = getattr(config, "DECISION_RELATIONSHIP_POSITIVE_THRESHOLD", 60)
+        negative_threshold = getattr(config, "DECISION_RELATIONSHIP_NEGATIVE_THRESHOLD", -25)
+        positive_count = 0
+        negative_count = 0
+        for relation_score in self.relationships.values():
+            if relation_score >= positive_threshold:
+                positive_count += 1
+            elif relation_score <= negative_threshold:
+                negative_count += 1
+        profile["relationship_summary"] = {
+            "positive": positive_count,
+            "negative": negative_count,
+        }
+        profile["social_focus"] = profile.get("social_focus", 1.0) + (
+            positive_count * getattr(config, "DECISION_RELATIONSHIP_POSITIVE_BONUS", 0.0)
+        )
+        profile["social_focus"] = profile.get("social_focus", 1.0) + (
+            negative_count * getattr(config, "DECISION_RELATIONSHIP_NEGATIVE_PENALTY", 0.0)
+        )
+        profile["rest_threshold_adjustment"] = profile.get("rest_threshold_adjustment", 0.0) + (
+            negative_count * getattr(config, "DECISION_RELATIONSHIP_STRESS_REST", 0.0)
+        )
+
+        satisfaction_baseline = getattr(config, "CAREER_SATISFACTION_BASELINE", 0.6)
+        satisfaction_offset = self.job_satisfaction - satisfaction_baseline
+        profile["work_focus"] = profile.get("work_focus", 1.0) + (
+            satisfaction_offset * getattr(config, "DECISION_JOB_SATISFACTION_WEIGHT", 0.0)
+        )
+        if satisfaction_offset < -0.25:
+            profile["rest_threshold_adjustment"] = profile.get("rest_threshold_adjustment", 0.0) + getattr(
+                config,
+                "DECISION_BURNOUT_REST_BONUS",
+                0.0,
+            )
+
+        profile["work_focus"] = max(0.35, min(1.85, profile.get("work_focus", 1.0)))
+        profile["social_focus"] = max(0.2, min(2.0, profile.get("social_focus", 1.0)))
+        profile["ask_for_help_multiplier"] = max(0.2, min(2.5, profile.get("ask_for_help_multiplier", 1.0)))
+        profile["risk_modifier"] = max(0.3, min(1.8, profile.get("risk_modifier", 1.0)))
+        profile["rest_threshold_adjustment"] = max(
+            -10.0,
+            min(15.0, profile.get("rest_threshold_adjustment", 0.0)),
+        )
+
+        if world.game_time:
+            profile["evaluated_day"] = world.game_time.current_day
+            self._decision_profile_day = world.game_time.current_day
+
+        return profile
 
     def record_life_event(
         self,
@@ -779,6 +1466,16 @@ class Character:
         bucket = self.family_roles.setdefault(relation_type, set())
         bucket.add(other_name)
 
+        if relation_type == "partners":
+            self.romantic_partners.add(other_name)
+            self.ex_partners.discard(other_name)
+            if other_name in self.active_romances:
+                self.active_romances.pop(other_name, None)
+        elif relation_type == "children":
+            self.children_names.add(other_name)
+        elif relation_type == "parents":
+            self.parent_names.add(other_name)
+
         if relation_type != "kin" and "kin" in self.family_roles:
             kin_bucket = self.family_roles["kin"]
             if other_name in kin_bucket:
@@ -792,6 +1489,28 @@ class Character:
             if members:
                 snapshot[role] = sorted(members)
         return snapshot
+
+    def deregister_family_role(self, relation_type: str, other_name: str) -> None:
+        bucket = self.family_roles.get(relation_type)
+        if bucket and other_name in bucket:
+            bucket.discard(other_name)
+            if not bucket:
+                self.family_roles.pop(relation_type, None)
+
+        if relation_type == "partners":
+            if other_name in self.romantic_partners:
+                self.romantic_partners.discard(other_name)
+            self.ex_partners.add(other_name)
+        elif relation_type == "children":
+            self.children_names.discard(other_name)
+        elif relation_type == "parents":
+            self.parent_names.discard(other_name)
+
+        if relation_type != "kin":
+            kin_bucket = self.family_roles.setdefault("kin", set())
+            if other_name in kin_bucket:
+                return
+            kin_bucket.add(other_name)
 
     def receive_family_event(
         self,
@@ -852,6 +1571,788 @@ class Character:
         else:
             events = self.life_history[-limit:]
         return [deepcopy(evt) for evt in events]
+
+    def export_profession_history(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        history: List[Dict[str, Any]] = [deepcopy(entry) for entry in self.profession_history]
+        current_entry: Dict[str, Any] = {
+            "job": self.job or "Unassigned",
+            "stage": self.career_stage,
+            "tenure": self.current_profession_tenure,
+            "status": "current",
+        }
+        if self._current_profession_start_day is not None:
+            current_entry["start_day"] = self._current_profession_start_day
+        if self.job_satisfaction is not None:
+            current_entry["satisfaction"] = round(self.job_satisfaction, 3)
+        if self.professional_focus:
+            current_entry["focus"] = self.professional_focus
+        history.append(current_entry)
+        if limit is not None and limit > 0:
+            history = history[-limit:]
+        return history
+
+    def _initialize_personal_pursuits(self) -> None:
+        library: Dict[str, Dict[str, Any]] = getattr(config, "PERSONAL_PURSUITS_LIBRARY", {})
+        if not library:
+            self.personal_pursuits = []
+            self.personal_pursuit_log.clear()
+            self.active_personal_project = None
+            return
+
+        weighted: List[Tuple[str, float]] = []
+        personality_weights: Dict[str, Dict[str, float]] = getattr(
+            config, "PERSONAL_PURSUIT_PERSONALITY_WEIGHTS", {}
+        )
+        trait_weights: Dict[str, Dict[str, float]] = getattr(
+            config, "PERSONAL_PURSUIT_TRAIT_WEIGHTS", {}
+        )
+        job_weights: Dict[str, Dict[str, float]] = getattr(
+            config, "PERSONAL_PURSUIT_JOB_WEIGHTS", {}
+        )
+
+        for key, definition in library.items():
+            base_weight = float(definition.get("base_weight", 1.0))
+            if base_weight <= 0:
+                continue
+            weight = base_weight
+            weight += personality_weights.get(self.personality, {}).get(key, 0.0)
+            for trait in self.traits:
+                weight += trait_weights.get(trait, {}).get(key, 0.0)
+            if self.job:
+                weight += job_weights.get(self.job, {}).get(key, 0.0)
+            weight = max(0.0, weight)
+            if weight > 0:
+                weighted.append((key, weight))
+
+        if not weighted:
+            weighted = [
+                (key, max(0.1, float(definition.get("base_weight", 1.0))))
+                for key, definition in library.items()
+            ]
+
+        weighted.sort(key=lambda item: item[1], reverse=True)
+        slots = max(1, int(getattr(config, "PERSONAL_PURSUIT_SLOTS", 2)))
+        selected = weighted[:slots]
+
+        pursuits: List[Dict[str, Any]] = []
+        for key, weight in selected:
+            definition = deepcopy(library.get(key, {}))
+            entry: Dict[str, Any] = {
+                "key": key,
+                "name": definition.get("name", key.replace("_", " ").title()),
+                "category": definition.get("category", "Personal"),
+                "progress": 0.0,
+                "level": 0,
+                "streak": 0,
+                "affinity": max(0.1, float(weight)),
+                "need_focus": definition.get("need_focus"),
+                "need_gain": int(
+                    definition.get(
+                        "need_gain",
+                        getattr(config, "PERSONAL_PURSUIT_NEED_GAIN_DEFAULT", 5),
+                    )
+                ),
+                "mood_bonus": int(
+                    definition.get(
+                        "mood_bonus",
+                        getattr(config, "PERSONAL_PURSUIT_MOOD_BONUS_DEFAULT", 3),
+                    )
+                ),
+                "progress_per_day": float(
+                    definition.get(
+                        "progress_per_day",
+                        getattr(config, "PERSONAL_PURSUIT_PROGRESS_PER_DAY", 0.2),
+                    )
+                ),
+                "skill_gain": dict(definition.get("skill_gain", {})),
+                "memory_template": definition.get("memory_template"),
+                "milestone_summary": definition.get("milestone_summary"),
+                "tags": list(definition.get("tags", [])),
+                "last_day": None,
+            }
+            pursuits.append(entry)
+
+        self.personal_pursuits = pursuits
+        self.personal_pursuit_log.clear()
+        self.active_personal_project = None
+
+    def _score_personal_pursuit(self, pursuit: Dict[str, Any]) -> float:
+        score = float(pursuit.get("affinity", 1.0))
+        energy = self.needs.get("Energy", 60)
+        low_energy_threshold = getattr(config, "PERSONAL_PURSUIT_LOW_ENERGY_THRESHOLD", 40)
+        if energy < low_energy_threshold:
+            score -= getattr(config, "PERSONAL_PURSUIT_LOW_ENERGY_PENALTY", 0.4)
+
+        need_focus = pursuit.get("need_focus")
+        if need_focus:
+            threshold = getattr(config, "PERSONAL_PURSUIT_NEED_DRIVE_THRESHOLD", 55)
+            need_value = self.needs.get(need_focus, threshold)
+            if need_value < threshold:
+                deficit = threshold - need_value
+                score += deficit * getattr(config, "PERSONAL_PURSUIT_NEED_WEIGHT", 0.01)
+
+        if self.mood_score <= getattr(config, "PERSONAL_PURSUIT_LOW_MOOD_THRESHOLD", -20):
+            score += getattr(config, "PERSONAL_PURSUIT_LOW_MOOD_BONUS", 0.3)
+
+        streak = max(0, int(pursuit.get("streak", 0)))
+        score += streak * getattr(config, "PERSONAL_PURSUIT_STREAK_BONUS", 0.1)
+        return max(0.0, score)
+
+    def evaluate_personal_pursuits_daily(self, world: 'World') -> List[Dict[str, Any]]:
+        if not world or not world.game_time or not self.personal_pursuits:
+            return []
+
+        day = world.game_time.current_day
+        if self._last_personal_pursuit_day == day:
+            return []
+        self._last_personal_pursuit_day = day
+
+        forget_window = max(1, int(getattr(config, "PERSONAL_PURSUIT_STREAK_FORGET_DAYS", 3)))
+        for pursuit in self.personal_pursuits:
+            last_day = pursuit.get("last_day")
+            if last_day is None:
+                continue
+            if day - int(last_day) > forget_window and pursuit.get("streak", 0) > 0:
+                pursuit["streak"] = max(0, int(pursuit.get("streak", 0)) - 1)
+
+        ranked = sorted(
+            self.personal_pursuits,
+            key=lambda entry: self._score_personal_pursuit(entry),
+            reverse=True,
+        )
+        if not ranked:
+            return []
+
+        chosen = ranked[0]
+        score = self._score_personal_pursuit(chosen)
+        threshold = getattr(config, "PERSONAL_PURSUIT_ENGAGE_THRESHOLD", 0.6)
+        events: List[Dict[str, Any]] = []
+
+        if score < threshold:
+            if chosen.get("streak", 0) > 0:
+                chosen["streak"] = max(0, int(chosen.get("streak", 0)) - 1)
+            self.active_personal_project = None
+            log_entry = {
+                "day": day,
+                "type": "skip",
+                "pursuit": chosen.get("name", chosen.get("key")),
+                "score": round(score, 3),
+                "reason": "low_energy"
+                if self.needs.get("Energy", 0) < getattr(config, "PERSONAL_PURSUIT_LOW_ENERGY_THRESHOLD", 40)
+                else "low_drive",
+            }
+            self.personal_pursuit_log.append(log_entry)
+            events.append(
+                {
+                    "type": "pursuit_skipped",
+                    "pursuit": chosen.get("key"),
+                    "name": chosen.get("name"),
+                    "score": round(score, 3),
+                    "reason": log_entry["reason"],
+                }
+            )
+            return events
+
+        chosen.setdefault("level", 0)
+        chosen.setdefault("progress", 0.0)
+        chosen.setdefault("streak", 0)
+
+        chosen["last_day"] = day
+        chosen["streak"] = int(chosen.get("streak", 0)) + 1
+        self.active_personal_project = chosen.get("key")
+
+        base_progress = float(chosen.get("progress_per_day", 0.2))
+        progress_gain = base_progress
+        progress_gain += max(0.0, score - threshold) * getattr(
+            config, "PERSONAL_PURSUIT_SCORE_PROGRESS_SCALE", 0.1
+        )
+        progress_gain *= 1 + (chosen["streak"] - 1) * getattr(
+            config, "PERSONAL_PURSUIT_STREAK_PROGRESS_BONUS", 0.1
+        )
+
+        chosen["progress"] = float(chosen.get("progress", 0.0)) + max(0.0, progress_gain)
+
+        mood_delta = int(chosen.get("mood_bonus", getattr(config, "PERSONAL_PURSUIT_MOOD_BONUS_DEFAULT", 3)))
+        if mood_delta:
+            self.update_mood_score(
+                mood_delta,
+                reason=f"Invested time in {chosen.get('name', 'a personal pursuit')}",
+            )
+
+        need_focus = chosen.get("need_focus")
+        need_delta = 0
+        if need_focus:
+            gain_amount = int(
+                chosen.get(
+                    "need_gain",
+                    getattr(config, "PERSONAL_PURSUIT_NEED_GAIN_DEFAULT", 5),
+                )
+            )
+            if gain_amount:
+                current_value = self.needs.get(need_focus, getattr(config, f"NEED_{need_focus.upper()}_DEFAULT", 50))
+                self.needs[need_focus] = min(config.NEED_SCORE_MAX, current_value + gain_amount)
+                need_delta = gain_amount
+
+        skill_gain: Dict[str, Any] = chosen.get("skill_gain", {})
+        for skill_name, experience in skill_gain.items():
+            try:
+                self._grant_skill_experience(skill_name, float(experience), world)
+            except Exception:
+                continue
+
+        memory_note = chosen.get("memory_template")
+        if memory_note:
+            self.add_memory(memory_note)
+        else:
+            self.add_memory(f"Spent time pursuing {chosen.get('name', 'a passion')}.")
+
+        progress_threshold = max(0.5, float(getattr(config, "PERSONAL_PURSUIT_LIFE_EVENT_PROGRESS", 1.0)))
+        levels_gained = 0
+        while chosen["progress"] >= progress_threshold:
+            chosen["progress"] -= progress_threshold
+            chosen["level"] = int(chosen.get("level", 0)) + 1
+            levels_gained += 1
+
+        log_entry = {
+            "day": day,
+            "type": "pursuit",
+            "pursuit": chosen.get("name", chosen.get("key")),
+            "stage": int(chosen.get("level", 0)),
+            "progress": round(chosen.get("progress", 0.0), 3),
+            "streak": chosen.get("streak", 0),
+            "score": round(score, 3),
+        }
+
+        if levels_gained > 0:
+            log_entry["milestone"] = int(chosen.get("level", 0))
+        self.personal_pursuit_log.append(log_entry)
+
+        events.append(
+            {
+                "type": "pursuit_engaged",
+                "pursuit": chosen.get("key"),
+                "name": chosen.get("name"),
+                "category": chosen.get("category"),
+                "stage": int(chosen.get("level", 0)),
+                "progress": round(chosen.get("progress", 0.0), 3),
+                "score": round(score, 3),
+                "streak": chosen.get("streak", 0),
+                "mood_delta": mood_delta,
+                "need_focus": need_focus,
+                "need_delta": need_delta,
+            }
+        )
+
+        if levels_gained > 0:
+            summary = chosen.get("milestone_summary") or f"Reached a new milestone in {chosen.get('name', 'a pursuit')}"
+            life_event = self.record_life_event(
+                world,
+                "pursuit_milestone",
+                summary,
+                related=[chosen.get("name")],
+                tags=["pursuit", chosen.get("category", "personal")],
+                significance=2,
+                details={
+                    "pursuit": chosen.get("key"),
+                    "category": chosen.get("category"),
+                    "level": int(chosen.get("level", 0)),
+                    "streak": chosen.get("streak", 0),
+                },
+            )
+            milestone_event = {
+                "type": "pursuit_milestone",
+                "pursuit": chosen.get("key"),
+                "name": chosen.get("name"),
+                "category": chosen.get("category"),
+                "stage": int(chosen.get("level", 0)),
+                "streak": chosen.get("streak", 0),
+            }
+            if life_event:
+                milestone_event["life_event"] = life_event
+            self.personal_pursuit_log.append(
+                {
+                    "day": day,
+                    "type": "milestone",
+                    "pursuit": chosen.get("name", chosen.get("key")),
+                    "stage": int(chosen.get("level", 0)),
+                }
+            )
+            events.append(milestone_event)
+
+        return events
+
+    def export_personal_pursuits(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        pursuits = list(self.personal_pursuits)
+        if limit is not None and limit > 0:
+            pursuits = pursuits[:limit]
+        exported: List[Dict[str, Any]] = []
+        for entry in pursuits:
+            exported.append(
+                {
+                    "key": entry.get("key"),
+                    "name": entry.get("name"),
+                    "category": entry.get("category"),
+                    "progress": round(float(entry.get("progress", 0.0)), 3),
+                    "level": int(entry.get("level", 0)),
+                    "streak": int(entry.get("streak", 0)),
+                    "affinity": round(float(entry.get("affinity", 0.0)), 3),
+                    "need_focus": entry.get("need_focus"),
+                    "tags": list(entry.get("tags", [])),
+                    "last_day": entry.get("last_day"),
+                    "progress_per_day": round(float(entry.get("progress_per_day", 0.0)), 3),
+                }
+            )
+        return exported
+
+    def export_personal_pursuit_log(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        entries = list(self.personal_pursuit_log)
+        if limit is not None and limit > 0:
+            entries = entries[-limit:]
+        return [deepcopy(entry) for entry in entries]
+
+    def get_romantic_partners(self) -> List[str]:
+        return sorted(self.romantic_partners)
+
+    def get_children(self) -> List[str]:
+        return sorted(self.children_names)
+
+    def get_parents(self) -> List[str]:
+        return sorted(self.parent_names)
+
+    def get_active_romances_snapshot(self) -> Dict[str, Dict[str, Any]]:
+        return {name: deepcopy(data) for name, data in self.active_romances.items()}
+
+    def is_single(self) -> bool:
+        return not self.romantic_partners and not self.active_romances
+
+    def note_romance_started(
+        self,
+        world: Optional['World'],
+        partner_name: str,
+        compatibility: float,
+        impetus: str,
+    ) -> None:
+        record: Dict[str, Any] = {
+            "status": "courting",
+            "compatibility": round(max(0.0, min(1.0, compatibility)), 3),
+            "impetus": impetus,
+        }
+        day = None
+        if world and world.game_time:
+            day = world.game_time.current_day
+        if day is not None:
+            record["since_day"] = day
+        self.active_romances[partner_name] = record
+        self._romance_cooldowns.pop(partner_name, None)
+        if day is not None:
+            self._romance_attempt_window.append((day, partner_name))
+        if hasattr(self, "record_life_event"):
+            summary = f"Began courting {partner_name}."
+            self.record_life_event(
+                world,
+                "romance_started",
+                summary,
+                related=[partner_name],
+                tags=["family", "relationship"],
+                significance=2,
+                propagate_to_family=True,
+                details={"partner": partner_name, "compatibility": record["compatibility"], "impetus": impetus},
+                dedupe_key=f"romance_started:{self.name}:{partner_name}:{day}",
+            )
+
+    def note_romance_ended(
+        self,
+        world: Optional['World'],
+        partner_name: str,
+        reason: str,
+        *,
+        committed: bool = False,
+        divorce: bool = False,
+    ) -> None:
+        if partner_name in self.active_romances:
+            self.active_romances.pop(partner_name, None)
+        if committed:
+            self.handle_union_dissolved(partner_name, world, reason, divorce=divorce)
+            return
+
+        cooldown_days = random.randint(4, 8)
+        self._romance_cooldowns[partner_name] = cooldown_days
+        self.ex_partners.add(partner_name)
+        if hasattr(self, "record_life_event"):
+            summary = f"Romance with {partner_name} ended ({reason})."
+            self.record_life_event(
+                world,
+                "romance_ended",
+                summary,
+                related=[partner_name],
+                tags=["family", "relationship", "breakup"],
+                significance=2,
+                propagate_to_family=True,
+                details={"partner": partner_name, "reason": reason},
+                dedupe_key=f"romance_ended:{self.name}:{partner_name}:{reason}",
+            )
+
+    def handle_union_formed(
+        self,
+        world: Optional['World'],
+        partner_name: str,
+        *,
+        ceremony: Optional[str] = None,
+    ) -> None:
+        day = None
+        if world and world.game_time:
+            day = world.game_time.current_day
+        self.romantic_partners.add(partner_name)
+        self.ex_partners.discard(partner_name)
+        if partner_name in self.active_romances:
+            self.active_romances.pop(partner_name, None)
+        self._romance_cooldowns.pop(partner_name, None)
+        self._last_commitment_check = day
+        active_entry: Optional[Dict[str, Any]] = None
+        for entry in reversed(self.marriage_history):
+            if entry.get("partner") == partner_name and entry.get("status") == "active":
+                active_entry = entry
+                break
+        if active_entry:
+            if day is not None and "day" not in active_entry:
+                active_entry["day"] = day
+            if ceremony:
+                active_entry["ceremony"] = ceremony
+        else:
+            entry: Dict[str, Any] = {
+                "partner": partner_name,
+                "status": "active",
+            }
+            if day is not None:
+                entry["day"] = day
+            if ceremony:
+                entry["ceremony"] = ceremony
+            self.marriage_history.append(entry)
+        max_entries = getattr(config, "MARRIAGE_HISTORY_MAX", 24)
+        if len(self.marriage_history) > max_entries:
+            self.marriage_history = self.marriage_history[-max_entries:]
+
+    def handle_union_dissolved(
+        self,
+        partner_name: str,
+        world: Optional['World'],
+        reason: str,
+        *,
+        divorce: bool = False,
+    ) -> None:
+        if partner_name in self.romantic_partners:
+            self.romantic_partners.discard(partner_name)
+        self.ex_partners.add(partner_name)
+        cooldown_days = random.randint(9, 16)
+        self._romance_cooldowns[partner_name] = cooldown_days
+        day = None
+        if world and world.game_time:
+            day = world.game_time.current_day
+        for entry in reversed(self.marriage_history):
+            if entry.get("partner") == partner_name and entry.get("status") == "active":
+                entry["status"] = "ended"
+                if day is not None:
+                    entry["ended_day"] = day
+                entry["reason"] = reason
+                entry["divorce"] = divorce
+                break
+        if hasattr(self, "record_life_event"):
+            event_type = "divorce" if divorce else "union_ended"
+            summary = f"Divorced {partner_name} ({reason})." if divorce else f"Separated from {partner_name} ({reason})."
+            self.record_life_event(
+                world,
+                event_type,
+                summary,
+                related=[partner_name],
+                tags=["family", "relationship", "breakup"],
+                significance=4 if divorce else 3,
+                propagate_to_family=True,
+                details={"partner": partner_name, "reason": reason, "divorce": divorce},
+                dedupe_key=f"union_end:{self.name}:{partner_name}:{event_type}",
+            )
+
+    def note_child_added(self, world: Optional['World'], child_name: str) -> None:
+        self.children_names.add(child_name)
+        if world and world.game_time:
+            self._last_child_day = world.game_time.current_day
+
+    def _romance_interest_chance(self) -> float:
+        base = getattr(config, "ROMANCE_DAILY_BASE_CHANCE", 0.08)
+        modifier = 0.0
+        modifier += getattr(config, "ROMANCE_PERSONALITY_INCLINATIONS", {}).get(self.personality, 0.0)
+        for trait in self.traits:
+            modifier += getattr(config, "ROMANCE_TRAIT_INFLUENCES", {}).get(trait, 0.0)
+        belonging = self.needs.get("Belonging", 0)
+        if belonging < 35:
+            modifier += 0.12
+        elif belonging > 80:
+            modifier -= 0.05
+        mood_score = getattr(self, "mood_score", 0)
+        if mood_score < -20:
+            modifier -= 0.05
+        elif mood_score > 35:
+            modifier += 0.03
+        satisfaction = getattr(self, "job_satisfaction", 0.6)
+        if satisfaction >= 0.8:
+            modifier += 0.03
+        elif satisfaction < 0.35:
+            modifier -= 0.05
+        if self.active_romances:
+            modifier -= 0.08 * len(self.active_romances)
+        return max(0.0, min(0.85, base + modifier))
+
+    def _romantic_compatibility(self, other: Optional['Character']) -> float:
+        if not other:
+            return 0.0
+        relationship_score = self.get_relationship_score(other.name)
+        other_relationship = other.get_relationship_score(self.name)
+        normalized = (relationship_score + other_relationship) / (2 * max(1, config.RELATIONSHIP_SCORE_MAX))
+        normalized = max(-1.0, min(1.0, normalized))
+        compatibility = 0.3 + (normalized * 0.4)
+        if self.personality == other.personality:
+            compatibility += 0.1
+        personality_pair = {self.personality, other.personality}
+        if personality_pair == {"Romantic", "Dreamer"}:
+            compatibility += 0.08
+        elif personality_pair == {"Stoic", "Cheerful"}:
+            compatibility += 0.04
+        elif personality_pair == {"Stoic", "Stoic"}:
+            compatibility -= 0.05
+        shared_traits = set(self.traits) & set(other.traits)
+        compatibility += 0.05 * len(shared_traits & {"Affectionate", "Loyal", "Generous", "Patient"})
+        compatibility += 0.02 * len(shared_traits)
+        if "Jealous" in self.traits and "Charming" in other.traits:
+            compatibility -= 0.05
+        if "Cold" in self.traits or "Cold" in other.traits:
+            compatibility -= 0.08
+        wealth_gap = abs(getattr(self, "net_worth", 0) - getattr(other, "net_worth", 0))
+        if wealth_gap > 400:
+            compatibility -= 0.05
+        elif wealth_gap < 75:
+            compatibility += 0.03
+        compatibility = max(0.0, min(1.0, compatibility))
+        return compatibility
+
+    def _child_desire_score(self, partner: 'Character') -> float:
+        base = getattr(config, "FAMILY_CHILD_DESIRE_BASE", 0.12)
+        personality_bonus = getattr(config, "FAMILY_CHILD_PERSONALITY_BONUS", {})
+        trait_bonus = getattr(config, "FAMILY_CHILD_TRAIT_BONUS", {})
+        base += personality_bonus.get(self.personality, 0.0)
+        base += personality_bonus.get(getattr(partner, "personality", ""), 0.0)
+        for trait in self.traits:
+            base += trait_bonus.get(trait, 0.0)
+        for trait in getattr(partner, "traits", []):
+            base += trait_bonus.get(trait, 0.0)
+        belonging = min(self.needs.get("Belonging", 0), partner.needs.get("Belonging", 0))
+        threshold = getattr(config, "FAMILY_CHILD_MIN_BELONGING", 55)
+        if belonging < threshold:
+            base -= 0.3
+        wealth_total = getattr(self, "net_worth", 0) + getattr(partner, "net_worth", 0)
+        if wealth_total > 500:
+            base += 0.05
+        elif wealth_total < 60:
+            base -= 0.05
+        if getattr(self, "retired", False) or getattr(partner, "retired", False):
+            base -= 0.05
+        return max(0.0, min(0.9, base))
+
+    def _can_plan_child_with(self, partner: 'Character', world: 'World', day: int) -> bool:
+        min_age = getattr(config, "FAMILY_CHILD_MIN_AGE", 18)
+        max_age = getattr(config, "FAMILY_CHILD_MAX_AGE", 45)
+        my_age = getattr(self, "age_years", min_age)
+        partner_age = getattr(partner, "age_years", min_age)
+        if not (min_age <= my_age <= max_age):
+            return False
+        if not (min_age <= partner_age <= max_age):
+            return False
+        cooldown = getattr(config, "FAMILY_CHILD_COOLDOWN_DAYS", 18)
+        if self._last_child_day is not None and day - self._last_child_day < cooldown:
+            return False
+        if getattr(partner, "_last_child_day", None) is not None and day - partner._last_child_day < cooldown:
+            return False
+        if getattr(self, "is_sick", False) or getattr(self, "is_injured", False):
+            return False
+        if getattr(partner, "is_sick", False) or getattr(partner, "is_injured", False):
+            return False
+        housing_requirement = getattr(config, "FAMILY_CHILD_HOUSING_REQUIREMENT", 0)
+        if housing_requirement:
+            has_home = bool(self.home_location or partner.home_location)
+            if not has_home:
+                return False
+        if self.get_relationship_score(partner.name) < getattr(config, "ROMANCE_RELATIONSHIP_THRESHOLD_TO_COMMIT", 55) // 2:
+            return False
+        if partner.get_relationship_score(self.name) < getattr(config, "ROMANCE_RELATIONSHIP_THRESHOLD_TO_COMMIT", 55) // 2:
+            return False
+        return True
+
+    def _should_plan_child(self, world: 'World', partner: 'Character', day: int) -> bool:
+        if not self._can_plan_child_with(partner, world, day):
+            return False
+        desire = self._child_desire_score(partner)
+        return random.random() < desire
+
+    def _select_romance_candidate(self, world: 'World') -> Optional['Character']:
+        candidates: List['Character'] = []
+        threshold = getattr(config, "ROMANCE_RELATIONSHIP_THRESHOLD_TO_DATE", 25)
+        for other in world.characters:
+            if other is self:
+                continue
+            if other.name in self.romantic_partners or self.name in other.romantic_partners:
+                continue
+            if other.name in self.active_romances or self.name in other.active_romances:
+                continue
+            if other._romance_cooldowns.get(self.name):
+                continue
+            if self._romance_cooldowns.get(other.name):
+                continue
+            if other.romantic_partners:
+                continue
+            rel = self.get_relationship_score(other.name)
+            other_rel = other.get_relationship_score(self.name)
+            if rel < threshold or other_rel < threshold:
+                continue
+            candidates.append(other)
+        if not candidates:
+            return None
+        sample = random.sample(candidates, min(len(candidates), 5))
+        scored = sorted(sample, key=lambda candidate: self._romantic_compatibility(candidate), reverse=True)
+        for candidate in scored:
+            compatibility = self._romantic_compatibility(candidate)
+            if compatibility >= 0.2:
+                return candidate
+        return None
+
+    def evaluate_family_daily(self, world: 'World') -> List[Dict[str, Any]]:
+        if not world or not world.game_time:
+            return []
+        day = world.game_time.current_day
+        if self._last_family_daily_day == day:
+            return []
+        self._last_family_daily_day = day
+
+        for name in list(self._romance_cooldowns.keys()):
+            self._romance_cooldowns[name] -= 1
+            if self._romance_cooldowns[name] <= 0:
+                self._romance_cooldowns.pop(name, None)
+
+        actions: List[Dict[str, Any]] = []
+
+        for partner_name, romance in list(self.active_romances.items()):
+            if partner_name < self.name:
+                continue
+            other = world.get_character_by_name(partner_name)
+            if not other:
+                actions.append({
+                    "type": "end_romance",
+                    "with": partner_name,
+                    "reason": "lost contact",
+                })
+                continue
+            if self.name not in other.active_romances:
+                actions.append({
+                    "type": "end_romance",
+                    "with": partner_name,
+                    "reason": "fell out of touch",
+                })
+                continue
+            rel = self.get_relationship_score(partner_name)
+            other_rel = other.get_relationship_score(self.name)
+            if rel < getattr(config, "ROMANCE_BREAKUP_REL_THRESHOLD", -20) or other_rel < getattr(config, "ROMANCE_BREAKUP_REL_THRESHOLD", -20):
+                actions.append({
+                    "type": "end_romance",
+                    "with": partner_name,
+                    "reason": "growing distant",
+                })
+                continue
+            compatibility = romance.get("compatibility")
+            if compatibility is None:
+                compatibility = self._romantic_compatibility(other)
+            since_day = romance.get("since_day")
+            days_together = day - since_day if since_day is not None else 0
+            commit_threshold = getattr(config, "ROMANCE_RELATIONSHIP_THRESHOLD_TO_COMMIT", 55)
+            if (
+                rel >= commit_threshold
+                and other_rel >= commit_threshold
+                and days_together >= getattr(config, "ROMANCE_MIN_DAYS_BEFORE_UNION", 6)
+            ):
+                commit_chance = 0.15 + compatibility
+                commit_chance += getattr(config, "ROMANCE_COMMITMENT_PERSONALITY_MODIFIERS", {}).get(self.personality, 0.0)
+                commit_chance += getattr(config, "ROMANCE_COMMITMENT_PERSONALITY_MODIFIERS", {}).get(other.personality, 0.0)
+                commit_chance = max(0.05, min(0.85, commit_chance))
+                if random.random() < commit_chance:
+                    actions.append({
+                        "type": "propose_union",
+                        "with": partner_name,
+                        "compatibility": compatibility,
+                    })
+                    continue
+            if compatibility < 0.22 and random.random() < 0.05:
+                actions.append({
+                    "type": "end_romance",
+                    "with": partner_name,
+                    "reason": "low spark",
+                })
+
+        for partner_name in sorted(self.romantic_partners):
+            if partner_name < self.name:
+                continue
+            other = world.get_character_by_name(partner_name)
+            if not other:
+                actions.append({
+                    "type": "dissolve_union",
+                    "with": partner_name,
+                    "reason": "bereavement",
+                    "divorce": False,
+                })
+                continue
+            rel = self.get_relationship_score(partner_name)
+            other_rel = other.get_relationship_score(self.name)
+            if (
+                rel <= getattr(config, "ROMANCE_DIVORCE_REL_THRESHOLD", -45)
+                or other_rel <= getattr(config, "ROMANCE_DIVORCE_REL_THRESHOLD", -45)
+            ):
+                chance = getattr(config, "ROMANCE_DIVORCE_BASE_CHANCE", 0.06)
+                for trait in self.traits:
+                    chance += getattr(config, "ROMANCE_DIVORCE_TRAIT_BONUS", {}).get(trait, 0.0)
+                for trait in other.traits:
+                    chance += getattr(config, "ROMANCE_DIVORCE_TRAIT_BONUS", {}).get(trait, 0.0)
+                chance = max(0.02, min(0.9, chance))
+                if random.random() < chance:
+                    actions.append({
+                        "type": "dissolve_union",
+                        "with": partner_name,
+                        "reason": "irreconcilable differences",
+                        "divorce": True,
+                    })
+                    continue
+            if rel < getattr(config, "ROMANCE_BREAKUP_REL_THRESHOLD", -20) and random.random() < getattr(config, "ROMANCE_BREAKUP_BASE_CHANCE", 0.04):
+                actions.append({
+                    "type": "dissolve_union",
+                    "with": partner_name,
+                    "reason": "grew apart",
+                    "divorce": False,
+                })
+                continue
+            if self.name < partner_name and self._should_plan_child(world, other, day):
+                actions.append({
+                    "type": "plan_child",
+                    "with": partner_name,
+                })
+
+        if self.is_single():
+            interest = self._romance_interest_chance()
+            if random.random() < interest:
+                candidate = self._select_romance_candidate(world)
+                if candidate and self.name < candidate.name:
+                    compatibility = self._romantic_compatibility(candidate)
+                    actions.append({
+                        "type": "start_romance",
+                        "with": candidate.name,
+                        "compatibility": compatibility,
+                        "impetus": self.personality or "Chance",
+                    })
+
+        return actions
 
     def receive_cultural_event_boost(self, event_data: Dict[str, Any], world: 'World') -> None:
         """Apply morale and need adjustments when the settlement hosts a cultural event."""
@@ -918,6 +2419,580 @@ class Character:
             self.add_memory(f"Still owed {owed_amount} coins for {reason}.")
             self.update_mood_score(getattr(config, "MOOD_CHANGE_PAYMENT_DELAY", -5), "Wages delayed")
 
+    def receive_income(self, amount: int, source: str, mood_reason: Optional[str] = None) -> None:
+        """Receive personal income that does not route through the public treasury."""
+        if amount <= 0:
+            return
+
+        self.money += amount
+        coins_text = "coin" if amount == 1 else "coins"
+        self.add_memory(f"Earned {amount} {coins_text} from {source}.")
+        mood_bonus = getattr(config, "BUSINESS_INCOME_MOOD_BONUS", 0)
+        if mood_bonus:
+            self.update_mood_score(mood_bonus, mood_reason or f"Income from {source}")
+
+    def assign_business_role(self, business_id: str, role: str) -> None:
+        """Track business ownership or employment for this character."""
+        self.business_roles[business_id] = role
+        if role == "owner":
+            if business_id not in self.businesses_owned:
+                self.businesses_owned.append(business_id)
+        else:
+            if business_id in self.businesses_owned:
+                self.businesses_owned.remove(business_id)
+
+    def leave_business_role(self, business_id: str, reason: Optional[str] = None) -> None:
+        role = self.business_roles.pop(business_id, None)
+        if role == "owner" and business_id in self.businesses_owned:
+            self.businesses_owned.remove(business_id)
+        if reason:
+            self.add_memory(reason)
+
+    def is_entrepreneurial(self) -> bool:
+        personalities = set(getattr(config, "ENTREPRENEURIAL_PERSONALITIES", []))
+        traits = set(getattr(config, "ENTREPRENEURIAL_TRAITS", []))
+        return (self.personality in personalities) or bool(traits.intersection(self.traits))
+
+    def _get_profession_track(self) -> Dict[str, Any]:
+        tracks = getattr(config, "PROFESSION_TRACK_DEFINITIONS", {})
+        if not isinstance(tracks, dict):
+            return {}
+        job_name = self.job or "Unassigned"
+        track: Optional[Dict[str, Any]] = tracks.get(job_name)
+        if track is None:
+            lowered = job_name.lower()
+            for key, candidate in tracks.items():
+                if isinstance(candidate, dict) and key.lower() == lowered:
+                    track = candidate
+                    break
+        if track is None:
+            track = tracks.get("default", {})
+        return deepcopy(track) if isinstance(track, dict) else {}
+
+    def _reset_profession_for_new_job(
+        self,
+        world: Optional['World'],
+        today: int,
+    ) -> Optional[Dict[str, Any]]:
+        previous_job = self._last_recorded_job
+        tenure_before_reset = self.current_profession_tenure
+        updates: Dict[str, Any] = {}
+
+        if previous_job and previous_job not in {"Unemployed", "Retiree"} and tenure_before_reset > 0:
+            history_entry: Dict[str, Any] = {
+                "job": previous_job,
+                "stage": self.career_stage,
+                "tenure": tenure_before_reset,
+                "end_day": today,
+                "status": "archived",
+            }
+            if self._current_profession_start_day is not None:
+                history_entry["start_day"] = self._current_profession_start_day
+            self.profession_history.append(history_entry)
+            max_history = getattr(config, "CAREER_MAX_HISTORY", 16)
+            if len(self.profession_history) > max_history:
+                self.profession_history = self.profession_history[-max_history:]
+            summary = (
+                f"Departed role as {previous_job} after {tenure_before_reset} "
+                f"day{'s' if tenure_before_reset != 1 else ''}."
+            )
+            self.add_memory(summary)
+            self.record_life_event(
+                world,
+                "career_transition",
+                summary,
+                tags=["career"],
+                significance=2,
+                details={"job": previous_job, "tenure": tenure_before_reset},
+            )
+            updates["job_change"] = {
+                "from": previous_job,
+                "to": self.job or "Unassigned",
+                "tenure": tenure_before_reset,
+            }
+
+        new_job = self.job or "Unassigned"
+        if new_job and new_job not in {"Unassigned", "Unemployed", "Retiree"}:
+            join_summary = f"Began work as a {new_job}."
+            self.add_memory(join_summary)
+            self.record_life_event(
+                world,
+                "career_assignment",
+                join_summary,
+                tags=["career"],
+                significance=2,
+                details={"job": new_job},
+            )
+            if "job_change" not in updates:
+                updates["job_change"] = {
+                    "from": previous_job or "Unassigned",
+                    "to": new_job,
+                    "tenure": tenure_before_reset,
+                }
+
+        self.current_profession_tenure = 0
+        self._current_profession_start_day = today
+        self._last_recorded_job = self.job
+        self._last_career_stage_day = today
+        baseline = getattr(config, "CAREER_SATISFACTION_BASELINE", 0.6)
+        personality_mods = getattr(config, "CAREER_PERSONALITY_MODIFIERS", {}).get(self.personality, {})
+        trait_mods = getattr(config, "CAREER_TRAIT_MODIFIERS", {})
+        stability_bonus = personality_mods.get("stability_bonus", 0.0) + personality_mods.get(
+            "satisfaction_bonus", 0.0
+        )
+        trait_bonus = sum(trait_mods.get(trait, {}).get("satisfaction_bonus", 0.0) for trait in self.traits)
+        self.job_satisfaction = max(0.0, min(1.0, baseline + stability_bonus + trait_bonus))
+        self._triggered_tenure_milestones.clear()
+        return updates or None
+
+    def calculate_net_worth(self, world: Optional['World'] = None) -> int:
+        """Estimate the character's total wealth, including business equity."""
+        wealth_total = int(self.money)
+        multiplier = getattr(config, "BUSINESS_NETWORTH_MULTIPLIER", 1.0)
+        if world and hasattr(world, "businesses"):
+            for business_id in self.businesses_owned:
+                business = world.businesses.get(business_id) if business_id in world.businesses else None
+                if not business or business.get("status") not in {"active", "paused"}:
+                    continue
+                capital_value = int(business.get("capital", 0))
+                cash_reserve = int(business.get("cash_reserve", 0))
+                wealth_total += int(capital_value * multiplier) + cash_reserve
+
+        self.net_worth = max(0, wealth_total)
+
+        thresholds = getattr(config, "WEALTH_STATUS_THRESHOLDS", {})
+        previous_status = self.wealth_status
+        if thresholds:
+            sorted_thresholds = sorted(thresholds.items(), key=lambda item: item[1])
+            chosen_status = previous_status
+            for status_label, threshold in sorted_thresholds:
+                if self.net_worth >= threshold:
+                    chosen_status = status_label
+            self.wealth_status = chosen_status
+        else:
+            self.wealth_status = "modest"
+
+        return self.net_worth
+
+    def evaluate_daily_wealth(self, world: 'World') -> Dict[str, Any]:
+        """Daily wealth upkeep — consider promotions, business ventures, and retirement."""
+        if not world or not world.game_time:
+            return {}
+
+        today = world.game_time.current_day
+        if self._last_wealth_evaluation_day == today:
+            return {}
+        self._last_wealth_evaluation_day = today
+
+        updates: Dict[str, Any] = {}
+
+        previous_status = self.wealth_status
+        previous_rank = self.rank
+        previous_net = self.net_worth
+
+        net = self.calculate_net_worth(world)
+        self.wealth_history.append((today, net))
+
+        if previous_status != self.wealth_status:
+            summary = f"Wealth status shifted to {self.wealth_status} (net worth {net} coins)."
+            self.add_memory(summary)
+            self.record_life_event(
+                world,
+                "wealth_status_change",
+                summary,
+                tags=["wealth"],
+                significance=2,
+                details={"net_worth": net, "previous_status": previous_status},
+            )
+            updates["status_change"] = {"status": self.wealth_status, "net_worth": net}
+
+        noble_threshold = getattr(config, "NOBILITY_WEALTH_THRESHOLD", 0)
+        noble_title = getattr(config, "NOBILITY_TITLE", "Noble Lord")
+        noble_ranks = set(getattr(config, "NOBLE_RANKS_OR_JOBS", []) or NOBLE_RANKS_OR_JOBS)
+        if (
+            noble_threshold
+            and net >= noble_threshold
+            and self.rank not in noble_ranks
+            and self.rank != noble_title
+            and f"nobility_{noble_title}" not in self._life_event_flags
+        ):
+            previous_rank = self.rank
+            self.rank = noble_title
+            self._life_event_flags.add(f"nobility_{noble_title}")
+            self.add_memory(f"Elevated to the rank of {noble_title} thanks to amassed fortunes.")
+            self.record_life_event(
+                world,
+                "nobility_elevation",
+                f"Elevated to {noble_title} through wealth and influence.",
+                tags=["nobility", "wealth"],
+                significance=4,
+                details={"net_worth": net, "previous_rank": previous_rank},
+                propagate_to_family=True,
+            )
+            world.add_event_log_message(f"{self.name} is recognized as a {noble_title} after amassing considerable wealth.")
+            updates["nobility"] = {"title": noble_title, "net_worth": net}
+
+        if not self.retired and self.job not in {"Mayor", "Reeve"}:
+            retirement_personalities = set(getattr(config, "RETIREMENT_PERSONALITIES", []))
+            wealth_threshold = getattr(config, "RETIREMENT_WEALTH_THRESHOLD", 0)
+            min_age = getattr(config, "RETIREMENT_MIN_AGE", 60)
+            chance = getattr(config, "RETIREMENT_DAILY_CHANCE", 0.0)
+            if (
+                self.age_years >= min_age
+                and net >= wealth_threshold
+                and self.personality in retirement_personalities
+                and random.random() < chance
+            ):
+                old_job = self.job
+                self.job = "Retiree"
+                self.retired = True
+                self.add_memory(f"Retired from life as a {old_job} after securing {net} coins in wealth.")
+                self.record_life_event(
+                    world,
+                    "retirement",
+                    f"Retired from {old_job} with a nest egg of {net} coins.",
+                    tags=["retirement", "wealth"],
+                    significance=3,
+                    details={"net_worth": net, "former_job": old_job},
+                )
+                world.add_event_log_message(f"{self.name} retires from the workforce with savings of {net} coins.")
+                updates["retired"] = {"former_job": old_job, "net_worth": net}
+
+        max_owned = getattr(config, "BUSINESS_MAX_OWNERSHIP", 1)
+        startup_funds = getattr(config, "BUSINESS_START_MIN_FUNDS", 9999)
+        if (
+            not self.retired
+            and len(self.businesses_owned) < max_owned
+            and self.money >= startup_funds
+            and net >= startup_funds
+        ):
+            if self._last_business_check_day != today:
+                self._last_business_check_day = today
+                if self.is_entrepreneurial() and hasattr(world, "launch_business"):
+                    business = world.launch_business(self)
+                    if business:
+                        updates["business_started"] = {
+                            "id": business.get("id"),
+                            "name": business.get("name"),
+                            "industry": business.get("industry"),
+                        }
+
+        updates["net_worth"] = net
+        updates["previous_net_worth"] = previous_net
+        return updates
+
+    def evaluate_profession_daily(self, world: 'World') -> Dict[str, Any]:
+        if not world or not world.game_time:
+            return {}
+
+        today = world.game_time.current_day
+        if self._last_profession_review_day == today:
+            return {}
+        self._last_profession_review_day = today
+
+        updates: Dict[str, Any] = {}
+        job_name = self.job or "Unassigned"
+
+        track = self._get_profession_track()
+        if self._last_recorded_job != self.job:
+            reset_updates = self._reset_profession_for_new_job(world, today)
+            if reset_updates and "job_change" in reset_updates:
+                updates["job_change"] = reset_updates["job_change"]
+
+        if self._current_profession_start_day is None:
+            self._current_profession_start_day = today - self.current_profession_tenure
+
+        if job_name == "Retiree":
+            self.professional_focus = None
+            rest_gain = getattr(config, "CAREER_SATISFACTION_GAIN", 0.08) * 0.5
+            self.job_satisfaction = max(0.0, min(1.0, self.job_satisfaction + rest_gain))
+            return updates
+
+        if job_name in {"Unassigned", "Unemployed"}:
+            self.professional_focus = None
+            idle_decay = getattr(config, "CAREER_IDLE_DECAY", 0.04)
+            if idle_decay:
+                self.job_satisfaction = max(0.0, self.job_satisfaction - idle_decay)
+            if (
+                self.job_satisfaction <= getattr(config, "CAREER_BURNOUT_THRESHOLD", 0.35)
+                and self._last_burnout_alert_day != today
+            ):
+                self._last_burnout_alert_day = today
+                self.update_mood_score(
+                    getattr(config, "CAREER_SATISFACTION_MOOD_PENALTY", -8),
+                    "Unsettled without a calling",
+                )
+                updates["burnout"] = {"satisfaction": round(self.job_satisfaction, 3), "reason": "unassigned"}
+            return updates
+
+        self.current_profession_tenure += 1
+
+        primary_skill = track.get("skill") if isinstance(track, dict) else None
+        self.professional_focus = primary_skill
+        base_xp = float(track.get("daily_xp", 1.0)) if isinstance(track, dict) else 1.0
+
+        personality_mods = getattr(config, "CAREER_PERSONALITY_MODIFIERS", {}).get(self.personality, {})
+        trait_mods = getattr(config, "CAREER_TRAIT_MODIFIERS", {})
+        xp_multiplier = 1.0 + personality_mods.get("learning_bonus", 0.0)
+        for trait in self.traits:
+            xp_multiplier += trait_mods.get(trait, {}).get("xp_bonus", 0.0)
+        xp_total = max(0.0, base_xp * xp_multiplier)
+
+        if xp_total and primary_skill:
+            before_level = self.skills.get(primary_skill, {}).get("level", 0)
+            self._grant_skill_experience(primary_skill, xp_total, world)
+            after_level = self.skills.get(primary_skill, {}).get("level", before_level)
+            if after_level > before_level:
+                updates.setdefault("level_ups", []).append(
+                    {"skill": primary_skill, "level": after_level}
+                )
+
+        decay = getattr(config, "CAREER_SATISFACTION_DECAY", 0.05)
+        gain = getattr(config, "CAREER_SATISFACTION_GAIN", 0.08)
+        satisfaction = self.job_satisfaction
+        if decay:
+            satisfaction -= decay
+        satisfaction += gain * max(0.5, xp_multiplier)
+
+        wealth_expectation = track.get("wealth_expectation") if isinstance(track, dict) else None
+        thresholds = getattr(config, "WEALTH_STATUS_THRESHOLDS", {})
+        if wealth_expectation and isinstance(thresholds, dict):
+            expected_threshold = thresholds.get(wealth_expectation)
+            if expected_threshold is not None:
+                if getattr(self, "net_worth", self.money) >= expected_threshold:
+                    satisfaction += getattr(config, "CAREER_WEALTH_SATISFACTION_BONUS", 0.08)
+                    if personality_mods.get("wealth_bonus"):
+                        satisfaction += personality_mods["wealth_bonus"]
+                else:
+                    satisfaction -= getattr(config, "CAREER_WEALTH_SATISFACTION_PENALTY", 0.1)
+
+        focus = track.get("focus") if isinstance(track, dict) else None
+        for trait in self.traits:
+            trait_mod = trait_mods.get(trait, {})
+            if focus == "service" and trait_mod.get("service_bonus"):
+                satisfaction += trait_mod["service_bonus"]
+
+        satisfaction_floors = [
+            trait_mods.get(trait, {}).get("satisfaction_floor")
+            for trait in self.traits
+            if trait_mods.get(trait, {}).get("satisfaction_floor") is not None
+        ]
+        progress_pressure = personality_mods.get("promotion_pressure", 0.0)
+        for trait in self.traits:
+            progress_pressure += trait_mods.get(trait, {}).get("promotion_pressure", 0.0)
+
+        patience = getattr(config, "CAREER_PROGRESS_PATIENCE_DAYS", 10)
+        last_progress = self._last_career_stage_day or self._current_profession_start_day or today
+        days_since_progress = max(0, today - last_progress)
+        if progress_pressure > 0 and days_since_progress > patience:
+            burnout_resistance = sum(
+                trait_mods.get(trait, {}).get("burnout_resistance", 0.0) for trait in self.traits
+            )
+            penalty = progress_pressure * ((days_since_progress - patience + 1) / max(1, patience)) * 0.1
+            penalty *= max(0.0, 1.0 - burnout_resistance)
+            satisfaction -= penalty
+
+        if satisfaction_floors:
+            satisfaction = max(satisfaction, max(satisfaction_floors))
+
+        satisfaction = max(0.0, min(1.0, satisfaction))
+        previous_satisfaction = self.job_satisfaction
+        self.job_satisfaction = satisfaction
+
+        burnout_threshold = getattr(config, "CAREER_BURNOUT_THRESHOLD", 0.35)
+        ambition_threshold = getattr(config, "CAREER_AMBITION_THRESHOLD", 0.85)
+
+        if satisfaction <= burnout_threshold:
+            if self._last_burnout_alert_day != today:
+                self._last_burnout_alert_day = today
+                self.update_mood_score(
+                    getattr(config, "CAREER_SATISFACTION_MOOD_PENALTY", -8),
+                    f"Dissatisfied with {job_name} duties",
+                )
+                updates["burnout"] = {"satisfaction": round(satisfaction, 3)}
+        else:
+            self._last_burnout_alert_day = None
+
+        if satisfaction >= ambition_threshold:
+            if self._last_career_high_day != today:
+                self._last_career_high_day = today
+                self.update_mood_score(
+                    getattr(config, "CAREER_SATISFACTION_MOOD_BONUS", 6),
+                    f"Thriving as a {job_name}",
+                )
+                focus_bonus = getattr(config, "CAREER_FOCUS_MOOD_BONUS", {}).get(focus)
+                if focus_bonus:
+                    self.update_mood_score(focus_bonus, f"Proud of {job_name} focus")
+                updates["thriving"] = {"satisfaction": round(satisfaction, 3)}
+        else:
+            self._last_career_high_day = None
+
+        stage_before = self.career_stage
+        stage_after = stage_before
+        stage_thresholds = getattr(config, "CAREER_STAGE_THRESHOLDS", {})
+        if isinstance(stage_thresholds, dict) and primary_skill:
+            skill_level = self.skills.get(primary_skill, {}).get("level", 0)
+            ordered = sorted(stage_thresholds.items(), key=lambda item: item[1])
+            for stage_name, threshold in ordered:
+                if skill_level >= threshold:
+                    stage_after = stage_name
+        if stage_after != stage_before:
+            self.career_stage = stage_after
+            self._last_career_stage_day = today
+            summary = f"Recognized as a {stage_after} {job_name}."
+            self.add_memory(summary)
+            self.record_life_event(
+                world,
+                "career_stage_change",
+                summary,
+                tags=["career", stage_after.lower()],
+                significance=3,
+                details={
+                    "job": job_name,
+                    "stage": stage_after,
+                    "previous_stage": stage_before,
+                    "skill": primary_skill,
+                    "level": self.skills.get(primary_skill, {}).get("level", 0),
+                },
+            )
+            rep_bonus = getattr(config, "CAREER_STAGE_REPUTATION_BONUS", {}).get(stage_after)
+            if rep_bonus:
+                self.update_reputation(rep_bonus, f"Advanced to {stage_after} {job_name}", world)
+            updates["stage_change"] = {
+                "from": stage_before,
+                "to": stage_after,
+                "skill": primary_skill,
+                "level": self.skills.get(primary_skill, {}).get("level", 0),
+            }
+
+        milestones = getattr(config, "CAREER_TENURE_MILESTONES", [])
+        reached: List[int] = []
+        for milestone in milestones:
+            if (
+                isinstance(milestone, int)
+                and milestone > 0
+                and self.current_profession_tenure >= milestone
+                and milestone not in self._triggered_tenure_milestones
+            ):
+                self._triggered_tenure_milestones.add(milestone)
+                reached.append(milestone)
+                note = f"Marked {milestone} days as a {job_name}."
+                self.add_memory(note)
+                self.record_life_event(
+                    world,
+                    "career_tenure",
+                    note,
+                    tags=["career"],
+                    significance=2,
+                    details={"job": job_name, "milestone": milestone},
+                )
+        if reached:
+            updates["tenure_milestones"] = reached
+
+        if updates and "satisfaction" not in updates:
+            updates["satisfaction"] = {
+                "previous": round(previous_satisfaction, 3),
+                "current": round(self.job_satisfaction, 3),
+            }
+
+        return updates
+
+    def evaluate_leadership_oversight_daily(self, world: 'World') -> Optional[Dict[str, Any]]:
+        if not world or not world.game_time:
+            return None
+        if not self.holds_leadership_role():
+            self.leadership_oversight_score = 0.0
+            self._last_oversight_summary = None
+            return None
+
+        today = world.game_time.current_day
+        if self._last_management_day != today:
+            self._management_actions_today = 0.0
+            self._management_action_notes = []
+            self._last_management_day = today
+
+        baseline = getattr(config, "LEADERSHIP_OVERSIGHT_BASELINE", 0.35)
+        oversight_score = baseline
+
+        leadership_skill = self.skills.get("Leadership", {}).get("level", 0)
+        oversight_score += leadership_skill * getattr(config, "LEADERSHIP_OVERSIGHT_SKILL_WEIGHT", 0.06)
+
+        oversight_score += min(
+            1.0,
+            self._management_actions_today * getattr(config, "LEADERSHIP_OVERSIGHT_ACTION_WEIGHT", 0.2),
+        )
+
+        if self.subordinates_names:
+            relationship_scores = [self.get_relationship_score(name) for name in self.subordinates_names]
+            average_relationship = sum(relationship_scores) / max(1, len(relationship_scores))
+            normalized_relationship = (average_relationship + 100) / 200
+        else:
+            normalized_relationship = 0.5
+
+        oversight_score += normalized_relationship * getattr(
+            config, "LEADERSHIP_OVERSIGHT_RELATIONSHIP_WEIGHT", 0.2
+        )
+
+        oversight_score += getattr(config, "LEADERSHIP_OVERSIGHT_PERSONALITY_BONUS", {}).get(self.personality, 0.0)
+        for trait in self.traits:
+            oversight_score += getattr(config, "LEADERSHIP_OVERSIGHT_TRAIT_BONUS", {}).get(trait, 0.0)
+
+        oversight_score = max(0.0, min(1.0, oversight_score))
+        self.leadership_oversight_score = oversight_score
+
+        summary: Dict[str, Any] = {
+            "leader": self.name,
+            "role": self.job or self.rank or "Leader",
+            "score": oversight_score,
+            "actions": round(self._management_actions_today, 2),
+            "skill": leadership_skill,
+            "relationships": round(normalized_relationship, 2),
+            "subordinates": len(self.subordinates_names),
+            "flags": [],
+        }
+        if self._management_action_notes:
+            summary["notes"] = list(self._management_action_notes[-4:])
+
+        neglect_threshold = getattr(config, "LEADERSHIP_NEGLECT_THRESHOLD", 0.45)
+        commendable_threshold = getattr(config, "LEADERSHIP_HIGH_WATERMARK", 0.78)
+
+        memory_logged = False
+        if self.subordinates_names and self._management_actions_today <= 0:
+            summary["flags"].append("no_actions")
+            if self._last_oversight_memory_day != today:
+                self.add_memory("Realized I haven't checked on my crew today—I need to make rounds soon.")
+                memory_logged = True
+
+        if oversight_score >= commendable_threshold:
+            summary["flags"].append("commendable")
+            if not memory_logged and self._last_oversight_memory_day != today:
+                self.add_memory("Feeling confident about how closely I'm guiding everyone today.")
+                memory_logged = True
+        elif oversight_score < neglect_threshold:
+            summary["flags"].append("neglect")
+            if not memory_logged and self._last_oversight_memory_day != today:
+                self.add_memory("Too many distractions—I barely checked on my team today.")
+                memory_logged = True
+
+        if memory_logged:
+            self._last_oversight_memory_day = today
+
+        self._last_oversight_evaluation_day = today
+        self._last_oversight_summary = summary.copy()
+        return summary.copy()
+
+    def handle_business_closure(self, business_id: str, world: Optional['World'], reason: str) -> None:
+        if business_id in self.business_roles:
+            self.leave_business_role(business_id, reason)
+            self.record_life_event(
+                world,
+                "business_closure",
+                reason,
+                tags=["business"],
+                significance=2,
+                details={"business_id": business_id},
+            )
+
     def interact(self, other: 'Character', world: 'World') -> bool:
         """Trigger a lightweight social interaction with another character."""
         if other is None or world is None:
@@ -967,7 +3042,8 @@ class Character:
         if dx == 0 and dy == 0:
             return True
 
-        new_x, new_y = self.x + dx, self.y + dy
+        old_coords = (self.x, self.y)
+        new_x, new_y = old_coords[0] + dx, old_coords[1] + dy
         if not world.is_walkable(new_x, new_y, ignore_characters={self.name}):
             return False
 
@@ -975,6 +3051,7 @@ class Character:
             return False
 
         self.x, self.y = new_x, new_y
+        world.update_character_position(self, old_coords, (new_x, new_y))
         world.release_tile(self.name)
         self._clear_cached_path()
         return True
@@ -1348,16 +3425,20 @@ class Character:
         if self.job == "Fletcher": return "Perform Fletcher Duties"
         if self.job == "Master Craftsman": return "Assess Production Needs"
         if self.job == "Manager": return "Manage Subordinates"
+        if self.job == "Chancellor": return "Oversee Settlement"
         if self.job == "Bookkeeper": return "Maintain Ledger"
         if self.job == "Expedition Leader": return "Oversee Expedition"
         if self.job == "Mayor": return "Oversee Settlement"
         if self.job == "Chief Medical Officer": return "Oversee Medical Operations"
         if self.job == "Medic": return "Provide Medical Care"
         if self.job == "Sheriff": return "Maintain Peace in Settlement"
+        if self.job == "Marshal": return "Maintain Defenses"
+        if self.job == "Spymaster": return "Maintain Peace in Settlement"
         if self.job == "Deputy": return "Patrol Area"
         if self.job == "Scout": return "Patrol Area"
         if self.job == "Militia Soldier": return "Patrol Area"
         if self.job == "Reeve": return "Manage Estate"
+        if self.job == "Steward": return "Manage Estate"
         if self.job == "Bailiff": return "Assist Reeve"
         if self.rank in ["Noble Lord", "Baron"] and not self.subordinates_names:
             return "Oversee Domain"
@@ -1369,6 +3450,65 @@ class Character:
         job_goal_str = self.job_default_goal_type_str()
         goal = create_goal_from_job(job_goal_str, self.name)
         return goal if goal else Goal(GoalType.IDLE, assignee_id=self.name, originator_id="SystemDefault")
+
+    def holds_leadership_role(self) -> bool:
+        if self.subordinates_names:
+            return True
+        leadership_titles = set(getattr(config, "LEADERSHIP_ROLE_TITLES", []))
+        if self.job and self.job in leadership_titles:
+            return True
+        if self.rank and self.rank in leadership_titles:
+            return True
+        noble_titles = set(getattr(config, "NOBLE_RANKS_OR_JOBS", []) or [])
+        if self.rank and self.rank in noble_titles:
+            return True
+        return False
+
+    def _record_management_activity(self, world: Optional['World'], label: Optional[str], weight: float = 1.0) -> None:
+        if not self.holds_leadership_role() or not world or not getattr(world, "game_time", None):
+            return
+        day = world.game_time.current_day
+        if self._last_management_day != day:
+            self._management_actions_today = 0.0
+            self._management_action_notes = []
+            self._last_management_day = day
+        self._management_actions_today += max(0.0, weight)
+        if label:
+            if len(self._management_action_notes) >= 6:
+                self._management_action_notes.pop(0)
+            self._management_action_notes.append(label)
+
+    def _compute_supervision_slack_probability(self, base_chance: float, world: Optional['World']) -> Tuple[float, bool]:
+        chance = max(0.0, base_chance)
+        oversight_bonus_applied = False
+        if not self.supervisor_name:
+            return min(1.0, chance), False
+
+        threshold = getattr(config, "LEADERSHIP_NEGLECT_THRESHOLD", 0.45)
+        oversight = self.supervisor_oversight
+        if world and world.game_time:
+            if (
+                self.last_supervisor_oversight_day is None
+                or self.last_supervisor_oversight_day != world.game_time.current_day
+            ):
+                oversight *= 0.8
+
+        slack_pressure = self._neglect_slack_pressure
+        if threshold > 0:
+            gap_ratio = max(0.0, threshold - oversight) / threshold
+            slack_pressure = max(slack_pressure, gap_ratio)
+
+        if slack_pressure > 0:
+            bonus = slack_pressure * getattr(config, "LEADERSHIP_SLACKING_BASE_CHANCE", 0.12)
+            if "Lazy" in self.traits:
+                bonus *= 1.15
+            if "Diligent" in self.traits or "Focused" in self.traits:
+                bonus *= 0.6
+            chance += bonus
+            oversight_bonus_applied = bonus > 1e-6
+
+        chance = min(1.0, max(0.0, chance))
+        return chance, oversight_bonus_applied
 
     def _execute_fetch_tool(self, world: 'World') -> bool: # True if still fetching, False if done/failed
         if not self.tool_to_fetch_type:
@@ -1472,12 +3612,21 @@ class Character:
             current_progress_gain *= severity_modifier
             if severity_modifier < 1.0: self.add_memory(f"Working with difficulty due to injury on {task_name} (I_Sev: {self.injury_severity}, Mod: {severity_modifier:.2f}).")
 
-        # Trait Effects on Progress
-        # Lazy trait can override everything if triggered
-        if "Lazy" in self.traits and not "Focused" in self.traits: # Focused can counteract Lazy's slacking
-            if random.random() < 0.25: # 25% chance to be lazy
-                current_progress_gain = 0
-                is_lazy_this_tick = True
+        # Trait and supervision effects on progress
+        base_lazy_chance = 0.0
+        if "Lazy" in self.traits and "Focused" not in self.traits:
+            base_lazy_chance = 0.25
+        slack_chance, oversight_slack = self._compute_supervision_slack_probability(base_lazy_chance, world)
+        if slack_chance > 0 and random.random() < slack_chance:
+            current_progress_gain = 0
+            is_lazy_this_tick = True
+            if oversight_slack and base_lazy_chance <= 0:
+                watcher = self.supervisor_name or "leadership"
+                self.add_memory(f"With {watcher} absent I drifted off during '{task_name}'.")
+            elif oversight_slack and base_lazy_chance > 0:
+                watcher = self.supervisor_name or "no one"
+                self.add_memory(f"Felt lazy and noticed {watcher} wasn't watching, so I coasted on '{task_name}'.")
+            else:
                 self.add_memory(f"Felt lazy and decided to slack off for a bit while working on '{task_name}'.")
 
         if current_progress_gain > 0 and not is_lazy_this_tick: # Positive traits only apply if not slacking and some progress is possible
@@ -1599,10 +3748,20 @@ class Character:
 
             is_slacking_craft = False
 
-            if "Lazy" in self.traits and not "Focused" in self.traits:
-                if random.random() < 0.25:
-                    current_crafting_progress_gain = 0
-                    is_slacking_craft = True
+            base_lazy_chance = 0.0
+            if "Lazy" in self.traits and "Focused" not in self.traits:
+                base_lazy_chance = 0.25
+            slack_chance, oversight_slack = self._compute_supervision_slack_probability(base_lazy_chance, world)
+            if slack_chance > 0 and random.random() < slack_chance:
+                current_crafting_progress_gain = 0
+                is_slacking_craft = True
+                if oversight_slack and base_lazy_chance <= 0:
+                    watcher = self.supervisor_name or "leadership"
+                    self.add_memory(f"Took advantage of lax oversight to slack on WO {order.order_id}.")
+                elif oversight_slack and base_lazy_chance > 0:
+                    watcher = self.supervisor_name or "no one"
+                    self.add_memory(f"Felt lazy and noticed {watcher} absent, so I coasted on WO {order.order_id}.")
+                else:
                     self.add_memory(f"Felt lazy and slacked off while crafting {item_name} for WO {order.order_id}.")
 
             if current_crafting_progress_gain > 0 and not is_slacking_craft:
@@ -1874,11 +4033,21 @@ class Character:
         if stale_concerns and not can_approve: print(f"{self.name} (Manager) notes stale data for {order_to_process.order_id}, and resources confirmed insufficient.")
         elif stale_concerns: print(f"{self.name} (Manager) notes stale data for {order_to_process.order_id}, proceeding with caution.")
         if can_approve:
-            order_to_process.status = "Approved"; order_to_process.approved_by = self.name; order_to_process.approval_day = world.game_time.current_day; self.add_memory(f"Approved WO {order_to_process.order_id}"); print(f"{self.name} (Manager) APPROVED {order_to_process.order_id[:8]}.")
+            order_to_process.status = "Approved"
+            order_to_process.approved_by = self.name
+            order_to_process.approval_day = world.game_time.current_day
+            self.add_memory(f"Approved WO {order_to_process.order_id}")
+            print(f"{self.name} (Manager) APPROVED {order_to_process.order_id[:8]}.")
             self._receive_payment(JOB_SALARIES.get("Manage Subordinates", 3), f"reviewing WO {order_to_process.order_id[:4]}", world)
+            self._record_management_activity(world, f"order_approve:{order_to_process.order_id[:4]}", weight=0.5)
         else:
-            order_to_process.status = "Denied"; order_to_process.denied_by = self.name; order_to_process.denial_reason = f"Insuff: {', '.join(missing_notes) or 'stale data'}"; self.add_memory(f"Denied WO {order_to_process.order_id}"); print(f"{self.name} (Manager) DENIED {order_to_process.order_id[:8]}. Reason: {order_to_process.denial_reason}")
+            order_to_process.status = "Denied"
+            order_to_process.denied_by = self.name
+            order_to_process.denial_reason = f"Insuff: {', '.join(missing_notes) or 'stale data'}"
+            self.add_memory(f"Denied WO {order_to_process.order_id}")
+            print(f"{self.name} (Manager) DENIED {order_to_process.order_id[:8]}. Reason: {order_to_process.denial_reason}")
             self._receive_payment(JOB_SALARIES.get("Manage Subordinates", 3), f"reviewing WO {order_to_process.order_id[:4]}", world)
+            self._record_management_activity(world, f"order_deny:{order_to_process.order_id[:4]}", weight=0.5)
     def _execute_maintain_ledger(self, world: 'World'):
         if self.job != "Bookkeeper":
             self.current_goal = self.get_default_goal()
@@ -2535,6 +4704,19 @@ class Character:
             )
 
         if treatment_successful_this_tick:
+            if hasattr(target_patient, "record_health_event"):
+                treatment_type = "treatment"
+                if item_used_for_treatment == "Bandages":
+                    treatment_type = "injury_treated"
+                elif item_used_for_treatment == "Herbs":
+                    treatment_type = "sickness_treated"
+                target_patient.record_health_event(
+                    world,
+                    treatment_type,
+                    f"Received care from {self.name} using {item_used_for_treatment or 'aid'}.",
+                    severity=severity_after,
+                    tags=["treatment"],
+                )
             self._grant_skill_experience("Medicine", 1.5, world)
             self._receive_payment(
                 JOB_SALARIES.get("Provide Medical Care", 8),
@@ -3888,6 +6070,8 @@ class Character:
         phase_info = world.get_current_phase() if hasattr(world, "get_current_phase") else world.game_time.get_phase()
         self._apply_phase_behavior(world, phase_info)
         active_weather_event = world.get_active_weather_event() if hasattr(world, "get_active_weather_event") else None
+        decision_profile = self._build_decision_profile(world)
+        self._decision_profile = decision_profile
         if active_weather_event and self._should_seek_weather_shelter(active_weather_event):
             self._seek_weather_shelter(world, active_weather_event)
 
@@ -3915,6 +6099,8 @@ class Character:
 
         energy_level = self.needs.get("Energy", 100)
         rest_threshold = getattr(config, "ENERGY_THRESHOLD_REST", 40) + getattr(self, "_phase_rest_threshold_bonus", 0)
+        rest_threshold += int(round(decision_profile.get("rest_threshold_adjustment", 0.0)))
+        rest_threshold = max(0, min(config.NEED_SCORE_MAX, rest_threshold))
         if energy_level < rest_threshold and self.current_goal.type not in [GoalType.REST_AT_HOME, GoalType.FIND_SHELTER, GoalType.SEEK_MEDICAL_ATTENTION]:
             home_building = self._ensure_home_assignment(world)
             if home_building:
@@ -3977,7 +6163,11 @@ class Character:
         if self.needs.get('Safety', config.NEED_SAFETY_DEFAULT) < config.NEED_SAFETY_CRITICAL_THRESHOLD and \
            self.current_goal.type not in [GoalType.SEEK_MEDICAL_ATTENTION, GoalType.ASK_FOR_HELP, GoalType.WANDER]: # Avoid overriding if already wandering for mood
             # If safety is critical, character might prioritize less risky actions or seek "safer" spots (proxied by Wander)
-            if random.random() < 0.3: # 30% chance to override current non-critical goal to Wander for safety
+            wander_base = getattr(config, "SAFETY_CRITICAL_WANDER_BASE_CHANCE", 0.3)
+            risk_modifier = max(0.35, decision_profile.get("risk_modifier", 1.0))
+            wander_chance = wander_base / risk_modifier
+            wander_chance = max(0.05, min(0.9, wander_chance))
+            if random.random() < wander_chance:
                 self.add_memory(f"Feeling very unsafe (Safety: {self.needs['Safety']:.0f}). Decided to wander to find a safer spot.")
                 self.current_goal = Goal(GoalType.WANDER, assignee_id=self.name, originator_id=self.name, parameters={"reason": "critical_safety"})
                 # No return here, let the main dispatcher pick up the Wander goal later in the tick if nothing else overrides.
@@ -3999,7 +6189,10 @@ class Character:
         if self.current_goal.type not in critical_goal_types_for_ask_check:
             # Example: Ask for food if critically hungry and has no food
             if self.needs.get("Hunger", 100) < config.CRITICAL_NEED_THRESHOLD_FOR_HELP and self.inventory.get("Food", 0) == 0: # Assuming "Food" is an item type
-                if random.random() < config.ASK_FOR_HELP_CHANCE:
+                ask_multiplier = max(0.2, decision_profile.get("ask_for_help_multiplier", 1.0))
+                ask_chance = config.ASK_FOR_HELP_CHANCE * ask_multiplier
+                ask_chance = max(0.01, min(0.95, ask_chance))
+                if random.random() < ask_chance:
                     potential_helpers: List[Character] = []
                     for other_char in world.characters:
                         if other_char.name == self.name or other_char.name not in self.known_characters:
@@ -4176,6 +6369,14 @@ class Character:
             current_social_interaction_chance += getattr(self, "_phase_social_bias", 0.0)
             if active_weather_event and active_weather_event.get("requires_shelter"):
                 current_social_interaction_chance -= 0.15
+            current_social_interaction_chance *= decision_profile.get("social_focus", 1.0)
+            work_focus = decision_profile.get("work_focus", 1.0)
+            if work_focus > 1.0:
+                social_drain = (work_focus - 1.0) * getattr(config, "DECISION_SOCIAL_FROM_WORK_DRAIN", 0.0)
+                current_social_interaction_chance *= max(0.1, 1.0 - social_drain)
+            elif work_focus < 1.0:
+                social_boost = min(0.4, (1.0 - work_focus) * getattr(config, "DECISION_SOCIAL_FROM_WORK_DRAIN", 0.0))
+                current_social_interaction_chance *= 1.0 + social_boost
             current_social_interaction_chance = max(0.0, min(1.0, current_social_interaction_chance))
             current_social_interaction_chance = max(0.01, min(0.95, current_social_interaction_chance)) # Clamp
 
@@ -4232,6 +6433,14 @@ class Character:
                                         weight *= 1.5 # Further boost interaction with positive connections
                                     elif relationship_score < -10: # Disliked, rivals
                                         weight *= 0.5 # Further penalize interaction with negative connections
+
+                                positive_threshold = getattr(config, "DECISION_RELATIONSHIP_POSITIVE_THRESHOLD", 60)
+                                negative_threshold = getattr(config, "DECISION_RELATIONSHIP_NEGATIVE_THRESHOLD", -25)
+                                social_focus = decision_profile.get("social_focus", 1.0)
+                                if relationship_score >= positive_threshold:
+                                    weight *= max(0.2, 1.0 + (social_focus - 1.0) * getattr(config, "DECISION_SOCIAL_POSITIVE_WEIGHT", 0.6))
+                                elif relationship_score <= negative_threshold:
+                                    weight *= max(0.05, 1.0 - (social_focus - 1.0) * getattr(config, "DECISION_SOCIAL_NEGATIVE_WEIGHT", 0.6))
 
                                 target_weights[other_char.name] = max(0.01, weight) # Ensure a minimal chance
 
@@ -4828,6 +7037,7 @@ class Character:
         self.add_memory(review_summary)
         print(f"{self.name} ({self.personality}) reviewed {subordinate.name}. Objective: {objective_rating}, Final: {final_rating}. Rel: {relationship_to_sub}.")
         subordinate.add_memory(f"Had performance review with {self.name} ({self.personality}). Rated: {final_rating}. My rel with them: {subordinate.get_relationship_score(self.name)}")
+        self._record_management_activity(world, f"review:{subordinate.name}")
 
     def issue_warning(self, subordinate_char_name: str, world: 'World', reason_message: str):
         if self.name == subordinate_char_name:
@@ -4874,6 +7084,7 @@ class Character:
                 subordinate.update_mood_score(-10, "Performance set to Poor due to warnings")
                 subordinate.needs['Esteem'] = max(config.NEED_SCORE_MIN, subordinate.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) - 10) # Further esteem hit
                 subordinate.add_memory(f"Performance being set to Poor further damaged my esteem. Esteem: {subordinate.needs['Esteem']}")
+        self._record_management_activity(world, f"warning:{subordinate.name}")
 
 
     def fire_subordinate(self, subordinate_char_name: str, world: 'World'):
@@ -4955,6 +7166,7 @@ class Character:
 
         subordinate.add_memory(f"Was fired by {self.name} from job {original_job}. Now Unemployed.")
         self._apply_family_splash_effect(subordinate, -50, world, reason=f"fired") # Use a large, but not extreme, base for splash
+        self._record_management_activity(world, f"fired:{subordinate.name}")
 
         # Optional: Remove from world or mark inactive. For now, they become "Unemployed".
         # If you want to remove them from the simulation entirely:
@@ -4962,6 +7174,116 @@ class Character:
         # print(f"{subordinate.name} has been removed from the world.")
         # However, this could cause issues if other parts of the code expect the character to exist.
         # Keeping them as "Unemployed" is safer for now.
+
+    def receive_oversight_update(
+        self,
+        supervisor: Optional['Character'],
+        oversight_score: float,
+        world: Optional['World'],
+        summary: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        oversight_score = max(0.0, min(1.0, oversight_score))
+        previous_score = self.supervisor_oversight
+        self.supervisor_oversight = oversight_score
+        if world and world.game_time:
+            self.last_supervisor_oversight_day = world.game_time.current_day
+
+        threshold = getattr(config, "LEADERSHIP_NEGLECT_THRESHOLD", 0.45)
+        corruption_threshold = getattr(config, "LEADERSHIP_CORRUPTION_THRESHOLD", 0.25)
+
+        if threshold > 0:
+            self._neglect_slack_pressure = max(0.0, threshold - oversight_score) / threshold
+        else:
+            self._neglect_slack_pressure = 0.0
+
+        if corruption_threshold > 0:
+            self._neglect_illegal_pressure = max(0.0, corruption_threshold - oversight_score) / corruption_threshold
+        else:
+            self._neglect_illegal_pressure = 0.0
+
+        if supervisor and self.supervisor_name == supervisor.name:
+            if oversight_score >= threshold and previous_score < threshold:
+                self.add_memory(f"{supervisor.name} checked in closely today—best stay sharp.")
+            elif oversight_score < threshold and previous_score >= threshold:
+                self.add_memory(f"Barely saw {supervisor.name} today; the crew had free rein.")
+
+        if self._decision_profile is not None:
+            adjusted_risk = 1.0 + (self._neglect_illegal_pressure * 0.25) - (oversight_score * 0.1)
+            self._decision_profile["risk_modifier"] = max(0.5, min(1.5, adjusted_risk))
+
+    def consider_misconduct_due_to_neglect(
+        self,
+        world: 'World',
+        supervisor: Optional['Character'],
+        oversight_score: float,
+    ) -> Optional[Dict[str, Any]]:
+        if not world or not world.game_time:
+            return None
+
+        corruption_threshold = getattr(config, "LEADERSHIP_CORRUPTION_THRESHOLD", 0.25)
+        if corruption_threshold <= 0 or oversight_score >= corruption_threshold:
+            return None
+
+        pressure = max(
+            self._neglect_illegal_pressure,
+            (corruption_threshold - oversight_score) / corruption_threshold,
+        )
+        base_chance = getattr(config, "LEADERSHIP_ILLEGAL_BASE_CHANCE", 0.05)
+        chance = base_chance * pressure
+        chance += base_chance * getattr(
+            config, "LEADERSHIP_ILLEGAL_PERSONALITY_MODIFIERS", {}
+        ).get(self.personality, 0.0)
+        trait_modifiers = getattr(config, "LEADERSHIP_ILLEGAL_TRAIT_MODIFIERS", {})
+        for trait in self.traits:
+            chance += base_chance * trait_modifiers.get(trait, 0.0)
+
+        chance = max(0.0, min(1.0, chance))
+        if chance <= 0 or random.random() >= chance:
+            return None
+
+        skim_amount = max(1, int(round(1 + pressure * getattr(config, "LEADERSHIP_ILLEGAL_MAX_SKIM", 6))))
+        self.money += skim_amount
+
+        day = world.game_time.current_day
+        supervisor_name = supervisor.name if supervisor else None
+        summary_text = f"{self.name} skimmed {skim_amount}c under lax oversight."
+        incident_id = world._next_crime_id()
+        incident = {
+            "id": incident_id,
+            "type": "corruption",
+            "reported_day": day,
+            "suspect": self.name,
+            "supervisor": supervisor_name,
+            "amount": skim_amount,
+            "status": "pending",
+            "caught": False,
+            "summary": summary_text,
+            "description": summary_text,
+            "oversight": round(oversight_score, 3),
+        }
+
+        world.pending_crimes.append(incident)
+        world.active_crimes[incident_id] = incident
+        world._record_crime_history(incident)
+        world.add_event_log_message(summary_text)
+
+        self.add_memory(f"Pocketed {skim_amount}c while no one was watching our crew.")
+        self.update_reputation(-5, "Skimmed funds under lax oversight", world)
+        self.update_mood_score(
+            getattr(config, "MOOD_CHANGE_MISCONDUCT_THRILL", 3),
+            "Skimmed extra coins under lax oversight",
+        )
+
+        if supervisor and self.supervisor_name == supervisor.name:
+            supervisor.add_memory(f"Rumors say {self.name} skimmed funds while I was absent.")
+            supervisor.modify_relationship(
+                self.name,
+                -8,
+                world,
+                reason="Rumored misconduct under my watch",
+            )
+
+        return incident
 
     def get_relationship_score(self, target_char_name: str) -> int:
         """Returns the relationship score towards the target character, default 0."""
@@ -5567,7 +7889,8 @@ class Character:
     def _ensure_home_assignment(self, world: 'World'):
         if not hasattr(world, "claim_residential_spot"):
             return None
-        building = world.claim_residential_spot(self)
+        preferred_tier = world.determine_estate_tier(self) if hasattr(world, "determine_estate_tier") else None
+        building = world.claim_residential_spot(self, preferred_tier=preferred_tier)
         if building:
             self.home_location = building.location
         return building
