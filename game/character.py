@@ -258,6 +258,7 @@ class Character:
 
         self.ambition: Optional[Ambition] = None
         self._last_ambition_evaluation_day: Optional[int] = None
+        self.is_deceased: bool = False
 
     @property
     def family_members(self) -> Set[str]:
@@ -2736,6 +2737,12 @@ class Character:
             self.add_memory(birthday_message)
             if hasattr(world, "add_event_log_message"):
                 world.add_event_log_message(f"{self.name} celebrates a birthday (age {self.age_years}).")
+            if self.age_years > config.MAX_AGE:
+                self.is_deceased = True
+                death_message = f"Died of natural causes at age {self.age_years}."
+                self.add_memory(death_message)
+                if hasattr(world, "add_event_log_message"):
+                    world.add_event_log_message(f"{self.name} has died of natural causes at age {self.age_years}.")
 
     def _apply_phase_behavior(self, world: 'World', phase_info: Optional[Dict[str, Any]]):
         """Adjust daily behavior based on the active phase schedule."""
@@ -5983,8 +5990,8 @@ class Character:
             family_members = []
             if self.spouse:
                 family_members.append(self.spouse)
-            family_members.extend(list(self.children))
-            family_members.extend(list(self.parents))
+            family_members.extend(list(self.children_names))
+            family_members.extend(list(self.parent_names))
 
             if family_members:
                 target_family_member_name = random.choice(family_members)

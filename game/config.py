@@ -9,6 +9,7 @@ LLM_HAS_THINKING_TAGS = False # Set to True if your model uses <thinking>...</th
 TICKS_PER_DAY = 10
 DAYS_PER_SEASON = 10 # Example, can be adjusted
 MAX_SIMULATION_DAYS = 20 # Max days the simulation runs for in headless/test mode.
+MAX_AGE = 80 # The maximum age a character can reach before dying of natural causes.
 
 # Navigation & movement
 IMPASSABLE_TERRAINS = {"Mountain", "Water", "DeepWater", "Chasm", "Void"}

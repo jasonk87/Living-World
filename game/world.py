@@ -1359,6 +1359,66 @@ class World:
             )
             character._life_event_flags.add("arrival")
 
+    def _handle_inheritance(self, deceased_character: 'Character'):
+        """Handles the transfer of assets from a deceased character to their heirs."""
+        if not deceased_character.is_deceased:
+            return
+
+        heirs = []
+        # Spouse is the primary heir
+        if deceased_character.spouse:
+            spouse_char = self.get_character_by_name(deceased_character.spouse)
+            if spouse_char and not spouse_char.is_deceased:
+                heirs.append(spouse_char)
+
+        # If no spouse, children inherit
+        if not heirs and deceased_character.children:
+            for child_name in deceased_character.children:
+                child_char = self.get_character_by_name(child_name)
+                if child_char and not child_char.is_deceased:
+                    heirs.append(child_char)
+
+        # --- No Heirs ---
+        if not heirs:
+            if deceased_character.money > 0:
+                self.economy.treasury_coins += deceased_character.money
+            self.add_event_log_message(f"Assets of {deceased_character.name} transferred to the settlement as there were no legal heirs.")
+
+            # Home becomes vacant
+            if deceased_character.home_location:
+                self.housing.release_residential_spot(deceased_character)
+
+            # Businesses are dissolved
+            for business_id in deceased_character.businesses_owned:
+                self.economy.dissolve_business(business_id, "owner_deceased_no_heir")
+            return
+
+        # --- Has Heirs ---
+        primary_heir = heirs[0]
+
+        # Money
+        if deceased_character.money > 0:
+            money_per_heir = deceased_character.money // len(heirs)
+            for heir in heirs:
+                heir.money += money_per_heir
+                heir.add_memory(f"Inherited {money_per_heir} coins from {deceased_character.name}.")
+            self.add_event_log_message(f"{', '.join([h.name for h in heirs])} inherited {deceased_character.money} coins from {deceased_character.name}.")
+
+        # Home
+        if deceased_character.home_location and not primary_heir.home_location:
+            building = self.get_building_by_location(deceased_character.home_location)
+            if building:
+                self.housing.transfer_home(deceased_character, primary_heir, building)
+                primary_heir.add_memory(f"Inherited the home at {building.location} from {deceased_character.name}.")
+                self.add_event_log_message(f"{primary_heir.name} inherited the home of {deceased_character.name} at {building.location}.")
+
+        # Businesses
+        if deceased_character.businesses_owned:
+            for business_id in list(deceased_character.businesses_owned):
+                self.economy.transfer_business_ownership(business_id, primary_heir)
+                primary_heir.add_memory(f"Inherited a business from {deceased_character.name}.")
+                self.add_event_log_message(f"{primary_heir.name} inherited a business from {deceased_character.name}.")
+
     def remove_character(self, character: 'Character'):
         if character not in self.characters:
             return
@@ -2485,7 +2545,21 @@ class World:
 
 
     def process_population_daily(self, daily_report: Dict[str, Any]):
-        pass
+        """Handles daily population changes including births, deaths, and migrations."""
+        housing_snapshot = self.housing.get_housing_snapshot()
+        self.evaluate_population_dynamics(daily_report, housing_snapshot)
+
+        # Process deaths after aging and other evaluations
+        deceased_today = [char for char in self.characters if char.is_deceased]
+        if deceased_today:
+            daily_report.setdefault("population_events", []).extend(
+                [{"type": "death", "name": char.name, "age": char.age_years} for char in deceased_today]
+            )
+
+        for character in deceased_today:
+            self.add_event_log_message(f"{character.name} has passed away at the age of {character.age_years}.")
+            self._handle_inheritance(character)
+            self.remove_character(character)
 
     @property
     def cultural_calendar(self):

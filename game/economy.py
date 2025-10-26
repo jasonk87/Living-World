@@ -49,6 +49,23 @@ class Economy:
             self.world.grid_size[1] // 2,
         )
 
+    def dissolve_business(self, business_id: str, reason: str):
+        """Dissolves a business, removing it from the economy."""
+        business = self.businesses.pop(business_id, None)
+        if business:
+            self.world.add_event_log_message(f"Business {business.get('name')} has been dissolved. Reason: {reason}.")
+
+    def transfer_business_ownership(self, business_id: str, new_owner: 'Character'):
+        """Transfers ownership of a business to a new character."""
+        business = self.businesses.get(business_id)
+        if business and new_owner:
+            old_owner_name = business['owner']
+            business['owner'] = new_owner.name
+            new_owner.businesses_owned.append(business_id)
+            old_owner = self.world.get_character_by_name(old_owner_name)
+            if old_owner:
+                old_owner.businesses_owned.remove(business_id)
+            self.world.add_event_log_message(f"Ownership of {business.get('name')} transferred to {new_owner.name}.")
 
     def add_work_order(self, work_order: WorkOrder):
         if work_order not in self.work_orders:
