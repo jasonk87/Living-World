@@ -12,10 +12,23 @@ from game.stockpile import Stockpile
 from game.time import Time
 from game.main import advance_simulation_one_tick, run_server as start_server
 from game.data import STRUCTURE_BLUEPRINTS
+from game import config
+
+def _basic_needs() -> dict[str, int]:
+    return {
+        "Hunger": 80,
+        "Thirst": 80,
+        "Energy": 95,
+        "Social": 70,
+        "Safety": config.NEED_SAFETY_DEFAULT,
+        "Belonging": config.NEED_BELONGING_DEFAULT,
+        "Esteem": config.NEED_ESTEEM_DEFAULT,
+    }
+
 
 # Test for Miner
 def test_miner_job(world):
-    miner = Character(name="Test Miner", personality="test", traits=[], skills={}, job="Miner", x=0, y=0)
+    miner = Character(name="Test Miner", personality="test", traits=[], skills={}, job="Miner", x=0, y=0, needs=_basic_needs())
     miner.inventory["Iron Pickaxe"] = 1
     miner.equip_tool("Iron Pickaxe")
     world.add_character(miner)
@@ -37,7 +50,7 @@ def test_miner_job(world):
 
 # Test for Smelter
 def test_smelter_job(world):
-    smelter = Character(name="Test Smelter", personality="test", traits=[], skills={}, job="Smelter", x=0, y=0)
+    smelter = Character(name="Test Smelter", personality="test", traits=[], skills={}, job="Smelter", x=0, y=0, needs=_basic_needs())
     world.add_character(smelter)
     blueprint = STRUCTURE_BLUEPRINTS["smelter_workshop"]
     building = Building(structure_type="smelter_workshop", location=(6, 6), **blueprint)
@@ -61,7 +74,7 @@ def test_smelter_job(world):
 
 # Test for Blacksmith
 def test_blacksmith_job(world):
-    blacksmith = Character(name="Test Blacksmith", personality="test", traits=[], skills={}, job="Blacksmith", x=0, y=0)
+    blacksmith = Character(name="Test Blacksmith", personality="test", traits=[], skills={}, job="Blacksmith", x=0, y=0, needs=_basic_needs())
     blacksmith.inventory["Hammer"] = 1
     blacksmith.equip_tool("Hammer")
     world.add_character(blacksmith)
@@ -89,7 +102,7 @@ def test_blacksmith_job(world):
 
 # Test for Sawyer
 def test_sawyer_job(world):
-    sawyer = Character(name="Test Sawyer", personality="test", traits=[], skills={}, job="Sawyer", x=0, y=0)
+    sawyer = Character(name="Test Sawyer", personality="test", traits=[], skills={}, job="Sawyer", x=0, y=0, needs=_basic_needs())
     sawyer.inventory["Saw"] = 1
     sawyer.equip_tool("Saw")
     world.add_character(sawyer)
@@ -115,7 +128,7 @@ def test_sawyer_job(world):
 
 # Test for Carpenter
 def test_carpenter_job(world):
-    carpenter = Character(name="Test Carpenter", personality="test", traits=[], skills={}, job="Carpenter", x=0, y=0)
+    carpenter = Character(name="Test Carpenter", personality="test", traits=[], skills={}, job="Carpenter", x=0, y=0, needs=_basic_needs())
     carpenter.inventory["Hammer"] = 1
     carpenter.equip_tool("Hammer")
     world.add_character(carpenter)
@@ -143,7 +156,7 @@ def test_carpenter_job(world):
 def test_work_order_creation_and_assignment(world):
     from game.work_order import WorkOrder
     # Add a Carpenter to the world
-    carpenter = Character(name="Test Carpenter", personality="test", traits=[], skills={}, job="Carpenter", x=0, y=0)
+    carpenter = Character(name="Test Carpenter", personality="test", traits=[], skills={}, job="Carpenter", x=0, y=0, needs=_basic_needs())
     carpenter.inventory["Hammer"] = 1
     carpenter.equip_tool("Hammer")
     world.add_character(carpenter)
@@ -180,9 +193,9 @@ def test_work_order_creation_and_assignment(world):
 def test_end_to_end_work_order_creation_and_completion(world):
     from game.work_order import WorkOrder
     # Add a Manager, Carpenter, and necessary buildings/resources
-    manager = Character(name="Test Manager", personality="test", traits=[], skills={}, job="Manager", x=0, y=0)
+    manager = Character(name="Test Manager", personality="test", traits=[], skills={}, job="Manager", x=0, y=0, needs=_basic_needs())
     world.add_character(manager)
-    carpenter = Character(name="Test Carpenter", personality="test", traits=[], skills={}, job="Carpenter", x=0, y=0)
+    carpenter = Character(name="Test Carpenter", personality="test", traits=[], skills={}, job="Carpenter", x=0, y=0, needs=_basic_needs())
     carpenter.inventory["Hammer"] = 1
     carpenter.equip_tool("Hammer")
     world.add_character(carpenter)
@@ -205,7 +218,7 @@ def test_end_to_end_work_order_creation_and_completion(world):
 
     # Manually update the ledger to reflect the initial stockpile state,
     # as there's no Bookkeeper in this test to do it automatically.
-    world.ledger.update_stockpile_record("main_stockpile", stockpile.inventory, world.game_time.current_day)
+    world.economy.ledger.update_stockpile_record("main_stockpile", stockpile.inventory, world.game_time.current_day)
 
     # Manually create and add a work order (simulating an API call's effect)
     work_order = WorkOrder(order_type="CraftItem", details={"item_name": "Furniture", "quantity": 1})

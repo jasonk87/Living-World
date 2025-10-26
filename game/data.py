@@ -1193,42 +1193,6 @@ ROLE_DETAILS = {
         "job_default_goal": "Perform Carpenter Duties"
     }
 }
-
-# Update JOB_TASK_DEFINITIONS with default goals for new roles if they perform specific tasks
-# For roles that are purely decision-making, their "task" is their job_default_goal in character.py,
-# which then calls specific _execute_ methods.
-
-# Example: If Militia Commander has a default task beyond "Oversee Expedition"
-# JOB_TASK_DEFINITIONS["Maintain Defenses"] = {
-#     "skill_used": "Leadership", # or "Strategy"
-#     # ... other fields if it's a task that can be "worked on"
-# }
-# Ensure character.py's job_default_goal() is updated for these.
-# For now, the ROLE_DETAILS includes a "job_default_goal" field for easy reference to Character.py
-
-from typing import TYPE_CHECKING
-
-
-if TYPE_CHECKING:
-    from .building import Workplace
-
-
-class Job:
-    """Represents a character's job."""
-
-    def __init__(self, title: str, workplace: "Workplace", salary: int):
-        self.title = title
-        self.workplace = workplace
-        self.salary = salary
-
-    def to_dict(self):
-        return {
-            "title": self.title,
-            "workplace": self.workplace.display_name if self.workplace else "Unknown",
-            "salary": self.salary,
-        }
-
-
 # --- Economy Data ---
 JOB_SALARIES = {
     "Perform Woodcutter Duties": 5,

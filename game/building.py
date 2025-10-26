@@ -74,6 +74,16 @@ class Building:
         self.comfort_score: float = 0.0
         self.household_comfort_state: Dict[str, Dict[str, Any]] = {}
 
+    def to_dict(self):
+        """Converts the building object to a dictionary for serialization."""
+        return {
+            "structure_type": self.structure_type,
+            "display_name": self.display_name,
+            "location": self.location,
+            "size": self.size,
+            "is_operational": self.is_operational,
+            "map_char": self.get_current_map_char(),
+        }
 
     def __str__(self):
         phase_info = ""
@@ -207,8 +217,8 @@ class Building:
             normalized.append(normalized_row)
         return normalized
 
-    def to_dict(self):
-        """Converts the building object to a dictionary for serialization."""
+    def to_dict_detailed(self):
+        """Converts the building object to a detailed dictionary for serialization."""
         data = {
             "structure_type": self.structure_type,
             "display_name": self.display_name,

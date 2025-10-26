@@ -12,6 +12,18 @@ from game import config
 from game.crop import Crop
 
 
+def _basic_needs() -> dict[str, int]:
+    return {
+        "Hunger": 80,
+        "Thirst": 80,
+        "Energy": 95,
+        "Social": 70,
+        "Safety": config.NEED_SAFETY_DEFAULT,
+        "Belonging": config.NEED_BELONGING_DEFAULT,
+        "Esteem": config.NEED_ESTEEM_DEFAULT,
+    }
+
+
 class TestCharacterTaskPerformance(unittest.TestCase):
     def setUp(self):
         self.time = Time(ticks_per_day=10)
@@ -38,7 +50,7 @@ class TestCharacterTaskPerformance(unittest.TestCase):
         # Pre-stock for bookkeeper tests
         self.stockpile.add_item("Logs", 10) # This should now work
         self.stockpile.add_item("Stones", 5)
-        self.world.ledger.update_stockpile_record(self.stockpile.name, self.stockpile.inventory.copy(), self.time.current_day)
+        self.world.economy.ledger.update_stockpile_record(self.stockpile.name, self.stockpile.inventory.copy(), self.time.current_day)
 
 
     def run_task_for_ticks(self, character, task_name, ticks, task_location=(0,0)):
@@ -54,7 +66,7 @@ class TestCharacterTaskPerformance(unittest.TestCase):
 
 
     def test_lazy_generic_task_slower_progress(self):
-        lazy_char = Character(name="LazyTest", personality="slacker", traits=["Lazy"], skills={}, job=Job("Woodcutter", None, JOB_SALARIES.get("Woodcutter", 0)))
+        lazy_char = Character(name="LazyTest", personality="slacker", traits=["Lazy"], skills={}, job=Job("Woodcutter", None, JOB_SALARIES.get("Woodcutter", 0)), needs=_basic_needs())
         lazy_char.equip_tool("Stone Axe") # Assume Stone Axe blueprint exists and is an Axe
         self.world.add_character(lazy_char)
 
@@ -92,7 +104,7 @@ class TestCharacterTaskPerformance(unittest.TestCase):
         random.random = original_random # Restore random
 
     def test_diligent_generic_task_faster_progress(self):
-        diligent_char = Character(name="DiligentTest", personality="worker", traits=["Diligent"], skills={}, job=Job("Woodcutter", None, JOB_SALARIES.get("Woodcutter", 0)))
+        diligent_char = Character(name="DiligentTest", personality="worker", traits=["Diligent"], skills={}, job=Job("Woodcutter", None, JOB_SALARIES.get("Woodcutter", 0)), needs=_basic_needs())
         diligent_char.equip_tool("Stone Axe")
         self.world.add_character(diligent_char)
 
@@ -136,7 +148,7 @@ class TestCharacterTaskPerformance(unittest.TestCase):
         random.random = original_random
 
     def test_focused_overrides_lazy_generic_task(self):
-        focused_lazy_char = Character(name="FocusLazy", personality="focused", traits=["Focused", "Lazy"], skills={}, job=Job("Woodcutter", None, JOB_SALARIES.get("Woodcutter", 0)))
+        focused_lazy_char = Character(name="FocusLazy", personality="focused", traits=["Focused", "Lazy"], skills={}, job=Job("Woodcutter", None, JOB_SALARIES.get("Woodcutter", 0)), needs=_basic_needs())
         focused_lazy_char.equip_tool("Stone Axe")
         self.world.add_character(focused_lazy_char)
 
@@ -161,7 +173,7 @@ class TestCharacterTaskPerformance(unittest.TestCase):
         random.random = original_random
 
     def test_strong_trait_extra_yield_generic_task(self):
-        strong_char = Character(name="StrongTest", personality="strong", traits=["Strong"], skills={}, job=Job("Woodcutter", None, JOB_SALARIES.get("Woodcutter", 0)))
+        strong_char = Character(name="StrongTest", personality="strong", traits=["Strong"], skills={}, job=Job("Woodcutter", None, JOB_SALARIES.get("Woodcutter", 0)), needs=_basic_needs())
         strong_char.equip_tool("Stone Axe")
         self.world.add_character(strong_char)
 
@@ -180,7 +192,7 @@ class TestCharacterTaskPerformance(unittest.TestCase):
         random.random = original_random
 
     def test_careless_trait_extra_tool_wear_generic_task(self):
-        careless_char = Character(name="CarelessTest", personality="clumsy", traits=["Careless"], skills={}, job=Job("Woodcutter", None, JOB_SALARIES.get("Woodcutter", 0)))
+        careless_char = Character(name="CarelessTest", personality="clumsy", traits=["Careless"], skills={}, job=Job("Woodcutter", None, JOB_SALARIES.get("Woodcutter", 0)), needs=_basic_needs())
         self.world.add_character(careless_char)
 
         # Equip a tool with known durability
@@ -234,7 +246,7 @@ class TestCharacterTaskPerformance(unittest.TestCase):
                 break
 
     def test_lazy_crafter_slower_progress(self):
-        lazy_crafter = Character(name="LazyCrafter", personality="slacker", traits=["Lazy"], skills={})
+        lazy_crafter = Character(name="LazyCrafter", personality="slacker", traits=["Lazy"], skills={}, job=Job("Crafter", None, 0), needs=_basic_needs())
         self.world.add_character(lazy_crafter)
         item_name = "TestCraftLazy"
         res = {"Wood":1}; time = 3
@@ -255,7 +267,7 @@ class TestCharacterTaskPerformance(unittest.TestCase):
         random.random = original_random
 
     def test_diligent_crafter_faster_progress(self):
-        diligent_crafter = Character(name="DiligentCrafter", personality="worker", traits=["Diligent"], skills={})
+        diligent_crafter = Character(name="DiligentCrafter", personality="worker", traits=["Diligent"], skills={}, job=Job("Crafter", None, 0), needs=_basic_needs())
         self.world.add_character(diligent_crafter)
         item_name = "TestCraftDiligent"
         res = {"Wood":1}; time = 3 # Base time 3
@@ -283,9 +295,9 @@ class TestCharacterTaskPerformance(unittest.TestCase):
         self.assertIsNotNone(stockpile_for_char, f"Stockpile {target_stockpile_name} not found in world setup.")
 
         stockpile_for_char.inventory = {"Logs": 10, "Stones": 5}
-        self.world.ledger.update_stockpile_record(target_stockpile_name, stockpile_for_char.inventory.copy(), self.time.current_day)
+        self.world.economy.ledger.update_stockpile_record(target_stockpile_name, stockpile_for_char.inventory.copy(), self.time.current_day)
 
-        careless_bookie = Character(name="CarelessBookie", personality="distracted", traits=["Careless"], skills={}, job=Job("Bookkeeper", None, JOB_SALARIES.get("Bookkeeper", 0)))
+        careless_bookie = Character(name="CarelessBookie", personality="distracted", traits=["Careless"], skills={}, job=Job("Bookkeeper", None, JOB_SALARIES.get("Bookkeeper", 0)), needs=_basic_needs())
         self.world.add_character(careless_bookie)
         careless_bookie.x, careless_bookie.y = stockpile_for_char.rect[0], stockpile_for_char.rect[1]
 
@@ -314,8 +326,8 @@ class TestCharacterTaskPerformance(unittest.TestCase):
         random.choice = original_choice
 
         # Check the ledger using the correct resource-keyed structure
-        logs_in_ledger = self.world.ledger.get_resource_count_in_stockpile("Logs", target_stockpile_name)
-        stones_in_ledger = self.world.ledger.get_resource_count_in_stockpile("Stones", target_stockpile_name)
+        logs_in_ledger = self.world.economy.ledger.get_resource_count_in_stockpile("Logs", target_stockpile_name)
+        stones_in_ledger = self.world.economy.ledger.get_resource_count_in_stockpile("Stones", target_stockpile_name)
 
         self.assertEqual(logs_in_ledger, initial_logs - 1)
         self.assertEqual(stones_in_ledger, initial_stones -1)
@@ -328,7 +340,7 @@ class TestCharacterFarming(unittest.TestCase):
     def setUp(self):
         self.time = Time(ticks_per_day=10)
         self.world = World(grid_size=(10, 10), game_time_ref=self.time)
-        self.farmer = Character(name="Farmer", personality="hardworking", traits=[], skills={"Farming": 1}, job=Job("Farmer", None, 0))
+        self.farmer = Character(name="Farmer", personality="hardworking", traits=[], skills={"Farming": 1}, job=Job("Farmer", None, 0), needs=_basic_needs())
         self.world.add_character(self.farmer)
 
     def test_farmer_prioritizes_harvest(self):
@@ -403,7 +415,7 @@ class TestCharacterHunting(unittest.TestCase):
     def setUp(self):
         self.time = Time(ticks_per_day=10)
         self.world = World(grid_size=(10, 10), game_time_ref=self.time)
-        self.hunter = Character(name="Hunter", personality="adventurous", traits=[], skills={}, job=Job("Hunter", None, 0))
+        self.hunter = Character(name="Hunter", personality="adventurous", traits=[], skills={}, job=Job("Hunter", None, 0), needs=_basic_needs())
         self.world.add_character(self.hunter)
         self.world.add_animal("Deer", 5, 5)
         self.stockpile = Stockpile(name="MainStockpile", x=0, y=0, width=1, height=1)

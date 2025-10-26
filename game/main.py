@@ -11,7 +11,8 @@ from game.world import World
 from game.time import Time
 from game.stockpile import Stockpile
 from game.work_order import WorkOrder
-from game.data import BLUEPRINTS, JOB_TASK_DEFINITIONS, STRUCTURE_BLUEPRINTS, Job
+from game.data import BLUEPRINTS, JOB_TASK_DEFINITIONS, STRUCTURE_BLUEPRINTS
+from game.job import Job
 from game.building import Building
 from game import config
 
@@ -80,13 +81,13 @@ def initialize_game_world():
     )
     wood_stockpile.add_item("Wood", 40)
     game_world.add_stockpile(wood_stockpile)
-    game_world.ledger.update_stockpile_record(wood_stockpile.name, wood_stockpile.inventory, game_time_obj.current_day)
+    game_world.economy.ledger.update_stockpile_record(wood_stockpile.name, wood_stockpile.inventory, game_time_obj.current_day)
     initial_setup_messages.append(f"Added WoodStore stockpile with {wood_stockpile.inventory.get('Wood',0)} Wood.")
 
     water_stockpile = Stockpile(name="WaterCasks", x=2, y=3, width=1, height=1, allowed_resources=["Water"], total_capacity=80)
     water_stockpile.add_item("Water", 24)
     game_world.add_stockpile(water_stockpile)
-    game_world.ledger.update_stockpile_record(water_stockpile.name, water_stockpile.inventory, game_time_obj.current_day)
+    game_world.economy.ledger.update_stockpile_record(water_stockpile.name, water_stockpile.inventory, game_time_obj.current_day)
     initial_setup_messages.append(f"Added WaterCasks stockpile with {water_stockpile.inventory.get('Water',0)} Water.")
 
     # Establish natural water sources for gathering
@@ -153,7 +154,6 @@ def initialize_game_world():
     # For now, let's assume the Mayor will initiate projects.
 
     for msg in initial_setup_messages:
-        # print(msg)
         if game_world: game_world.add_event_log_message(msg)
 
     if game_world: game_world.add_event_log_message("--- Simulation Server Initialized ---")
@@ -163,7 +163,6 @@ def tick_simulation():
     global game_world, game_time_obj, simulation_running, game_paused, test_characters_list
 
     if not game_world or not game_time_obj:
-        # print("Error: Game world or time object not initialized.")
         simulation_running = False
         return
 
@@ -183,21 +182,10 @@ def tick_simulation():
 
         if new_day:
             day_msg = f"*** NEW DAY: Day {game_time_obj.current_day}. Weather: {game_world.weather}, Season: {game_world.season} ***"
-            # print(day_msg);
             game_world.add_event_log_message(day_msg)
 
             if hasattr(game_world, "daily_environment_tick"):
                 game_world.daily_environment_tick()
-            if hasattr(game_world, "manage_campaigns"):
-                game_world.manage_campaigns()
-            if hasattr(game_world, "manage_economy"):
-                game_world.manage_economy()
-            if hasattr(game_world, "process_military_daily"):
-                game_world.process_military_daily()
-            if hasattr(game_world, "process_governance_daily"):
-                game_world.process_governance_daily()
-            if hasattr(game_world, "process_daily_economy"):
-                game_world.process_daily_economy()
 
             if hasattr(game_time_obj, 'days_until_election') and game_time_obj.days_until_election <= 0:
                 if hasattr(game_world, 'handle_election'):
@@ -217,49 +205,11 @@ def tick_simulation():
             if hasattr(game_world, 'process_healthcare_daily'):
                 game_world.process_healthcare_daily()
 
+            for character in game_world.characters:
+                if hasattr(character, "needs") and hasattr(character.needs, "process_daily_decay"):
+                    character.needs.process_daily_decay()
 
-            # Daily needs update and goal reset for idle characters
-            for char_daily_reset in game_world.characters:
-                char_daily_reset.needs['Hunger'] = max(0, char_daily_reset.needs.get('Hunger', 100) - random.randint(10, 20))
-                char_daily_reset.needs['Thirst'] = max(0, char_daily_reset.needs.get('Thirst', 100) - random.randint(15, 25))
-                char_daily_reset.needs['Energy'] = max(0, char_daily_reset.needs.get('Energy', 100) - random.randint(10, 15)) # Energy decay from general activity
 
-                # Social Need Decay
-                current_social_need = char_daily_reset.needs.get('Social', 70) # Default to 70 if somehow not set
-                decay_amount = config.SOCIAL_NEED_DECAY_RATE_PER_DAY
-                # Trait influence on decay: e.g., "Outgoing" might decay faster, "Loner" slower
-                if "Loner" in char_daily_reset.traits: # Assuming "Loner" trait exists
-                    decay_amount *= 0.5
-                if "Outgoing" in char_daily_reset.traits: # Assuming "Outgoing" trait exists
-                    decay_amount *= 1.5
-                char_daily_reset.needs['Social'] = max(0, current_social_need - int(decay_amount))
-
-                # Decay for new complex needs
-                char_daily_reset.needs['Safety'] = max(config.NEED_SCORE_MIN, char_daily_reset.needs.get('Safety', config.NEED_SAFETY_DEFAULT) - config.NEED_SAFETY_DECAY_DAILY)
-                char_daily_reset.needs['Belonging'] = max(config.NEED_SCORE_MIN, char_daily_reset.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) - config.NEED_BELONGING_DECAY_DAILY)
-                char_daily_reset.needs['Esteem'] = max(config.NEED_SCORE_MIN, char_daily_reset.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) - config.NEED_ESTEEM_DECAY_DAILY)
-
-                # Daily check for vassals to report to their liege
-                if char_daily_reset.liege and random.random() < 0.15: # ~15% chance per day
-                    # Avoid interrupting more important goals
-                    if char_daily_reset.current_goal.priority > 5: # Only if current goal is not high priority
-                        from game.goal import Goal, GoalType # Local import to be safe
-                        char_daily_reset.current_goal = Goal(GoalType.REPORT_TO_LIEGE, assignee_id=char_daily_reset.name, originator_id="SystemDuty")
-                        char_daily_reset.add_memory(f"It is my duty to report to my liege, {char_daily_reset.liege}.")
-
-                # Daily check for lieges to hold court
-                if char_daily_reset.rank in ["Duke", "Duchess"] and char_daily_reset.vassals and random.random() < 0.05:
-                    if char_daily_reset.current_goal.priority > 5: # Only if not doing something important
-                        from game.goal import Goal, GoalType # Local import to be safe
-                        char_daily_reset.current_goal = Goal(GoalType.HOLD_HIGH_COURT, assignee_id=char_daily_reset.name, originator_id="SystemDuty")
-                        char_daily_reset.add_memory("It is time to hold high court and see to the affairs of my vassals.")
-
-                # ... other needs updates
-                if char_daily_reset.current_goal in ["Wander", None, "Idle"] and \
-                   not char_daily_reset.active_work_order_id and \
-                   not char_daily_reset.active_build_order_id and \
-                   char_daily_reset.job != "Unemployed":
-                    char_daily_reset.current_goal = char_daily_reset.job_default_goal()
 
             # Season advancement
             days_per_season = config.DAYS_PER_SEASON if hasattr(config, 'DAYS_PER_SEASON') else 10 # Default if not in config
@@ -271,13 +221,11 @@ def tick_simulation():
         max_simulation_days = config.MAX_SIMULATION_DAYS if hasattr(config, 'MAX_SIMULATION_DAYS') else 20
         if game_time_obj.current_day > max_simulation_days:
             msg = f"Simulation reached max days ({max_simulation_days}). Stopping simulation thread."
-            # print(msg)
             game_world.add_event_log_message(msg)
             simulation_running = False # Stop the simulation thread
 
 def simulation_thread_func():
     global simulation_running
-    # print("Simulation thread started.")
     while simulation_running:
         if not game_paused:
             tick_simulation()
@@ -287,21 +235,6 @@ def simulation_thread_func():
             current_sleep_duration /= SIMULATION_SPEED_MULTIPLIER
 
         py_time.sleep(max(0.01, current_sleep_duration)) # Ensure a minimum sleep to prevent overly tight loops
-
-    # print("Simulation thread finished.")
-    # # Print final character states after simulation stops
-    # if game_world and test_characters_list:
-    #     print(f"Final Time: {game_time_obj}")
-    #     for char_final in test_characters_list:
-    #         if char_final in game_world.characters: # Check if still in world
-    #             print(f"\n{char_final}")
-    #             print(f"  Final Needs: {char_final.needs}")
-    #             print(f"  Inventory: {char_final.inventory}")
-    #             print(f"  Recent Memories (last 10):")
-    #             for mem in char_final.memory[-10:]: print(f"    - {mem}")
-    #     print("\n--- World Event Log (Last 50) ---")
-    #     for log_entry in game_world.event_log[-50:]: print(log_entry)
-
 
 # --- HTTP Server Logic ---
 PORT = 5000
@@ -315,17 +248,13 @@ def trigger_initial_ui_fetch(port: int, delay: float = 0.5, attempts: int = 5) -
         for attempt in range(attempts):
             try:
                 with urllib.request.urlopen(url):
-                    # print(f"Initial UI fetch succeeded for {url}")
                     return
             except Exception as exc:  # noqa: BLE001 - log and continue retries
-                # print(f"Attempt {attempt + 1} to fetch {url} failed: {exc}")
                 py_time.sleep(delay)
 
         try:
             webbrowser.open(url)
-            # print(f"Opened default browser for {url}")
         except Exception as exc:  # noqa: BLE001 - best-effort browser launch
-            # print(f"Unable to launch browser automatically for {url}: {exc}")
             pass
 
     threading.Thread(target=_fetch, daemon=True).start()
@@ -333,410 +262,166 @@ def trigger_initial_ui_fetch(port: int, delay: float = 0.5, attempts: int = 5) -
 def signal_handler(sig, frame):
     """Gracefully shut down the server and simulation."""
     global simulation_running, httpd
-    # print(f"\nSignal {sig} received. Shutting down...")
     simulation_running = False
     if httpd:
         # Shutdown httpd in a separate thread to avoid deadlocks
         threading.Thread(target=httpd.shutdown).start()
 
 class GameDataHandler(http.server.SimpleHTTPRequestHandler):
-    def do_GET(self):
-        global game_world, game_time_obj, game_paused, simulation_running, SIMULATION_SPEED_MULTIPLIER # Correct placement
-        if self.path == '/game_state':
-            if game_world and game_time_obj:
-                # Ensure thread safety if accessing shared data that simulation thread modifies
-                # For now, direct access, but consider locks for more complex state later
+    def _parse_query_components(self):
+        if '?' in self.path:
+            query_string = self.path.split('?', 1)[1]
+            return dict(qc.split("=") for qc in query_string.split("&"))
+        return {}
 
-                # Create a simplified grid representation
-                grid_repr = []
-                if hasattr(game_world, 'grid') and game_world.grid:
-                    for r_idx in range(game_world.grid_size[0]):
-                        row_data = []
-                        for c_idx in range(game_world.grid_size[1]):
-                            row_data.append(game_world.get_tile(c_idx, r_idx)) # world uses (x,y) for get_tile
-                        grid_repr.append(row_data)
+    def _send_json_response(self, data, status_code=200):
+        self.send_response(status_code)
+        self.send_header('Content-type', 'application/json')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        self.wfile.write(json.dumps(data, cls=GameEncoder).encode('utf-8'))
 
-                characters_repr = []
-                if hasattr(game_world, 'characters'):
-                    for char in game_world.characters:
-                        goal_payload = None
-                        if hasattr(char.current_goal, 'to_dict'):
-                            goal_payload = char.current_goal.to_dict()
-                        elif char.current_goal:
-                            goal_payload = str(char.current_goal)
-                        characters_repr.append({
-                            "name": char.name,
-                            "x": char.x,
-                            "y": char.y,
-                            "job": char.job,
-                            "rank": getattr(char, 'rank', None),
-                            "goal": goal_payload,
-                            "is_sick": getattr(char, 'is_sick', False), # Add health status
-                            "is_injured": getattr(char, 'is_injured', False),
-                            "inventory_load": char.get_inventory_load(),
-                            "resting_at_home": getattr(char, 'resting_at_home', False),
-                            "home_location": getattr(char, 'home_location', None),
-                            "energy": getattr(char, 'needs', {}).get('Energy'),
-                            "thirst": getattr(char, 'needs', {}).get('Thirst'),
-                            "money": getattr(char, 'money', None),
-                            "net_worth": getattr(char, 'net_worth', None),
-                            "wealth_status": getattr(char, 'wealth_status', None),
-                            "businesses_owned": list(getattr(char, 'businesses_owned', [])),
-                            "business_roles": dict(getattr(char, 'business_roles', {})),
-                            "age": getattr(char, 'age_years', None),
-                            "origin": getattr(char, 'origin', None),
-                            "citizenship": getattr(char, 'citizenship_status', 'Resident'),
-                            "family_members": list(getattr(char, 'family_members', [])),
-                            "romantic_partners": char.get_romantic_partners() if hasattr(char, 'get_romantic_partners') else list(getattr(char, 'romantic_partners', [])),
-                            "active_romances": char.get_active_romances_snapshot() if hasattr(char, 'get_active_romances_snapshot') else {},
-                            "ex_partners": sorted(list(getattr(char, 'ex_partners', []))),
-                            "children": char.get_children() if hasattr(char, 'get_children') else sorted(list(getattr(char, 'children_names', []))),
-                            "parents": char.get_parents() if hasattr(char, 'get_parents') else sorted(list(getattr(char, 'parent_names', []))),
-                            "marriage_history": deepcopy(getattr(char, 'marriage_history', [])),
-                            "life_highlights": char.get_life_highlights(limit=3) if hasattr(char, 'get_life_highlights') else [],
-                            "career_stage": getattr(char, 'career_stage', None),
-                            "job_satisfaction": getattr(char, 'job_satisfaction', None),
-                            "profession_focus": getattr(char, 'professional_focus', None),
-                            "profession_tenure": getattr(char, 'current_profession_tenure', None),
-                            "health_profile": char.get_health_snapshot() if hasattr(char, 'get_health_snapshot') else {},
-                            "supervisor_name": getattr(char, 'supervisor_name', None),
-                            "supervisor_oversight": getattr(char, 'supervisor_oversight', None),
-                            "leadership_oversight": getattr(char, 'leadership_oversight_score', None),
-                            "reputation_score": getattr(char, 'reputation_score', 0),
-                            "reputation_tier": char.get_reputation_tier() if hasattr(char, 'get_reputation_tier') else "Neutral",
-                        })
+    def _get_grid_repr(self, world):
+        """Generates a 2D array representation of the game world grid."""
+        return [
+            [world.get_tile(c_idx, r_idx) for c_idx in range(world.grid_size[1])]
+            for r_idx in range(world.grid_size[0])
+        ]
 
-                event_log_repr = game_world.event_log[-20:] if game_world else []
+    def _get_characters_repr(self, world):
+        """Generates a list of dictionary representations of characters for the main UI."""
+        chars_repr = []
+        for char in world.characters:
+            char_data = char.to_dict()
+            # The UI expects a simplified top-level object for rendering efficiency
+            char_data.update({
+                "x": char.x,
+                "y": char.y,
+                "health": char.health.get_health_summary(),
+                "current_goal": char.current_goal.type if char.current_goal else "Idle"
+            })
+            chars_repr.append(char_data)
+        return chars_repr
 
-                buildings_repr = []
-                if hasattr(game_world, 'buildings'):
-                    for b in game_world.buildings:
-                        buildings_repr.append({
-                            "x": b.location[0], # Assuming building.location is (x,y)
-                            "y": b.location[1],
-                            "width": b.size[0], # Assuming building.size is (width, height)
-                            "height": b.size[1],
-                            "map_char": b.get_current_map_char(),
-                            "display_name": b.display_name,
-                            "structure_type": b.structure_type, # Added for frontend differentiation
-                            "occupants": getattr(b, 'occupants', []),
-                            "provides_shelter": b.functionality.get('provides_shelter') if b.functionality else None,
-                            "wealth_tier": b.functionality.get('wealth_tier') if b.functionality else None,
-                            "household_style": getattr(b, 'household_style', None),
-                            "latest_household_story": getattr(b, 'latest_household_story', None),
-                            "latest_neighborhood_story": getattr(b, 'latest_neighborhood_story', None),
-                        })
-                if hasattr(game_world, 'stockpiles'): # Also include stockpiles as "buildings" for map display
-                    for sp in game_world.stockpiles:
-                        buildings_repr.append({
-                            "x": sp.rect[0],
-                            "y": sp.rect[1],
-                            "width": sp.rect[2],
-                            "height": sp.rect[3],
-                            "map_char": sp.get_map_char(),
-                            "display_name": sp.name,
-                            "structure_type": "Stockpile"
-                        })
+    def _get_buildings_repr(self, world):
+        """Generates a list of dictionary representations of buildings and stockpiles."""
+        buildings_repr = [b.to_dict() for b in world.buildings]
+        for sp in world.stockpiles:
+            buildings_repr.append(sp.to_dict())
+        return buildings_repr
 
+    def _handle_game_state(self):
+        """Handles the /game_state API endpoint."""
+        global game_world, game_time_obj
+        if not (game_world and game_time_obj):
+            self.send_error(503, "Game world not yet initialized.")
+            return
 
-                state = {
-                    "day": game_time_obj.current_day,
-                    "tick": game_time_obj.current_tick,
-                    "ticks_per_day": game_time_obj.ticks_per_day,
-                    "season": game_world.season,
-                    "weather": game_world.weather,
-                    "grid_size": game_world.grid_size,
-                    "grid": grid_repr,
-                    "map_revision": getattr(game_world, 'map_revision', 0),
-                    "characters": characters_repr,
-                    "event_log": event_log_repr,
-                    "is_paused": game_paused,
-                    "days_until_election": getattr(game_time_obj, 'days_until_election', -1),
-                    "current_speed_multiplier": SIMULATION_SPEED_MULTIPLIER,
-                    "treasury": getattr(game_world, 'treasury_coins', 0),
-                    "daily_economy_report": getattr(game_world, 'last_daily_economic_report', {}),
-                    "pending_wages": getattr(game_world, 'pending_wages', []),
-                    "market_prices": getattr(game_world, 'market_prices', {}),
-                    "resource_pressures": game_world.identify_resource_pressures() if hasattr(game_world, 'identify_resource_pressures') else [],
-                    "crime_reports": getattr(game_world, 'crime_reports', []),
-                    "pending_crimes": getattr(game_world, 'pending_crimes', []),
-                    "legal_cases": game_world.get_public_trial_snapshot() if hasattr(game_world, 'get_public_trial_snapshot') else [],
-                    "medical_queue": game_world.get_medical_queue_snapshot() if hasattr(game_world, 'get_medical_queue_snapshot') else [],
-                    "clinic_supply_requests": game_world.get_clinic_supply_requests() if hasattr(game_world, 'get_clinic_supply_requests') else [],
-                    "healthcare_report": getattr(game_world, 'latest_healthcare_report', {}),
-                    "campaign_promises": getattr(game_world, 'campaign_promises', {}),
-                    "environment_effects": game_world.get_environment_snapshot() if hasattr(game_world, 'get_environment_snapshot') else {},
-                    "rumors": game_world.get_rumor_digest() if hasattr(game_world, 'get_rumor_digest') else [],
-                    "housing": getattr(game_world, 'latest_housing_snapshot', {}),
-                    "current_phase": game_world.get_current_phase() if hasattr(game_world, 'get_current_phase') else {},
-                    "active_weather_event": game_world.get_active_weather_event() if hasattr(game_world, 'get_active_weather_event') else None,
-                    "resource_nodes": game_world.get_resource_nodes_snapshot() if hasattr(game_world, 'get_resource_nodes_snapshot') else [],
-                    "landscape": game_world.get_landscape_profile() if hasattr(game_world, 'get_landscape_profile') else {},
-                    "population": getattr(game_world, 'population_stats', {}),
-                    "cultural": game_world.get_cultural_snapshot() if hasattr(game_world, 'get_cultural_snapshot') else {},
-                    "training": game_world.get_training_snapshot() if hasattr(game_world, 'get_training_snapshot') else {},
-                    "workforce": game_world.get_workforce_snapshot() if hasattr(game_world, 'get_workforce_snapshot') else {},
-                    "families": game_world.get_family_snapshot() if hasattr(game_world, 'get_family_snapshot') else {},
-                    "governance": game_world.get_governance_snapshot() if hasattr(game_world, 'get_governance_snapshot') else {},
-                    "personal_pursuit_events": getattr(game_world, 'latest_personal_pursuit_events', []),
-                }
-                self.send_response(200)
-                self.send_header('Content-type', 'application/json')
-                self.send_header('Access-Control-Allow-Origin', '*') # For local UI development
-                self.end_headers()
-                json_state = json.dumps(state, cls=GameEncoder)
-                self.wfile.write(json_state.encode('utf-8'))
-            else:
-                self.send_response(503) # Service Unavailable
-                self.end_headers()
-                self.wfile.write(b"Game world not yet initialized.")
-        elif self.path == '/toggle_pause':
-            game_paused = not game_paused
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps({"paused": game_paused}).encode('utf-8'))
-            if game_world: game_world.add_event_log_message(f"SIMULATION TOGGLED: {'PAUSED' if game_paused else 'RESUMED'}")
-            # Duplicated log line below, removing it.
-            # if game_world: game_world.add_event_log_message(f"SIMULATION TOGGLED: {'PAUSED' if game_paused else 'RESUMED'}")
-            # print(f"Game state toggled. Paused: {game_paused}")
+        state = {
+            "day": game_time_obj.current_day,
+            "tick": game_time_obj.current_tick,
+            "ticks_per_day": game_time_obj.ticks_per_day,
+            "season": game_world.season,
+            "weather": game_world.weather,
+            "grid_size": game_world.grid_size,
+            "grid": self._get_grid_repr(game_world),
+            "map_revision": game_world.map_revision,
+            "characters": self._get_characters_repr(game_world),
+            "buildings": self._get_buildings_repr(game_world),
+            "event_log": game_world.event_log[-20:],
+            "is_paused": game_paused,
+            "days_until_election": getattr(game_time_obj, 'days_until_election', -1),
+            "current_speed_multiplier": SIMULATION_SPEED_MULTIPLIER,
+            "economy": {
+                "treasury": game_world.economy.treasury_coins,
+                "daily_report": game_world.economy.last_daily_economic_report,
+            },
+            "crime": {
+                "pending_crimes": len(game_world.crime.pending_crimes)
+            }
+        }
+        self._send_json_response(state)
 
-        elif self.path.startswith('/set_speed'):
-            # global SIMULATION_SPEED_MULTIPLIER # This was the problematic line if misplaced
-            query_components = {}
-            if '?' in self.path:
-                query_string = self.path.split('?',1)[1]
-                query_components = dict(qc.split("=") for qc in query_string.split("&"))
+    def _handle_toggle_pause(self):
+        global game_paused
+        game_paused = not game_paused
+        self._send_json_response({"paused": game_paused})
+        if game_world:
+            game_world.add_event_log_message(f"SIMULATION TOGGLED: {'PAUSED' if game_paused else 'RESUMED'}")
 
-            try:
-                multiplier = float(query_components.get('multiplier', 1.0))
-                if multiplier <= 0: multiplier = 0.1 # Prevent zero or negative speed
-                # SIMULATION_SPEED_MULTIPLIER is global, so assign directly
-                # No, this is wrong. If a global is assigned in a function, it needs 'global' keyword.
-                # The 'global' keyword for SIMULATION_SPEED_MULTIPLIER should be at the start of do_GET.
-                # My previous fix was to put it at the start of do_GET, this comment is a bit misleading now.
-                # The `global ... SIMULATION_SPEED_MULTIPLIER` at the start of do_GET handles this.
-                __class__.SIMULATION_SPEED_MULTIPLIER = multiplier # This is incorrect, should assign to the global directly
-                # Corrected assignment below:
-                # global SIMULATION_SPEED_MULTIPLIER # This should be at the top of do_GET
-                # SIMULATION_SPEED_MULTIPLIER = multiplier
+    def _handle_set_speed(self):
+        global SIMULATION_SPEED_MULTIPLIER
+        query_components = self._parse_query_components()
+        try:
+            multiplier = float(query_components.get('multiplier', 1.0))
+            SIMULATION_SPEED_MULTIPLIER = max(0.1, multiplier)
+            self._send_json_response({"status": "success", "new_speed_multiplier": SIMULATION_SPEED_MULTIPLIER})
+            if game_world:
+                game_world.add_event_log_message(f"Simulation speed set to {SIMULATION_SPEED_MULTIPLIER}x")
+        except (ValueError, TypeError):
+            self.send_error(400, "Invalid 'multiplier' value for set_speed")
 
-                # Re-correction: The `global` statement at the top of `do_GET` makes `SIMULATION_SPEED_MULTIPLIER`
-                # refer to the global one throughout `do_GET`. So, direct assignment is correct here.
-                SIMULATION_SPEED_MULTIPLIER = multiplier
+    def _handle_character_info(self):
+        global game_world
+        if not game_world:
+            self.send_error(503, "Game world not initialized")
+            return
 
+        query_components = self._parse_query_components()
+        char_name = query_components.get('name')
+        if not char_name:
+            self.send_error(400, "Missing 'name' parameter for character_info")
+            return
 
-                self.send_response(200)
-                self.send_header('Content-type', 'application/json')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(json.dumps({"status": "success", "new_speed_multiplier": SIMULATION_SPEED_MULTIPLIER}).encode('utf-8'))
-                if game_world: game_world.add_event_log_message(f"Simulation speed set to {SIMULATION_SPEED_MULTIPLIER}x")
-                # print(f"Simulation speed set to {SIMULATION_SPEED_MULTIPLIER}x")
-            except ValueError:
-                self.send_error(400, "Invalid 'multiplier' value for set_speed")
-            except Exception as e:
-                self.send_error(500, f"Error setting speed: {e}")
-
-        elif self.path.startswith('/character_info'):
-            if not game_world:
-                self.send_error(503, "Game world not initialized")
-                return
-
-            query_components = {}
-            if '?' in self.path:
-                query_string = self.path.split('?',1)[1]
-                query_components = dict(qc.split("=") for qc in query_string.split("&"))
-
-            char_name = query_components.get('name')
-            if not char_name:
-                self.send_error(400, "Missing 'name' parameter for character_info")
-                return
-
-            character = game_world.get_character_by_name(char_name)
-            if character:
-                goal_payload = None
-                if hasattr(character.current_goal, 'to_dict'):
-                    goal_payload = character.current_goal.to_dict()
-                elif character.current_goal:
-                    goal_payload = str(character.current_goal)
-                char_data = {
-                    "name": character.name,
-                    "job": character.job,
-                    "rank": character.rank,
-                    "x": character.x,
-                    "y": character.y,
-                    "current_goal": goal_payload,
-                    "inventory": character.inventory,
-                    "skills": {skill_name: data["level"] for skill_name, data in character.skills.items()}, # Simplified skills view
-                    "needs": character.needs,
-                    "energy": character.needs.get('Energy'),
-                    "thirst": character.needs.get('Thirst'),
-                    "resting_at_home": getattr(character, 'resting_at_home', False),
-                    "home_location": getattr(character, 'home_location', None),
-                    "is_sick": getattr(character, 'is_sick', False),
-                    "sickness_severity": getattr(character, 'sickness_severity', 0),
-                    "is_injured": getattr(character, 'is_injured', False),
-                    "injury_severity": getattr(character, 'injury_severity', 0),
-                    "appointed_by": getattr(character, 'appointed_by', None),
-                    "subordinates_names": character.subordinates_names,
-                    "memory": character.memory[-10:], # Last 10 memories
-                    "personality": character.personality,
-                    "traits": character.traits,
-                    "money": getattr(character, 'money', None),
-                    "net_worth": getattr(character, 'net_worth', None),
-                    "wealth_status": getattr(character, 'wealth_status', None),
-                    "businesses_owned": list(getattr(character, 'businesses_owned', [])),
-                    "business_roles": dict(getattr(character, 'business_roles', {})),
-                    "wealth_history": [
-                        {"day": entry[0], "net_worth": entry[1]}
-                        for entry in getattr(character, 'wealth_history', [])
-                    ],
-                    "career_stage": getattr(character, 'career_stage', None),
-                    "job_satisfaction": getattr(character, 'job_satisfaction', None),
-                    "profession_focus": getattr(character, 'professional_focus', None),
-                    "profession_tenure": getattr(character, 'current_profession_tenure', None),
-                    "profession_history": character.export_profession_history(limit=10),
-                    "health_profile": character.get_health_snapshot() if hasattr(character, 'get_health_snapshot') else {},
-                    "performance_rating": getattr(character, 'performance_rating', "N/A"),
-                    "warning_count": getattr(character, 'warning_count', 0),
-                    "known_characters": getattr(character, 'known_characters', []),
-                    "relationships": getattr(character, 'relationships', {}),
-                    "opinions": getattr(character, 'opinions', {}), # Added opinions
-                    "dialogue_history": getattr(character, 'dialogue_history', [])[-10:], # Last 10 dialogue entries
-                    "life_history": character.export_life_history(limit=20) if hasattr(character, 'export_life_history') else [],
-                    "life_highlights": character.get_life_highlights(limit=6) if hasattr(character, 'get_life_highlights') else [],
-                    "personal_pursuits": character.export_personal_pursuits() if hasattr(character, 'export_personal_pursuits') else [],
-                    "personal_pursuit_log": character.export_personal_pursuit_log(limit=12) if hasattr(character, 'export_personal_pursuit_log') else [],
-                    "active_personal_project": getattr(character, 'active_personal_project', None),
-                    "family_profile": game_world.get_family_profile_for_character(character.name) if hasattr(game_world, 'get_family_profile_for_character') else None,
-                    "family_members": list(getattr(character, 'family_members', [])),
-                    "age": getattr(character, 'age_years', None),
-                    "origin": getattr(character, 'origin', None),
-                    "citizenship": getattr(character, 'citizenship_status', 'Resident'),
-                    "reputation": getattr(character, 'reputation_score', None),
-                    "reputation_tier": character.get_reputation_tier() if hasattr(character, 'get_reputation_tier') else "Neutral",
-                }
-                self.send_response(200)
-                self.send_header('Content-type', 'application/json')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(json.dumps(char_data, cls=GameEncoder).encode('utf-8'))
-            else:
-                self.send_error(404, f"Character '{char_name}' not found")
-
-        elif self.path.startswith('/building_info'):
-            if not game_world:
-                self.send_error(503, "Game world not initialized")
-                return
-
-            query_components = {}
-            if '?' in self.path:
-                query_string = self.path.split('?',1)[1]
-                query_components = dict(qc.split("=") for qc in query_string.split("&"))
-
-            try:
-                x = int(query_components.get('x', -1))
-                y = int(query_components.get('y', -1))
-            except ValueError:
-                self.send_error(400, "Invalid 'x' or 'y' parameters for building_info")
-                return
-
-            if x == -1 or y == -1:
-                self.send_error(400, "Missing 'x' or 'y' parameters for building_info")
-                return
-
-            building = game_world.get_building_at(x,y)
-            if building:
-                building_data = {
-                    "display_name": building.display_name,
-                    "structure_type": building.structure_type,
-                    "location": building.location,
-                    "size": building.size,
-                    "is_operational": building.is_operational,
-                    "current_progress": getattr(building, 'current_progress', 0),
-                    "build_time": getattr(building, 'build_time', 0), # Total work for all phases
-                    "current_phase_name": building.get_current_phase_name() if hasattr(building, 'get_current_phase_name') else "N/A",
-                    "map_char": building.get_current_map_char(),
-                    "occupants": getattr(b, 'occupants', []),
-                    "provides_shelter": b.functionality.get('provides_shelter') if b.functionality else None,
-                    "wealth_tier": b.functionality.get('wealth_tier') if b.functionality else None,
-                    "household_style": getattr(building, 'household_style', None),
-                    "amenities": list(getattr(building, 'amenities', [])),
-                    "tile_layout": building.get_tile_layout() if hasattr(building, 'get_tile_layout') else [],
-                }
-                # If it's a stockpile or has inventory (like some workshops might)
-                if hasattr(building, 'inventory'):
-                    building_data["inventory"] = building.inventory
-                if hasattr(building, 'allowed_resources'): # For stockpiles
-                    building_data["allowed_resources"] = building.allowed_resources
-
-                occupant_profiles = []
-                for occupant_name in getattr(building, 'occupants', []):
-                    character = game_world.get_character_by_name(occupant_name)
-                    if not character:
-                        continue
-                    occupant_profiles.append({
-                        "name": character.name,
-                        "job": character.job,
-                        "wealth_status": getattr(character, 'wealth_status', None),
-                        "mood": getattr(character, 'mood', None),
-                    })
-                if occupant_profiles:
-                    building_data["occupant_profiles"] = occupant_profiles
-
-                latest_story = None
-                for story in getattr(game_world, '_latest_household_vignettes', []):
-                    if story.get("building") == building.display_name:
-                        latest_story = story
-                        break
-                if latest_story:
-                    building_data["latest_household_story"] = latest_story
-
-                latest_neighborhood_story = None
-                for story in getattr(game_world, '_latest_neighborhood_gatherings', []):
-                    if story.get("host") == building.display_name:
-                        latest_neighborhood_story = story
-                        break
-                if latest_neighborhood_story:
-                    building_data["latest_neighborhood_story"] = latest_neighborhood_story
-
-                self.send_response(200)
-                self.send_header('Content-type', 'application/json')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(json.dumps(building_data, cls=GameEncoder).encode('utf-8'))
-            else:
-                # Check if it's a stockpile, as they are separate from buildings in world lists
-                stockpile_at_loc = None
-                for sp in game_world.stockpiles:
-                    sp_x, sp_y, sp_w, sp_h = sp.rect
-                    if sp_x <= x < sp_x + sp_w and sp_y <= y < sp_y + sp_h:
-                        stockpile_at_loc = sp
-                        break
-                if stockpile_at_loc:
-                    stockpile_data = {
-                        "display_name": stockpile_at_loc.name,
-                        "structure_type": "Stockpile", # Generic type for UI
-                        "location": (stockpile_at_loc.rect[0], stockpile_at_loc.rect[1]),
-                        "size": (stockpile_at_loc.rect[2], stockpile_at_loc.rect[3]),
-                        "is_operational": True, # Stockpiles are always "operational"
-                        "inventory": stockpile_at_loc.inventory,
-                        "allowed_resources": stockpile_at_loc.allowed_resources,
-                        "map_char": stockpile_at_loc.get_map_char(),
-                    }
-                    self.send_response(200)
-                    self.send_header('Content-type', 'application/json')
-                    self.send_header('Access-Control-Allow-Origin', '*')
-                    self.end_headers()
-                    self.wfile.write(json.dumps(stockpile_data).encode('utf-8'))
-                else:
-                    self.send_error(404, f"No building or stockpile found at ({x},{y})")
+        character = game_world.get_character_by_name(char_name)
+        if character:
+            self._send_json_response(character.to_dict_detailed())
         else:
-            # Serve files from a 'ui' subdirectory if they exist (for the frontend)
-            # The server is now initialized with the correct directory, so we can just
-            # fall back to the default handler.
+            self.send_error(404, f"Character '{char_name}' not found")
+
+    def _handle_building_info(self):
+        global game_world
+        if not game_world:
+            self.send_error(503, "Game world not initialized")
+            return
+
+        query_components = self._parse_query_components()
+        try:
+            x = int(query_components.get('x', -1))
+            y = int(query_components.get('y', -1))
+        except (ValueError, TypeError):
+            self.send_error(400, "Invalid 'x' or 'y' parameters")
+            return
+
+        if x == -1 or y == -1:
+            self.send_error(400, "Missing 'x' or 'y' parameters")
+            return
+
+        building = game_world.get_building_at(x, y)
+        if building:
+            self._send_json_response(building.to_dict_detailed())
+            return
+
+        for sp in game_world.stockpiles:
+            sp_x, sp_y, sp_w, sp_h = sp.rect
+            if sp_x <= x < sp_x + sp_w and sp_y <= y < sp_y + sp_h:
+                self._send_json_response(sp.to_dict_detailed())
+                return
+
+        self.send_error(404, f"No building or stockpile found at ({x},{y})")
+
+    def do_GET(self):
+        if self.path == '/game_state':
+            self._handle_game_state()
+        elif self.path == '/toggle_pause':
+            self._handle_toggle_pause()
+        elif self.path.startswith('/set_speed'):
+            self._handle_set_speed()
+        elif self.path.startswith('/character_info'):
+            self._handle_character_info()
+        elif self.path.startswith('/building_info'):
+            self._handle_building_info()
+        else:
             super().do_GET()
 
     def do_POST(self):
@@ -813,13 +498,9 @@ def run_server(port: int = PORT, set_signals: bool = True, world_instance: Optio
     socketserver.TCPServer.allow_reuse_address = True
     with socketserver.TCPServer(("", port), Handler) as httpd_instance:
         httpd = httpd_instance
-        # print(f"Serving HTTP on port {port} from '{ui_dir}'...")
-        # print(f"Game simulation running in background. Access UI at http://localhost:{port}/")
-        # print("Press Ctrl+C to stop server and simulation.")
         trigger_initial_ui_fetch(port)
         httpd.serve_forever()
 
-    # print("Server has shut down.")
 
 
 if __name__ == "__main__":

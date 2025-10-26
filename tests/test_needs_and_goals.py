@@ -9,6 +9,17 @@ from game.work_order import WorkOrder
 from game.data import BLUEPRINTS, JOB_SALARIES
 from game.building import Building
 
+def _basic_needs() -> dict[str, int]:
+    return {
+        "Hunger": 80,
+        "Thirst": 80,
+        "Energy": 95,
+        "Social": 70,
+        "Safety": config.NEED_SAFETY_DEFAULT,
+        "Belonging": config.NEED_BELONGING_DEFAULT,
+        "Esteem": config.NEED_ESTEEM_DEFAULT,
+    }
+
 class TestNeedsAndGoals(unittest.TestCase):
     def setUp(self):
         self.time = Time()
@@ -80,35 +91,33 @@ class TestNeedsAndGoals(unittest.TestCase):
         original_random = random.random
         random.random = lambda: 0.0 # Will pass the < 0.2 check for witness to be impressed
 
-        # Run the simulation for enough ticks to complete the item
-        craft_time = BLUEPRINTS["Wooden Sword"]["craft_time_per_unit"]
-        for _ in range(craft_time + 5):  # Add extra ticks for witness reaction
-            # Simulate a world tick for all characters
-            for char in self.world.characters:
-                char.decide_action(self.world)
+        # Assign the craft order goal to the crafter
+        crafter.active_work_order_id = order.order_id
+        crafter.current_goal = Goal(GoalType.EXECUTE_CRAFT_ORDER, assignee_id=crafter.name, originator_id="Test", parameters={"order_id": order.order_id})
 
+        # Run the crafter's action until the item is crafted and witness's goal changes
+        craft_time = BLUEPRINTS["Wooden Sword"]["craft_time_per_unit"]
+        for _ in range(craft_time + 5):  # Add extra ticks for safety
+            crafter.decide_action(self.world)
             if witness.current_goal.type == GoalType.PRAISE_CHARACTER:
-                # Now, let the witness execute the praise goal
-                witness.decide_action(self.world)
                 break
 
+        # 1. Assert that the crafter finished and the witness's goal is correctly set
         self.assertTrue(crafter.items_crafted_for_wo, "Crafter should have finished the item.")
-
-        # At this point, the witness's goal should be to praise the crafter
-        self.assertEqual(witness.current_goal.type, GoalType.PRAISE_CHARACTER)
+        self.assertEqual(witness.current_goal.type, GoalType.PRAISE_CHARACTER, "Witness's goal should be to praise the crafter.")
         self.assertEqual(witness.current_goal.parameters["target_char_name"], crafter.name)
 
-        # Now, run the witness's action to execute the praise
-        witness.decide_action(self.world) # This will call _execute_praise_character
+        # 2. Now, execute the witness's action to perform the praise
+        witness.decide_action(self.world)
 
-        # Assertions
+        # 3. Assert the effects of the praise
         final_esteem = crafter.needs.get('Esteem', 50)
         final_relationship = witness.get_relationship_score(crafter.name)
 
         self.assertGreater(final_esteem, initial_esteem, "Crafter's esteem should have increased after being praised.")
         self.assertGreater(final_relationship, initial_relationship, "Witness's relationship with crafter should improve.")
-        self.assertTrue(any(f"I was praised by {witness.name}" in msg for msg in crafter.memory))
-        self.assertTrue(any(f"I praised {crafter.name}" in msg for msg in witness.memory))
+        self.assertTrue(any(f"I was praised by {witness.name}" in msg for msg in crafter.memory), "Crafter memory should contain praise event.")
+        self.assertTrue(any(f"I praised {crafter.name}" in msg for msg in witness.memory), "Witness memory should contain praise event.")
 
         # Restore random
         random.random = original_random

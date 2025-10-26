@@ -8,6 +8,17 @@ from game.data import STRUCTURE_BLUEPRINTS
 from game.stockpile import Stockpile
 import game.config as config
 
+def _basic_needs() -> dict[str, int]:
+    return {
+        "Hunger": 80,
+        "Thirst": 80,
+        "Energy": 95,
+        "Social": 70,
+        "Safety": config.NEED_SAFETY_DEFAULT,
+        "Belonging": config.NEED_BELONGING_DEFAULT,
+        "Esteem": config.NEED_ESTEEM_DEFAULT,
+    }
+
 class TestMilitiaSystem(unittest.TestCase):
 
     def setUp(self):
@@ -17,7 +28,7 @@ class TestMilitiaSystem(unittest.TestCase):
 
         self.world.add_stockpile(Stockpile("Main Stockpile", 0, 0, 2, 2))
 
-        self.commander = Character(name="Commander", personality="Brave", traits=["Leader"], skills={"Leadership": 5, "Security": 3}, x=5, y=5, needs={})
+        self.commander = Character(name="Commander", personality="Brave", traits=["Leader"], skills={"Leadership": 5, "Security": 3}, x=5, y=5, needs=_basic_needs())
         self.world.add_character(self.commander)
         self.commander.job = MagicMock()
         self.commander.job.title = "Militia Commander"
@@ -25,19 +36,19 @@ class TestMilitiaSystem(unittest.TestCase):
         self.commander.leadership_oversight_score = 0.8
 
 
-        self.soldier1 = Character(name="Soldier1", personality="Loyal", traits=[], skills={"Security": 5}, x=5, y=6, needs={})
+        self.soldier1 = Character(name="Soldier1", personality="Loyal", traits=[], skills={"Security": 5}, x=5, y=6, needs=_basic_needs())
         self.world.add_character(self.soldier1)
         self.soldier1.job = MagicMock()
         self.soldier1.job.title = "Militia Soldier"
 
-        self.soldier2 = Character(name="Soldier2", personality="Cautious", traits=[], skills={"Security": 4}, x=6, y=5, needs={})
+        self.soldier2 = Character(name="Soldier2", personality="Cautious", traits=[], skills={"Security": 4}, x=6, y=5, needs=_basic_needs())
         self.world.add_character(self.soldier2)
         self.soldier2.job = MagicMock()
         self.soldier2.job.title = "Militia Soldier"
 
     def test_militia_commander_assigns_training(self):
         # Set readiness to a low value to trigger training
-        self.world.military_structure["readiness"] = 0.1
+        self.world.governance.military_structure["readiness"] = 0.1
         self.commander.decide_action(self.world)
 
         # Commander should assign a training goal to the soldiers
@@ -53,7 +64,7 @@ class TestMilitiaSystem(unittest.TestCase):
 
     def test_militia_commander_assigns_patrols(self):
         # Set readiness to a high value to trigger patrols
-        self.world.military_structure["readiness"] = 0.8
+        self.world.governance.military_structure["readiness"] = 0.8
         self.commander.decide_action(self.world)
 
         nearby_soldiers = self.world.get_nearby_characters(self.commander, radius=2)
@@ -104,9 +115,9 @@ class TestMilitiaSystem(unittest.TestCase):
                 mock_rng.randint.return_value = 3 # loss_amount
 
                 # Run military daily process without a watchtower
-                self.world.process_military_daily()
+                self.world.governance.process_governance_daily()
 
-                raid_entry = self.world.military_structure["enemy_activity"][0]
+                raid_entry = self.world.governance.military_structure["enemy_activity"][0]
                 self.assertEqual(raid_entry["outcome"], "breached")
 
     def test_raid_repelled_with_watchtower(self):
@@ -136,9 +147,9 @@ class TestMilitiaSystem(unittest.TestCase):
                 mock_rng.randint.return_value = 3 # loss_amount
 
                 # Run military daily process
-                self.world.process_military_daily()
+                self.world.governance.process_governance_daily()
 
-                raid_entry = self.world.military_structure["enemy_activity"][0]
+                raid_entry = self.world.governance.military_structure["enemy_activity"][0]
                 self.assertEqual(raid_entry["outcome"], "repelled")
 
 

@@ -15,6 +15,7 @@ class Time:
         self.days_until_election: int = config.ELECTION_CYCLE_DAYS
         self._phase_schedule: List[Dict[str, Any]] = self._build_phase_schedule()
         self._cached_phase: Dict[str, Any] = self._phase_schedule[0]
+        self._just_set_time_to_new_day = False
 
     def tick(self) -> bool:
         self.current_tick += 1
@@ -26,6 +27,25 @@ class Time:
             if self.days_until_election > 0: # Ensure it doesn't go indefinitely negative if not reset
                 self.days_until_election -= 1
         return new_day_started
+
+    def set_time(self, day: int, tick: int):
+        """Sets the game time to a specific day and tick."""
+        self.current_day = day
+        self.current_tick = tick
+        if self.current_tick == 0:
+            self._just_set_time_to_new_day = True
+
+        # Recalculate days_until_election
+        days_passed = self.current_day - 1
+        days_into_cycle = days_passed % config.ELECTION_CYCLE_DAYS
+        self.days_until_election = config.ELECTION_CYCLE_DAYS - days_into_cycle
+
+    def is_new_day(self) -> bool:
+        """Checks if the current tick is the start of a new day."""
+        if getattr(self, "_just_set_time_to_new_day", False):
+            self._just_set_time_to_new_day = False
+            return True
+        return self.current_tick == 0
 
     def get_time_of_day(self) -> str:
         # Simple representation for now

@@ -1,6 +1,6 @@
 import unittest
-from game.character import Character, Job
-from game.data import Job
+from game.character import Character
+from game.job import Job
 from game.world import World
 from game.time import Time
 from game.ledger import Ledger
@@ -35,7 +35,7 @@ class TestManagement(unittest.TestCase):
         # Basic stockpile for bookkeeper testing
         self.stockpile1 = Stockpile(name="SP1", x=2,y=2,width=1,height=1)
         self.world.add_stockpile(self.stockpile1)
-        self.world.ledger.update_stockpile_record(self.stockpile1.name, {}, self.time.current_day)
+        self.world.economy.ledger.update_stockpile_record(self.stockpile1.name, {}, self.time.current_day)
 
 
     def test_set_reporting_line(self):
@@ -44,7 +44,7 @@ class TestManagement(unittest.TestCase):
 
     def test_performance_review_bookkeeper_good(self):
         # Ensure ledger is up to date
-        self.world.ledger.update_stockpile_record(self.stockpile1.name, {"Wood": 10}, self.time.current_day)
+        self.world.economy.ledger.update_stockpile_record(self.stockpile1.name, {"Wood": 10}, self.time.current_day)
 
         self.supervisor.conduct_performance_review(self.subordinate.name, self.world)
 
@@ -58,7 +58,7 @@ class TestManagement(unittest.TestCase):
 
     def test_performance_review_bookkeeper_stale_ledger(self):
         # Make ledger stale
-        self.world.ledger.update_stockpile_record(self.stockpile1.name, {"Wood": 10}, self.time.current_day - (config.STALE_THRESHOLD_DAYS + 3))
+        self.world.economy.ledger.update_stockpile_record(self.stockpile1.name, {"Wood": 10}, self.time.current_day - (config.STALE_THRESHOLD_DAYS + 3))
 
         self.supervisor.conduct_performance_review(self.subordinate.name, self.world)
 
@@ -72,7 +72,7 @@ class TestManagement(unittest.TestCase):
         self.subordinate.warning_count = 2
         self.subordinate.performance_rating = "Needs Improvement"
         # Ensure ledger is good for this review
-        self.world.ledger.update_stockpile_record(self.stockpile1.name, {"Wood": 10}, self.time.current_day)
+        self.world.economy.ledger.update_stockpile_record(self.stockpile1.name, {"Wood": 10}, self.time.current_day)
 
         self.supervisor.conduct_performance_review(self.subordinate.name, self.world)
         self.assertEqual(self.subordinate.performance_rating, "Good") # Should improve
@@ -80,7 +80,7 @@ class TestManagement(unittest.TestCase):
 
     def test_performance_review_sets_warning_if_poor_result(self):
         # Make ledger stale to ensure poor review
-        self.world.ledger.update_stockpile_record(self.stockpile1.name, {"Wood": 10}, self.time.current_day - (config.STALE_THRESHOLD_DAYS + 3))
+        self.world.economy.ledger.update_stockpile_record(self.stockpile1.name, {"Wood": 10}, self.time.current_day - (config.STALE_THRESHOLD_DAYS + 3))
         self.subordinate.warning_count = 0 # Start with zero warnings
 
         self.supervisor.conduct_performance_review(self.subordinate.name, self.world)
@@ -203,7 +203,7 @@ class TestManagement(unittest.TestCase):
         self.supervisor.modify_relationship(self.subordinate.name, 60, self.world, "Likes subordinate") # Positive relationship
 
         # Subordinate does poorly (stale ledger for bookkeeper)
-        self.world.ledger.update_stockpile_record(self.stockpile1.name, {}, self.time.current_day - (config.STALE_THRESHOLD_DAYS + 3))
+        self.world.economy.ledger.update_stockpile_record(self.stockpile1.name, {}, self.time.current_day - (config.STALE_THRESHOLD_DAYS + 3))
 
         self.supervisor.conduct_performance_review(self.subordinate.name, self.world)
         # Objective: Needs Improvement. Kind (+1), Good Rel (+1) => Total +2. Needs Improvement (-1) + 2 = Good (1)
@@ -260,7 +260,7 @@ class TestManagement(unittest.TestCase):
 
         # Subordinate is a Bookkeeper (default from setUp)
         # Make ledger stale so objective performance is "Needs Improvement", which becomes "Poor" after harsh review
-        self.world.ledger.update_stockpile_record(self.stockpile1.name, {}, self.time.current_day - (config.STALE_THRESHOLD_DAYS + 3))
+        self.world.economy.ledger.update_stockpile_record(self.stockpile1.name, {}, self.time.current_day - (config.STALE_THRESHOLD_DAYS + 3))
 
         # Set warning count to threshold. Performance rating will be set by the first review.
         self.subordinate.warning_count = config.FIRING_WARNING_THRESHOLD

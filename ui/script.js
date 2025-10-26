@@ -1565,7 +1565,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (economyCrimeNote) {
             const reportCrimes = Array.isArray(report.crime_events) ? report.crime_events : [];
             const historyCrimes = Array.isArray(gameState.crime_reports) ? gameState.crime_reports : [];
-            const pendingCrimes = Array.isArray(gameState.pending_crimes) ? gameState.pending_crimes : [];
+            const pendingCrimes = Array.isArray(gameState.crime.pending_crimes) ? gameState.crime.pending_crimes : [];
             addCivicCount(pendingCrimes);
             let latestCrime = null;
             if (reportCrimes.length) {

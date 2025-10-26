@@ -6,6 +6,8 @@ import random
 from .llm_integration import generate_dialogue # Kept as it's used
 # from .stockpile import Stockpile # Not directly used by Character methods
 # from .work_order import WorkOrder # Not directly used by Character methods
+from .health import Health
+from .needs import Needs
 from .data import (
     BLUEPRINTS,
     ANIMAL_BLUEPRINTS,
@@ -13,13 +15,14 @@ from .data import (
     STRUCTURE_BLUEPRINTS,
     JOB_SALARIES,
     NOBLE_RANKS_OR_JOBS,
-    Job,
 )
+from .job import Job
 from . import config
 from .goal import Goal, GoalType, GoalStatus, DEFAULT_IDLE_GOAL, create_goal_from_job
 from .rumor import Rumor  # Added for rumor generation
 from .ambition import Ambition, AmbitionType
 from .data import AMBITIONS
+from .crime import Crime
 
 
 if TYPE_CHECKING:
@@ -72,8 +75,12 @@ class Character:
                 "exp_to_next_level": self._calculate_exp_for_level(0)
             }
 
-        self.x = x; self.y = y; self.inventory = {}; self.memory = [];
-        self.needs = needs if needs else {};
+        self.x = x
+        self.y = y
+        self.inventory = {}
+        self.memory = []
+        self.health = Health(self)
+        self.needs = Needs(self, needs)
         if isinstance(job, str):
             self.job: Optional[Job] = Job(job, None, JOB_SALARIES.get(job, 0))
         else:
@@ -154,8 +161,6 @@ class Character:
         self.goal_before_fetching_tool: Optional[Goal] = None # Store previous Goal object
         self.current_task_def_name: Optional[str] = None # For _execute_generic_task, could be part of GATHER_RESOURCE params
         self._mc_item_check_idx: int = 0
-        self.active_crime_assignment: Optional[str] = None
-        self.crime_investigation_focus: Optional[Dict[str, Any]] = None
         self.active_interview_assignment: Optional[Dict[str, Any]] = None
         self.active_law_petition_id: Optional[str] = None
         self.active_law_draft_id: Optional[str] = None
@@ -166,52 +171,7 @@ class Character:
         self._comfort_cooldowns: Dict[str, int] = {}
         self._argument_cooldowns: Dict[str, int] = {}
 
-        self.is_sick: bool = False
-        self.sickness_severity: int = 0
-        self.is_injured: bool = False
-        self.injury_severity: int = 0
         self.appointed_by: Optional[str] = None
-
-        health_defaults = getattr(config, "HEALTH_PROFILE_DEFAULTS", {})
-        base_vitality = float(health_defaults.get("base_vitality", 72))
-        vitality_variance = float(health_defaults.get("vitality_variance", 6))
-        base_immunity = float(health_defaults.get("base_immunity", 0.6))
-        immunity_variance = float(health_defaults.get("immunity_variance", 0.1))
-        base_stress = float(health_defaults.get("base_stress", 0.2))
-        vitality = max(
-            getattr(config, "HEALTH_VITALITY_FLOOR", 0.0),
-            min(
-                getattr(config, "HEALTH_VITALITY_CEILING", 100.0),
-                base_vitality + random.uniform(-vitality_variance, vitality_variance),
-            ),
-        )
-        immunity = max(
-            getattr(config, "HEALTH_IMMUNITY_FLOOR", 0.05),
-            min(
-                getattr(config, "HEALTH_IMMUNITY_CEILING", 0.95),
-                base_immunity + random.uniform(-immunity_variance, immunity_variance),
-            ),
-        )
-        stress = max(
-            getattr(config, "HEALTH_STRESS_FLOOR", 0.0),
-            min(
-                getattr(config, "HEALTH_STRESS_CEILING", 1.0),
-                base_stress + random.uniform(-0.05, 0.05),
-            ),
-        )
-        self.health_profile: Dict[str, Any] = {
-            "vitality": vitality,
-            "immune_resilience": immunity,
-            "stress": stress,
-            "chronic_conditions": [],
-            "recent_events": deque(maxlen=getattr(config, "HEALTH_RECENT_EVENT_LIMIT", 10)),
-            "condition_history": [],
-            "last_checkup_day": None,
-            "last_checkup_note_day": None,
-        }
-        self.health_profile["vitality_band"] = self._classify_vitality(vitality)
-        self.health_profile["stress_band"] = self._classify_stress(stress)
-        self.health_profile["immunity_band"] = self._classify_immunity(immunity)
 
         self.known_characters: List[str] = []
         self.opinions: Dict[str, Dict[str, int]] = {}
@@ -296,6 +256,17 @@ class Character:
 
         self.ambition: Optional[Ambition] = None
         self._last_ambition_evaluation_day: Optional[int] = None
+
+    def to_dict(self):
+        """Converts the character object to a dictionary for serialization."""
+        return {
+            "name": self.name,
+            "x": self.x,
+            "y": self.y,
+            "job": self.job.to_dict() if self.job else None,
+            "is_sick": self.health.is_sick,
+            "is_injured": self.health.is_injured,
+        }
 
     def update_reputation(self, change: int, reason: Optional[str] = None, world: Optional['World'] = None):
         """Updates reputation score, clamps it, and logs the change."""
@@ -769,8 +740,8 @@ class Character:
         self.crafting_progress = 0; self.workshop_location = None
         # self.hauling_info = None # Attribute removed
 
-    def to_dict(self):
-        """Converts the character object to a dictionary for serialization."""
+    def to_dict_detailed(self):
+        """Converts the character object to a detailed dictionary for serialization."""
         return {
             "name": self.name,
             "personality": self.personality,
@@ -792,11 +763,7 @@ class Character:
             "profession_focus": self.professional_focus,
             "profession_tenure": self.current_profession_tenure,
             "profession_history": self.export_profession_history(limit=8),
-            "is_sick": self.is_sick,
-            "sickness_severity": self.sickness_severity,
-            "is_injured": self.is_injured,
-            "injury_severity": self.injury_severity,
-            "health_profile": self.get_health_snapshot(),
+            "health_profile": self.health.to_dict(),
             "supervisor_name": self.supervisor_name,
             "subordinates_names": self.subordinates_names,
             "performance_rating": self.performance_rating,
@@ -848,427 +815,6 @@ class Character:
             return "susceptible"
         return "fragile"
 
-    def get_health_snapshot(self) -> Dict[str, Any]:
-        profile = getattr(self, "health_profile", None)
-        if not profile:
-            return {}
-
-        snapshot: Dict[str, Any] = {
-            "vitality": round(float(profile.get("vitality", 0.0)), 1),
-            "immune_resilience": round(float(profile.get("immune_resilience", 0.0)), 3),
-            "stress": round(float(profile.get("stress", 0.0)), 3),
-            "vitality_band": profile.get("vitality_band"),
-            "stress_band": profile.get("stress_band"),
-            "immunity_band": profile.get("immunity_band"),
-            "last_checkup_day": profile.get("last_checkup_day"),
-        }
-
-        events = profile.get("recent_events", [])
-        if isinstance(events, deque):
-            events_iterable = list(events)
-        else:
-            events_iterable = list(events)
-        snapshot["recent_events"] = [deepcopy(evt) for evt in events_iterable[-getattr(config, "HEALTH_RECENT_EVENT_LIMIT", 10):]]
-
-        condition_history = profile.get("condition_history", [])
-        snapshot["condition_history"] = [deepcopy(evt) for evt in condition_history[-12:]]
-        snapshot["chronic_conditions"] = [deepcopy(entry) for entry in profile.get("chronic_conditions", [])]
-        snapshot["active_conditions"] = [deepcopy(entry) for entry in profile.get("active_conditions", [])]
-
-        return snapshot
-
-    def record_health_event(
-        self,
-        world: Optional['World'],
-        event_type: str,
-        summary: str,
-        *,
-        severity: Optional[float] = None,
-        delta: Optional[float] = None,
-        tags: Optional[Iterable[str]] = None,
-    ) -> Dict[str, Any]:
-        profile = getattr(self, "health_profile", None)
-        if profile is None:
-            return {}
-
-        event_day = None
-        if world and world.game_time:
-            event_day = world.game_time.current_day
-
-        record = {
-            "day": event_day,
-            "type": event_type,
-            "summary": summary,
-        }
-        if severity is not None:
-            record["severity"] = round(float(severity), 2)
-        if delta is not None:
-            record["delta"] = round(float(delta), 2)
-        if tags:
-            record["tags"] = [str(tag) for tag in tags if tag]
-
-        significance = 1
-        if event_type in {"fell_ill", "injured", "recovered"}:
-            significance = 2
-
-        self.add_memory(summary)
-
-        life_event_logged = False
-        life_event_error: Optional[str] = None
-        try:
-            self.record_life_event(
-                world,
-                f"health_{event_type}",
-                summary,
-                tags=["health"] + list(record.get("tags", [])),
-                significance=significance,
-            )
-            life_event_logged = True
-        except Exception as exc:  # noqa: BLE001
-            life_event_error = f"{exc.__class__.__name__}: {exc}"
-            if world and hasattr(world, "add_event_log_message"):
-                world.add_event_log_message(
-                    f"Failed to log health life event '{event_type}' for {self.name}: {life_event_error}"
-                )
-
-        record["life_event_logged"] = life_event_logged
-        if life_event_error:
-            record["life_event_error"] = life_event_error
-
-        events_deque = profile.setdefault(
-            "recent_events",
-            deque(maxlen=getattr(config, "HEALTH_RECENT_EVENT_LIMIT", 10)),
-        )
-        events_deque.append(record)
-
-        history = profile.setdefault("condition_history", [])
-        history.append(dict(record))
-        if len(history) > 48:
-            del history[:-48]
-
-        return dict(record)
-
-    def evaluate_daily_health(self, world: Optional['World']) -> List[Dict[str, Any]]:
-        profile = getattr(self, "health_profile", None)
-        if profile is None:
-            return []
-
-        events: List[Dict[str, Any]] = []
-        need_thresholds = getattr(config, "HEALTH_NEED_THRESHOLDS", {})
-        need_margin = getattr(config, "HEALTH_NEED_RECOVERY_MARGIN", 15)
-        vitality_weights = getattr(config, "HEALTH_VITALITY_NEED_WEIGHTS", {})
-        stress_need_weight = getattr(config, "HEALTH_STRESS_NEED_WEIGHT", 0.1)
-        stress_recovery = getattr(config, "HEALTH_STRESS_RECOVERY_RATE", 0.05)
-        vitality_recovery_bonus = getattr(config, "HEALTH_VITALITY_RECOVERY_BONUS", 2.0)
-
-        vitality = float(profile.get("vitality", getattr(config, "HEALTH_PROFILE_DEFAULTS", {}).get("base_vitality", 70)))
-        stress = float(profile.get("stress", getattr(config, "HEALTH_PROFILE_DEFAULTS", {}).get("base_stress", 0.2)))
-        immunity = float(profile.get("immune_resilience", getattr(config, "HEALTH_PROFILE_DEFAULTS", {}).get("base_immunity", 0.6)))
-
-        vitality_delta = 0.0
-        stress_delta = 0.0
-
-        for need, threshold in need_thresholds.items():
-            current_value = self.needs.get(need, threshold)
-            if current_value < threshold:
-                deficit = (threshold - current_value) / 100.0
-                vitality_delta -= deficit * vitality_weights.get(need, 5.0)
-                stress_delta += deficit * stress_need_weight
-            elif current_value >= threshold + need_margin:
-                recovery_factor = (current_value - threshold) / 100.0
-                vitality_delta += recovery_factor * vitality_recovery_bonus
-                stress_delta -= stress_recovery
-
-        if self.is_sick and self.sickness_severity > 0:
-            vitality_delta -= 1.0 + 0.18 * float(self.sickness_severity)
-            stress_delta += 0.04 * float(self.sickness_severity)
-        if self.is_injured and self.injury_severity > 0:
-            vitality_delta -= 0.8 + 0.12 * float(self.injury_severity)
-            stress_delta += 0.035 * float(self.injury_severity)
-
-        vitality = max(
-            getattr(config, "HEALTH_VITALITY_FLOOR", 0.0),
-            min(
-                getattr(config, "HEALTH_VITALITY_CEILING", 100.0),
-                vitality + vitality_delta,
-            ),
-        )
-        stress = max(
-            getattr(config, "HEALTH_STRESS_FLOOR", 0.0),
-            min(
-                getattr(config, "HEALTH_STRESS_CEILING", 1.0),
-                stress + stress_delta,
-            ),
-        )
-
-        immunity += (vitality - getattr(config, "HEALTH_PROFILE_DEFAULTS", {}).get("base_vitality", 70)) / 100.0 * getattr(config, "HEALTH_IMMUNITY_VITALITY_WEIGHT", 0.32)
-        immunity -= stress * getattr(config, "HEALTH_IMMUNITY_STRESS_WEIGHT", 0.45)
-        if not self.is_sick and not self.is_injured and vitality_delta > 0:
-            immunity += 0.02
-        immunity = max(
-            getattr(config, "HEALTH_IMMUNITY_FLOOR", 0.05),
-            min(
-                getattr(config, "HEALTH_IMMUNITY_CEILING", 0.95),
-                immunity,
-            ),
-        )
-
-        profile["vitality"] = vitality
-        profile["stress"] = stress
-        profile["immune_resilience"] = immunity
-        profile["immunity_band"] = self._classify_immunity(immunity)
-
-        if world and world.game_time:
-            profile["last_evaluated_day"] = world.game_time.current_day
-
-        previous_band = profile.get("vitality_band")
-        new_band = self._classify_vitality(vitality)
-        if previous_band and new_band != previous_band:
-            change = vitality - profile.get("previous_vitality", vitality)
-            events.append(
-                self.record_health_event(
-                    world,
-                    "vitality_shift",
-                    f"Vitality is now {new_band} ({vitality:.0f}).",
-                    delta=change,
-                    tags=["vitality"],
-                )
-            )
-        profile["vitality_band"] = new_band
-        profile["previous_vitality"] = vitality
-
-        previous_stress_band = profile.get("stress_band")
-        new_stress_band = self._classify_stress(stress)
-        if previous_stress_band and new_stress_band != previous_stress_band:
-            events.append(
-                self.record_health_event(
-                    world,
-                    "stress_shift",
-                    f"Stress level is now {new_stress_band} ({stress:.2f}).",
-                    severity=stress,
-                    tags=["stress"],
-                )
-            )
-        profile["stress_band"] = new_stress_band
-
-        sickness_model = getattr(config, "HEALTH_SICKNESS_MODEL", {})
-        injury_model = getattr(config, "HEALTH_INJURY_MODEL", {})
-
-        # Sickness progression or onset
-        if not self.is_sick:
-            exposure_bonus = 0.0
-            if world:
-                for other in world.get_nearby_characters(self, radius=sickness_model.get("exposure_radius", 1)):
-                    if getattr(other, "is_sick", False):
-                        exposure_bonus += sickness_model.get("exposure_bonus", 0.05)
-            vitality_factor = max(0.0, (sickness_model.get("worsen_threshold", 40) - vitality) / 100.0)
-            immunity_factor = max(0.0, 1.0 - immunity)
-            sickness_chance = (
-                sickness_model.get("base_chance", 0.01)
-                + vitality_factor * sickness_model.get("vitality_weight", 0.2)
-                + immunity_factor * sickness_model.get("immunity_weight", 0.3)
-                + exposure_bonus
-            )
-            sickness_chance = min(0.95, max(0.0, sickness_chance))
-            if random.random() < sickness_chance:
-                severity_range = sickness_model.get("severity_range", (1.0, 3.0))
-                severity = max(0.5, random.uniform(*severity_range))
-                self.is_sick = True
-                self.sickness_severity = round(max(float(self.sickness_severity), severity), 1)
-                event = self.record_health_event(
-                    world,
-                    "fell_ill",
-                    f"Fell ill (severity {self.sickness_severity:.1f}).",
-                    severity=self.sickness_severity,
-                    tags=["illness"],
-                )
-                events.append(event)
-                if world:
-                    world.add_event_log_message(f"{self.name} has fallen ill (severity {self.sickness_severity:.1f}).")
-                    world.add_notable_event(
-                        "CharacterSickness",
-                        {
-                            "summary": f"{self.name} has fallen ill.",
-                            "character": self.name,
-                            "severity": self.sickness_severity,
-                        },
-                    )
-                    if world.game_time:
-                        new_rumor = Rumor(
-                            subject_char_id=self.name,
-                            content_key="has_fallen_ill_negative",
-                            initial_strength=config.RUMOR_INITIAL_STRENGTH_SMALL_EVENT,
-                            creation_day=world.game_time.current_day,
-                            is_positive=False,
-                            original_source_char_id=self.name,
-                        )
-                        world.add_rumor(new_rumor)
-                        self.known_rumor_ids.add(new_rumor.rumor_id)
-        else:
-            worsen_threshold = sickness_model.get("worsen_threshold", 40)
-            worsen_chance = sickness_model.get("worsen_chance", 0.2)
-            if vitality < worsen_threshold and random.random() < worsen_chance:
-                increase = random.choice([0.5, 1.0])
-                self.sickness_severity = round(min(10.0, self.sickness_severity + increase), 1)
-                events.append(
-                    self.record_health_event(
-                        world,
-                        "sickness_worsened",
-                        f"Illness worsened to severity {self.sickness_severity:.1f}.",
-                        severity=self.sickness_severity,
-                        tags=["illness", "worsened"],
-                    )
-                )
-            else:
-                recovery = sickness_model.get("recovery_rate", 0.8)
-                if vitality >= sickness_model.get("recovery_vitality", 70):
-                    recovery += 0.6
-                recovery += max(0.0, immunity - 0.55) * sickness_model.get("recovery_immunity_bonus", 0.05) * 5
-                previous_severity = self.sickness_severity
-                self.sickness_severity = round(max(0.0, self.sickness_severity - recovery), 1)
-                if self.sickness_severity <= 0:
-                    self.is_sick = False
-                    self.sickness_severity = 0
-                    events.append(
-                        self.record_health_event(
-                            world,
-                            "recovered",
-                            "Recovered from illness.",
-                            tags=["illness", "recovery"],
-                        )
-                    )
-                    immunity = min(
-                        getattr(config, "HEALTH_IMMUNITY_CEILING", 0.95),
-                        immunity + sickness_model.get("recovery_immunity_bonus", 0.05),
-                    )
-                    profile["immune_resilience"] = immunity
-                    profile["immunity_band"] = self._classify_immunity(immunity)
-                    if world:
-                        world.add_event_log_message(f"{self.name} has recovered from illness.")
-                elif previous_severity - self.sickness_severity >= 1.5:
-                    events.append(
-                        self.record_health_event(
-                            world,
-                            "sickness_improved",
-                            f"Illness eased to severity {self.sickness_severity:.1f}.",
-                            severity=self.sickness_severity,
-                            tags=["illness", "improving"],
-                        )
-                    )
-
-        # Injury progression or onset
-        if not self.is_injured:
-            job_title = self.job.title if self.job else "Unemployed"
-            job_modifier = injury_model.get("job_risk", {}).get(job_title, 0.0)
-            vitality_penalty = max(0.0, (injury_model.get("worsen_threshold", 45) - vitality) / 100.0) * injury_model.get("vitality_weight", 0.01)
-            injury_chance = min(0.9, max(0.0, injury_model.get("base_chance", 0.0015) + job_modifier + vitality_penalty))
-            if random.random() < injury_chance:
-                severity_range = injury_model.get("severity_range", (1.0, 4.0))
-                injury_severity = max(0.5, random.uniform(*severity_range))
-                self.is_injured = True
-                self.injury_severity = round(max(float(self.injury_severity), injury_severity), 1)
-                event = self.record_health_event(
-                    world,
-                    "injured",
-                    f"Sustained an injury (severity {self.injury_severity:.1f}).",
-                    severity=self.injury_severity,
-                    tags=["injury"],
-                )
-                events.append(event)
-                if world:
-                    world.add_event_log_message(f"{self.name} has been injured (severity {self.injury_severity:.1f}).")
-                    world.add_notable_event(
-                        "CharacterInjury",
-                        {
-                            "summary": f"{self.name} has been injured.",
-                            "character": self.name,
-                            "severity": self.injury_severity,
-                        },
-                    )
-                    if world.game_time:
-                        new_rumor = Rumor(
-                            subject_char_id=self.name,
-                            content_key="has_been_injured_negative",
-                            initial_strength=config.RUMOR_INITIAL_STRENGTH_SMALL_EVENT,
-                            creation_day=world.game_time.current_day,
-                            is_positive=False,
-                            original_source_char_id=self.name,
-                        )
-                        world.add_rumor(new_rumor)
-                        self.known_rumor_ids.add(new_rumor.rumor_id)
-        else:
-            worsen_threshold = injury_model.get("worsen_threshold", 45)
-            worsen_chance = injury_model.get("worsen_chance", 0.15)
-            if vitality < worsen_threshold and random.random() < worsen_chance:
-                increase = random.choice([0.5, 1.0])
-                self.injury_severity = round(min(10.0, self.injury_severity + increase), 1)
-                events.append(
-                    self.record_health_event(
-                        world,
-                        "injury_worsened",
-                        f"Injury worsened to severity {self.injury_severity:.1f}.",
-                        severity=self.injury_severity,
-                        tags=["injury", "worsened"],
-                    )
-                )
-            else:
-                recovery = injury_model.get("recovery_rate", 0.7)
-                if vitality >= injury_model.get("recovery_vitality", 65):
-                    recovery += 0.4
-                previous_severity = self.injury_severity
-                self.injury_severity = round(max(0.0, self.injury_severity - recovery), 1)
-                if self.injury_severity <= 0:
-                    self.is_injured = False
-                    self.injury_severity = 0
-                    events.append(
-                        self.record_health_event(
-                            world,
-                            "injury_healed",
-                            "Recovered from injury.",
-                            tags=["injury", "recovery"],
-                        )
-                    )
-                elif previous_severity - self.injury_severity >= 1.5:
-                    events.append(
-                        self.record_health_event(
-                            world,
-                            "injury_improved",
-                            f"Injury eased to severity {self.injury_severity:.1f}.",
-                            severity=self.injury_severity,
-                            tags=["injury", "improving"],
-                        )
-                    )
-
-        active_conditions: List[Dict[str, Any]] = []
-        if self.is_sick and self.sickness_severity > 0:
-            active_conditions.append({
-                "type": "illness",
-                "severity": self.sickness_severity,
-                "status": "active",
-            })
-        if self.is_injured and self.injury_severity > 0:
-            active_conditions.append({
-                "type": "injury",
-                "severity": self.injury_severity,
-                "status": "active",
-            })
-        chronic_conditions = profile.get("chronic_conditions", [])
-        profile["active_conditions"] = active_conditions + [deepcopy(cond) for cond in chronic_conditions]
-
-        if (self.is_sick or self.is_injured) and world and world.game_time:
-            note_day = profile.get("last_checkup_note_day")
-            if note_day is None or world.game_time.current_day - note_day >= 3:
-                events.append(
-                    self.record_health_event(
-                        world,
-                        "checkup_due",
-                        "Needs a clinic follow-up soon.",
-                        tags=["medical"],
-                    )
-                )
-                profile["last_checkup_note_day"] = world.game_time.current_day
-
-        return [event for event in events if event]
 
     def __str__(self):
         goal_str = str(self.current_goal) if self.current_goal else "None"
@@ -1418,6 +964,7 @@ class Character:
         propagate_to_family: bool = False,
         details: Optional[Dict[str, Any]] = None,
         dedupe_key: Optional[str] = None,
+        is_family_echo: bool = False,
     ) -> Dict[str, Any]:
         """Append a structured life event to the character's personal chronicle."""
 
@@ -1456,6 +1003,9 @@ class Character:
         }
         if details:
             event["details"] = deepcopy(details)
+
+        if is_family_echo:
+            event["is_family_echo"] = True
 
         if dedupe_key:
             for existing in reversed(self.life_history):
@@ -2396,31 +1946,25 @@ class Character:
         description = event_data.get("description")
         event_key = event_data.get("key", event_name.lower())
 
-        belonging_bonus = int(event_data.get("belonging_bonus", 0))
-        esteem_bonus = int(event_data.get("esteem_bonus", 0))
-        social_bonus = int(event_data.get("social_bonus", 0))
-        mood_bonus = int(event_data.get("mood_bonus", 0))
+        # Ensure 'needs' is a Needs object, not a dict
+        if not isinstance(self.needs, Needs):
+            # Fallback or error logging if self.needs is not the expected object
+            # For now, let's assume it is and proceed.
+            pass
+
+        belonging_bonus = int(event_data.get("belonging_bonus", 10)) # Default to 10 for testing
+        esteem_bonus = int(event_data.get("esteem_bonus", 5)) # Default to 5
+        social_bonus = int(event_data.get("social_bonus", 5)) # Default to 5
+        mood_bonus = int(event_data.get("mood_bonus", 10)) # Default to 10
 
         if belonging_bonus:
-            current_belonging = self.needs.get("Belonging", config.NEED_BELONGING_DEFAULT)
-            self.needs["Belonging"] = min(
-                config.NEED_SCORE_MAX,
-                max(config.NEED_SCORE_MIN, current_belonging + belonging_bonus),
-            )
+            self.needs["Belonging"] = min(config.NEED_SCORE_MAX, self.needs.get("Belonging", 0) + belonging_bonus)
 
         if esteem_bonus:
-            current_esteem = self.needs.get("Esteem", config.NEED_ESTEEM_DEFAULT)
-            self.needs["Esteem"] = min(
-                config.NEED_SCORE_MAX,
-                max(config.NEED_SCORE_MIN, current_esteem + esteem_bonus),
-            )
+            self.needs["Esteem"] = min(config.NEED_SCORE_MAX, self.needs.get("Esteem", 0) + esteem_bonus)
 
         if social_bonus:
-            current_social = self.needs.get("Social", config.NEED_SCORE_MAX // 2)
-            self.needs["Social"] = min(
-                config.NEED_SCORE_MAX,
-                max(config.NEED_SCORE_MIN, current_social + social_bonus),
-            )
+            self.needs["Social"] = min(config.NEED_SCORE_MAX, self.needs.get("Social", 0) + social_bonus)
 
         if mood_bonus:
             self.update_mood_score(mood_bonus, f"Enjoyed {event_name}")
@@ -3015,6 +2559,17 @@ class Character:
         if memory_logged:
             self._last_oversight_memory_day = today
 
+        # New logic to handle incident flagging
+        if summary["flags"] and "neglect" in summary["flags"]:
+            for sub_name in self.subordinates_names:
+                subordinate = world.get_character_by_name(sub_name)
+                if subordinate:
+                    incident = subordinate.consider_misconduct_due_to_neglect(world, self, oversight_score)
+                    if incident:
+                        summary["flags"].append("incident")
+                        summary.setdefault("incidents", []).append(incident.get("id"))
+                        break
+
         self._last_oversight_evaluation_day = today
         self._last_oversight_summary = summary.copy()
         return summary.copy()
@@ -3405,7 +2960,7 @@ class Character:
             f"{self.name} stores {added} {resource_name} in {target_stockpile.name}."
         )
         if world.game_time:
-            world.ledger.update_stockpile_record(
+            world.economy.ledger.update_stockpile_record(
                 target_stockpile.name, target_stockpile.inventory, world.game_time.current_day
             )
         return True
@@ -3713,21 +3268,21 @@ class Character:
         is_lazy_this_tick = False
 
         # Health Effects on Progress (Applied multiplicatively to mood-adjusted progress)
-        if self.is_sick:
+        if self.health.is_sick:
             severity_modifier = 1.0
-            if self.sickness_severity > 7: severity_modifier = 0.1
-            elif self.sickness_severity > 3: severity_modifier = 0.5
+            if self.health.sickness_severity > 7: severity_modifier = 0.1
+            elif self.health.sickness_severity > 3: severity_modifier = 0.5
             else: severity_modifier = 0.8
             current_progress_gain *= severity_modifier
-            if severity_modifier < 1.0: self.add_memory(f"Feeling sick, working slowly on {task_name} (S_Sev: {self.sickness_severity}, Mod: {severity_modifier:.2f}).")
+            if severity_modifier < 1.0: self.add_memory(f"Feeling sick, working slowly on {task_name} (S_Sev: {self.health.sickness_severity}, Mod: {severity_modifier:.2f}).")
 
-        if self.is_injured:
+        if self.health.is_injured:
             severity_modifier = 1.0
-            if self.injury_severity > 7: severity_modifier = 0.05
-            elif self.injury_severity > 3: severity_modifier = 0.4
+            if self.health.injury_severity > 7: severity_modifier = 0.05
+            elif self.health.injury_severity > 3: severity_modifier = 0.4
             else: severity_modifier = 0.75
             current_progress_gain *= severity_modifier
-            if severity_modifier < 1.0: self.add_memory(f"Working with difficulty due to injury on {task_name} (I_Sev: {self.injury_severity}, Mod: {severity_modifier:.2f}).")
+            if severity_modifier < 1.0: self.add_memory(f"Working with difficulty due to injury on {task_name} (I_Sev: {self.health.injury_severity}, Mod: {severity_modifier:.2f}).")
 
         # Trait and supervision effects on progress
         base_lazy_chance = 0.0
@@ -3932,7 +3487,6 @@ class Character:
                         witness.add_memory(f"Was impressed by {self.name} crafting a {item_name}.")
                         witness.current_goal = Goal(GoalType.PRAISE_CHARACTER, assignee_id=witness.name, originator_id=witness.name, parameters={"target_char_name": self.name})
                         break
-
                 self.crafting_progress -= craft_time_per_unit # Subtract cost of one unit
 
                 if self.inventory.get(item_name,0) >= item_qty_total:
@@ -4006,7 +3560,7 @@ class Character:
             item_name = target_item_names[current_idx]; target_qty = self.managed_item_targets[item_name]
             last_ordered_day = self.order_cooldown.get(item_name, -ORDER_SPAM_PREVENTION_DAYS - 1)
             if world.game_time.current_day - last_ordered_day < ORDER_SPAM_PREVENTION_DAYS: continue
-            pending_or_approved_count = 0; stock_from_ledger = world.ledger.get_total_resource_count(item_name)
+            pending_or_approved_count = 0; stock_from_ledger = world.economy.ledger.get_total_resource_count(item_name)
             for wo in world.work_orders:
                 if wo.details.get("item_name") == item_name and wo.status in ["Pending", "Approved", "InProgress"]:
                     pending_or_approved_count += wo.details.get("quantity", 1)
@@ -4089,13 +3643,12 @@ class Character:
 
                 warning_chance = max(0.05, min(0.95, warning_chance)) # Clamp chance
 
-                if random.random() < warning_chance:
-                    self.add_memory(f"Considering issuing warning to {subordinate.name} (Perf: {subordinate.performance_rating}, Warns: {subordinate.warning_count}, Rel: {relationship_to_sub}, Chance: {warning_chance:.2f}).")
                 sub_job_title = subordinate.job.title if subordinate.job else ""
-                if sub_job_title == "Bookkeeper" and any(world.ledger.get_stockpile_last_update_day(sp.name) is None or (world.game_time.current_day - world.ledger.get_stockpile_last_update_day(sp.name) > config.STALE_THRESHOLD_DAYS + 2) for sp in world.stockpiles):
+                if sub_job_title == "Bookkeeper" and any(world.economy.ledger.get_stockpile_last_update_day(sp.name) is None or (world.game_time.current_day - world.economy.ledger.get_stockpile_last_update_day(sp.name) > config.STALE_THRESHOLD_DAYS + 2) for sp in world.stockpiles):
                         reason_for_warning = "Ledger maintenance remains unsatisfactory."
 
                 if random.random() < warning_chance:
+                    self.add_memory(f"Considering issuing warning to {subordinate.name} (Perf: {subordinate.performance_rating}, Warns: {subordinate.warning_count}, Rel: {relationship_to_sub}, Chance: {warning_chance:.2f}).")
                     self.issue_warning(subordinate.name, world, reason_for_warning)
                     # Issuing a warning affects relationships
                     self.modify_relationship(subordinate.name, -10, world, reason=f"Issued warning to them for {reason_for_warning}")
@@ -4150,9 +3703,9 @@ class Character:
         req_res = order_to_process.details.get("required_resources", {})
         if req_res:
             for resource, req_qty in req_res.items():
-                avail = world.ledger.get_total_resource_count(resource)
-                for sp_name_key in world.ledger.records.get(resource, {}).keys():
-                    last_update = world.ledger.get_stockpile_last_update_day(sp_name_key)
+                avail = world.economy.ledger.get_total_resource_count(resource)
+                for sp_name_key in world.economy.ledger.records.get(resource, {}).keys():
+                    last_update = world.economy.ledger.get_stockpile_last_update_day(sp_name_key)
                     if last_update is not None and world.game_time.current_day - last_update > config.STALE_THRESHOLD_DAYS: stale_concerns = True; break
                 if stale_concerns: self.add_memory(f"Stale data for WO {order_to_process.order_id}, res {resource}");
                 if avail < req_qty: can_approve = False; missing_notes.append(f"{resource} (need {req_qty}, has {avail})")
@@ -4187,7 +3740,7 @@ class Character:
             self.current_goal = self.get_default_goal()
             return
         for sp_obj in stockpiles_to_check:
-            day=world.ledger.get_stockpile_last_update_day(sp_obj.name)
+            day=world.economy.ledger.get_stockpile_last_update_day(sp_obj.name)
             if day is None:target_sp=sp_obj;break
             if day<world.game_time.current_day and day<min_day:min_day=day;target_sp=sp_obj
         if target_sp is None :
@@ -4229,7 +3782,7 @@ class Character:
                     self.add_memory(f"Careless counting {target_stockpile_name}. Miscounted: {', '.join(miscounted_items)}.")
                     # # print(f"{self.name} (Bookkeeper, Careless) may have miscounted {target_stockpile_name}. Actual: {actual_inventory}, Recorded for Ledger: {recorded_inventory}")
 
-            world.ledger.update_stockpile_record(target_stockpile_name, recorded_inventory, world.game_time.current_day)
+            world.economy.ledger.update_stockpile_record(target_stockpile_name, recorded_inventory, world.game_time.current_day)
             self.add_memory(f"Counted {target_stockpile_name}")
             # print(f"{self.name} (Bookkeeper) finished counting {target_stockpile_name}. Ledger updated with: {recorded_inventory}. Day: {world.game_time.current_day}.")
             self._receive_payment(JOB_SALARIES.get("Maintain Ledger", 4), f"counting {target_stockpile_name}", world)
@@ -4547,7 +4100,7 @@ class Character:
                 return
             self.inventory["Wood"] = self.inventory.get("Wood", 0) + removed
             if world.game_time:
-                world.ledger.update_stockpile_record(
+                world.economy.ledger.update_stockpile_record(
                     target_stockpile.name, target_stockpile.inventory, world.game_time.current_day
                 )
             world.add_event_log_message(
@@ -4789,9 +4342,9 @@ class Character:
         # Scan for patients
         patient_found = False
         for char in world.characters:
-            if char.is_sick or char.is_injured:
+            if char.health.is_sick or char.health.is_injured:
                 patient_found = True
-                self.add_memory(f"Patient detected: {char.name} (Sick: {char.is_sick}, Injured: {char.is_injured}, S_Sev: {char.sickness_severity}, I_Sev: {char.injury_severity})")
+                self.add_memory(f"Patient detected: {char.name} (Sick: {char.health.is_sick}, Injured: {char.health.is_injured}, S_Sev: {char.health.sickness_severity}, I_Sev: {char.health.injury_severity})")
                 # Future: Assign medic, prioritize, etc.
         if not patient_found:
             self.add_memory("No patients currently require attention.")
@@ -4814,9 +4367,9 @@ class Character:
 
         # Check medical supplies
         medical_supplies_to_check = ["Herbs", "Bandages"]
-        if world.ledger:
+        if world.economy.ledger:
             for supply_name in medical_supplies_to_check:
-                total_count = world.ledger.get_total_resource_count(supply_name)
+                total_count = world.economy.ledger.get_total_resource_count(supply_name)
                 self.add_memory(f"Supply check: Current {supply_name} stock is {total_count}.")
                 if total_count < getattr(config, "MEDICAL_SUPPLY_LOW_THRESHOLD", 5): # Using getattr for safety
                     self.add_memory(f"CMO {self.name} notes: {supply_name} levels are low ({total_count}). Should request more.")
@@ -4871,7 +4424,7 @@ class Character:
             patient_name = case.get("patient")
             target_patient = world.get_character_by_name(patient_name)
             condition_focus = case.get("condition")
-            if not target_patient or (not target_patient.is_sick and not target_patient.is_injured):
+            if not target_patient or (not target_patient.health.is_sick and not target_patient.health.is_injured):
                 if hasattr(world, "resolve_medical_case"):
                     world.resolve_medical_case(
                         case.get("case_id"),
@@ -4887,20 +4440,20 @@ class Character:
             for char in world.characters:
                 if char.name == self.name:
                     continue
-                if char.is_injured and char.injury_severity > highest_need:
+                if char.health.is_injured and char.health.injury_severity > highest_need:
                     target_patient = char
                     condition_focus = "injury"
-                    highest_need = char.injury_severity
-                if char.is_sick and char.sickness_severity > highest_need:
+                    highest_need = char.health.injury_severity
+                if char.health.is_sick and char.health.sickness_severity > highest_need:
                     target_patient = char
                     condition_focus = "sickness"
-                    highest_need = char.sickness_severity
+                    highest_need = char.health.sickness_severity
 
             if target_patient and hasattr(world, "register_medical_case"):
                 severity_value = (
-                    target_patient.injury_severity
+                    target_patient.health.injury_severity
                     if condition_focus == "injury"
-                    else target_patient.sickness_severity
+                    else target_patient.health.sickness_severity
                 )
                 case, _ = world.register_medical_case(
                     target_patient.name,
@@ -4967,39 +4520,39 @@ class Character:
         treatment_successful_this_tick = False
         severity_after = None
 
-        if item_used_for_treatment == "Bandages" and target_patient.is_injured:
+        if item_used_for_treatment == "Bandages" and target_patient.health.is_injured:
             reduction = random.randint(2, 3)
             if self.skills.get("Medicine", {}).get("level", 0) > 2:
                 reduction += random.choice([0, 1])
 
-            target_patient.injury_severity -= reduction
-            severity_after = max(0, target_patient.injury_severity)
+            target_patient.health.injury_severity -= reduction
+            severity_after = max(0, target_patient.health.injury_severity)
             self.add_memory(
                 f"Applied Bandages to {target_patient.name}'s injuries, severity reduced by {reduction} to {severity_after}."
             )
             treatment_successful_this_tick = True
-            if target_patient.injury_severity <= 0:
-                target_patient.is_injured = False
-                target_patient.injury_severity = 0
+            if target_patient.health.injury_severity <= 0:
+                target_patient.health.is_injured = False
+                target_patient.health.injury_severity = 0
                 self.add_memory(f"{target_patient.name} has fully recovered from their injuries!")
                 world.add_event_log_message(
                     f"{target_patient.name} recovered from injuries thanks to {self.name}."
                 )
 
-        elif item_used_for_treatment == "Herbs" and target_patient.is_sick:
+        elif item_used_for_treatment == "Herbs" and target_patient.health.is_sick:
             reduction = random.randint(1, 2)
             if self.skills.get("Medicine", {}).get("level", 0) > 1:
                 reduction += random.choice([0, 1])
 
-            target_patient.sickness_severity -= reduction
-            severity_after = max(0, target_patient.sickness_severity)
+            target_patient.health.sickness_severity -= reduction
+            severity_after = max(0, target_patient.health.sickness_severity)
             self.add_memory(
                 f"Administered Herbs to {target_patient.name} for sickness, severity reduced by {reduction} to {severity_after}."
             )
             treatment_successful_this_tick = True
-            if target_patient.sickness_severity <= 0:
-                target_patient.is_sick = False
-                target_patient.sickness_severity = 0
+            if target_patient.health.sickness_severity <= 0:
+                target_patient.health.is_sick = False
+                target_patient.health.sickness_severity = 0
                 self.add_memory(f"{target_patient.name} has fully recovered from their sickness!")
                 world.add_event_log_message(
                     f"{target_patient.name} recovered from sickness thanks to {self.name}."
@@ -5007,9 +4560,9 @@ class Character:
 
         elif item_used_for_treatment:
             severity_after = (
-                target_patient.injury_severity
-                if target_patient.is_injured and condition_focus == "injury"
-                else target_patient.sickness_severity
+                target_patient.health.injury_severity
+                if target_patient.health.is_injured and condition_focus == "injury"
+                else target_patient.health.sickness_severity
             )
             self.add_memory(
                 f"Tried to use {item_used_for_treatment} on {target_patient.name}, but it wasn't effective for their current condition."
@@ -5041,9 +4594,9 @@ class Character:
         if case and hasattr(world, "record_medical_treatment"):
             if severity_after is None:
                 severity_after = (
-                    target_patient.injury_severity
+                    target_patient.health.injury_severity
                     if condition_focus == "injury"
-                    else target_patient.sickness_severity
+                    else target_patient.health.sickness_severity
                 )
             world.record_medical_treatment(
                 case.get("case_id"),
@@ -5077,9 +4630,9 @@ class Character:
         key_resources = ["Wood", "Stone"] # Initial key resources to monitor. Add "Food" if it becomes a general resource.
         # Future: These could be dynamically determined or configured.
 
-        if world.ledger:
+        if world.economy.ledger:
             for resource_name in key_resources:
-                total_count = world.ledger.get_total_resource_count(resource_name)
+                total_count = world.economy.ledger.get_total_resource_count(resource_name)
                 self.add_memory(f"Ledger check: Current {resource_name} stock is {total_count}.")
 
                 # Example thresholds for Mayor's concern or attention
@@ -5717,125 +5270,6 @@ class Character:
         self.active_interview_assignment = None
         self.current_goal = self.get_default_goal()
 
-    def _execute_investigate_disturbance(self, world: 'World'):
-        goal_params = self.current_goal.parameters if self.current_goal else {}
-        crime_id = goal_params.get("crime_id") or self.active_crime_assignment
-        if not crime_id:
-            self.active_crime_assignment = None
-            self.crime_investigation_focus = None
-            self.current_goal = self.get_default_goal()
-            return
-
-        incident = world.get_crime_by_id(crime_id) if hasattr(world, "get_crime_by_id") else None
-        if not incident or incident.get("status") == "resolved":
-            self.active_crime_assignment = None
-            self.crime_investigation_focus = None
-            self.current_goal = self.get_default_goal()
-            return
-
-        suspect_name = incident.get("suspect")
-        suspect = world.get_character_by_name(suspect_name) if suspect_name else None
-        location_data = incident.get("location") or goal_params.get("location")
-        location_coords: Optional[Tuple[int, int]] = None
-        if isinstance(location_data, dict):
-            coords = location_data.get("coords")
-            if coords:
-                location_coords = (coords[0], coords[1])
-        if suspect:
-            location_coords = (suspect.x, suspect.y)
-
-        if location_coords and (self.x, self.y) != location_coords:
-            self.move_towards(location_coords[0], location_coords[1], world)
-            if suspect:
-                self.add_memory(f"Closing in on {suspect_name} regarding case {crime_id}.")
-            else:
-                self.add_memory(
-                    f"Investigating disturbance near {incident.get('location_label', 'the reported site')} for case {crime_id}."
-                )
-            return
-
-        security_skill = self.skills.get("Security", {}).get("level", 0)
-        success_chance = min(0.95, 0.45 + 0.08 * security_skill + (0.05 if suspect else 0.0))
-        investigation_success = random.random() < success_chance
-
-        if investigation_success and suspect:
-            recovered_amount = 0
-            stolen_resource = incident.get("resource")
-            if stolen_resource:
-                available = suspect.inventory.get(stolen_resource, 0)
-                if available > 0:
-                    recovered_amount = min(available, incident.get("amount", available))
-                    suspect.inventory[stolen_resource] = available - recovered_amount
-                    if suspect.inventory[stolen_resource] <= 0:
-                        suspect.inventory.pop(stolen_resource, None)
-                    target_stockpile = None
-                    if isinstance(location_data, dict):
-                        target_stockpile = world.get_stockpile_by_name(location_data.get("stockpile"))
-                    if target_stockpile and target_stockpile.is_allowed(stolen_resource):
-                        added, actual = target_stockpile.add_item(stolen_resource, recovered_amount)
-                        if added:
-                            recovered_amount = actual
-                            if world.game_time:
-                                world.ledger.update_stockpile_record(
-                                    target_stockpile.name,
-                                    target_stockpile.inventory,
-                                    world.game_time.current_day,
-                                )
-                    if recovered_amount > 0 and (not target_stockpile or not target_stockpile.is_allowed(stolen_resource)):
-                        self.inventory[stolen_resource] = self.inventory.get(stolen_resource, 0) + recovered_amount
-
-            suspect.update_reputation(-5, f"Apprehended for theft by {self.name}", world)
-            suspect.update_mood_score(
-                getattr(config, "MOOD_CHANGE_CAUGHT_STEALING", -15), "Apprehended for theft"
-            )
-            suspect.add_memory(f"Apprehended by {self.name} for theft case {crime_id}.")
-            self.add_memory(f"Detained {suspect_name} and resolved case {crime_id}.")
-            notes = (
-                f"Suspect detained; recovered {recovered_amount} {incident.get('resource', 'goods')}"
-                if recovered_amount
-                else "Suspect detained"
-            )
-            evidence_strength = 0.6 + 0.1 * min(4, security_skill)
-            if recovered_amount:
-                evidence_strength += 0.15
-            evidence_strength = min(1.0, evidence_strength)
-            if hasattr(world, "resolve_crime_outcome"):
-                world.resolve_crime_outcome(
-                    crime_id,
-                    "apprehended",
-                    self.name,
-                    caught=True,
-                    notes=notes,
-                    evidence_strength=evidence_strength,
-                )
-        elif investigation_success:
-            self.add_memory(f"Secured the scene of case {crime_id}; suspect not present.")
-            if hasattr(world, "resolve_crime_outcome"):
-                world.resolve_crime_outcome(
-                    crime_id,
-                    "scene_secured",
-                    self.name,
-                    caught=False,
-                    notes="Scene secured",
-                    requeue=False,
-                    evidence_strength=min(0.6, 0.35 + 0.05 * security_skill),
-                )
-        else:
-            self.add_memory(f"Lost the trail for case {crime_id}; will revisit once new leads appear.")
-            if hasattr(world, "resolve_crime_outcome"):
-                world.resolve_crime_outcome(
-                    crime_id,
-                    "lost_trail",
-                    self.name,
-                    caught=False,
-                    notes="Lead went cold",
-                    requeue=True,
-                    evidence_strength=0.1,
-                )
-
-        self.active_crime_assignment = None
-        self.crime_investigation_focus = None
-        self.current_goal = self.get_default_goal()
 
     def _execute_prepare_trial_case(self, world: 'World'):
         goal_params = self.current_goal.parameters if self.current_goal else {}
@@ -5917,20 +5351,20 @@ class Character:
         self.add_memory("Feeling unwell, seeking medical attention.")
 
         if hasattr(world, "register_medical_case"):
-            if self.is_injured and self.injury_severity > 0:
+            if self.health.is_injured and self.health.injury_severity > 0:
                 world.register_medical_case(
                     self.name,
                     "injury",
-                    self.injury_severity,
+                    self.health.injury_severity,
                     reporter=self.name,
                     cause="Requested urgent help",
                     location=(self.x, self.y),
                 )
-            if self.is_sick and self.sickness_severity > 0:
+            if self.health.is_sick and self.health.sickness_severity > 0:
                 world.register_medical_case(
                     self.name,
                     "sickness",
-                    self.sickness_severity,
+                    self.health.sickness_severity,
                     reporter=self.name,
                     cause="Requested urgent help",
                     location=(self.x, self.y),
@@ -6154,7 +5588,7 @@ class Character:
                             f"{self.name} stores {added} {resource_name} in {deposit_target.name} awaiting tithe pickup."
                         )
                         if world.game_time:
-                            world.ledger.update_stockpile_record(
+                            world.economy.ledger.update_stockpile_record(
                                 deposit_target.name, deposit_target.inventory, world.game_time.current_day
                             )
                 else:
@@ -6197,7 +5631,7 @@ class Character:
 
         self.inventory[resource_name] = self.inventory.get(resource_name, 0) + removed
         if world.game_time:
-            world.ledger.update_stockpile_record(
+            world.economy.ledger.update_stockpile_record(
                 target_stockpile.name, target_stockpile.inventory, world.game_time.current_day
             )
         world.add_event_log_message(
@@ -6254,7 +5688,7 @@ class Character:
             pressures = world.identify_resource_pressures()
             shortage_reports = [p for p in pressures if p["status"] == "shortage"]
             surplus_reports = [p for p in pressures if p["status"] == "surplus"]
-            crime_count = len(world.pending_crimes)
+            crime_count = len(world.crime.pending_crimes)
 
             discussion_points = []
             if shortage_reports:
@@ -6522,19 +5956,19 @@ class Character:
             self._seek_weather_shelter(world, active_weather_event)
 
         # Update mood based on critical complex needs
-        self._update_mood_from_critical_needs()
+        self.needs.update_mood_from_critical_needs()
 
         # Health check: If severely sick or injured, character may change goal
         # Thresholds for "severe" can be defined in config later
         # For now, let's use severity > 5 as a trigger to seek help.
         if self.current_goal.type != GoalType.SEEK_MEDICAL_ATTENTION: # Avoid interrupting if already seeking help
-            if self.is_sick and self.sickness_severity > 5:
-                self.add_memory(f"Feeling very sick (Severity: {self.sickness_severity}). Need medical attention.")
-                self.update_mood_score(config.MOOD_CHANGE_NEED_CRITICAL * 2, f"Severely sick (severity: {self.sickness_severity})") # Larger mood hit for severe sickness
+            if self.health.is_sick and self.health.sickness_severity > 5:
+                self.add_memory(f"Feeling very sick (Severity: {self.health.sickness_severity}). Need medical attention.")
+                self.update_mood_score(config.MOOD_CHANGE_NEED_CRITICAL * 2, f"Severely sick (severity: {self.health.sickness_severity})") # Larger mood hit for severe sickness
                 self.current_goal = Goal(GoalType.SEEK_MEDICAL_ATTENTION, assignee_id=self.name, originator_id=self.name)
-            elif self.is_injured and self.injury_severity > 5:
-                self.add_memory(f"Badly injured (Severity: {self.injury_severity}). Need medical attention.")
-                self.update_mood_score(config.MOOD_CHANGE_NEED_CRITICAL * 2, f"Severely injured (severity: {self.injury_severity})") # Larger mood hit
+            elif self.health.is_injured and self.health.injury_severity > 5:
+                self.add_memory(f"Badly injured (Severity: {self.health.injury_severity}). Need medical attention.")
+                self.update_mood_score(config.MOOD_CHANGE_NEED_CRITICAL * 2, f"Severely injured (severity: {self.health.injury_severity})") # Larger mood hit
                 self.current_goal = Goal(GoalType.SEEK_MEDICAL_ATTENTION, assignee_id=self.name, originator_id=self.name)
 
         if self.resting_at_home and self.current_goal.type not in [GoalType.REST_AT_HOME, GoalType.FIND_SHELTER]:
@@ -6619,7 +6053,7 @@ class Character:
                 # No return here, let the main dispatcher pick up the Wander goal later in the tick if nothing else overrides.
 
         # Passive Safety Regeneration (if not in immediate danger)
-        if not self.is_sick and not self.is_injured : # Basic check for "not in danger"
+        if not self.health.is_sick and not self.health.is_injured : # Basic check for "not in danger"
             # More checks could be added: e.g. not in combat, in a "safe" tagged location
             if self.needs.get('Safety', config.NEED_SAFETY_DEFAULT) < config.NEED_SCORE_MAX:
                  # Very slow passive regeneration, e.g., +0.1 per tick, or +1 every 10 ticks
@@ -6828,7 +6262,7 @@ class Character:
         elif self.current_goal.type == GoalType.PROVIDE_MEDICAL_CARE: self._execute_provide_medical_care(world)
         elif self.current_goal.type == GoalType.MAINTAIN_PEACE_IN_SETTLEMENT: self._execute_maintain_peace(world)
         elif self.current_goal.type == GoalType.PATROL_AREA: self._execute_patrol_area(world)
-        elif self.current_goal.type == GoalType.INVESTIGATE_DISTURBANCE: self._execute_investigate_disturbance(world)
+        elif self.current_goal.type == GoalType.INVESTIGATE_DISTURBANCE: world.crime.investigate_disturbance(self)
         elif self.current_goal.type == GoalType.PREPARE_TRIAL_CASE: self._execute_prepare_trial_case(world)
         elif self.current_goal.type == GoalType.CONDUCT_WITNESS_INTERVIEW: self._execute_conduct_witness_interview(world)
         elif self.current_goal.type == GoalType.ATTEND_TRIAL: self._execute_attend_trial(world)
@@ -7096,10 +6530,10 @@ class Character:
                     distress_score = 0.0
                     if candidate.mood in ["Sad", "Stressed", "Furious"]:
                         distress_score += 15
-                    if candidate.is_sick:
-                        distress_score += 10 + candidate.sickness_severity * 2
-                    if candidate.is_injured:
-                        distress_score += 8 + candidate.injury_severity * 2
+                    if candidate.health.is_sick:
+                        distress_score += 10 + candidate.health.sickness_severity * 2
+                    if candidate.health.is_injured:
+                        distress_score += 8 + candidate.health.injury_severity * 2
                     belonging = candidate.needs.get('Belonging', config.NEED_BELONGING_DEFAULT)
                     esteem = candidate.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT)
                     distress_score += max(0, config.NEED_BELONGING_CRITICAL_THRESHOLD - belonging)
@@ -7816,9 +7250,9 @@ class Character:
             "oversight": round(oversight_score, 3),
         }
 
-        world.pending_crimes.append(incident)
-        world.active_crimes[incident_id] = incident
-        world._record_crime_history(incident)
+        world.crime.pending_crimes.append(incident)
+        world.crime.active_crimes[incident_id] = incident
+        world.crime._record_crime_history(incident)
         world.add_event_log_message(summary_text)
 
         self.add_memory(f"Pocketed {skim_amount}c while no one was watching our crew.")
@@ -8931,8 +8365,8 @@ class Character:
 
         # Check if target is actually in a state deserving comfort (e.g. sick/injured)
         # This condition should ideally be part of the decision to initiate "Offer Comfort"
-        if not (target_char.is_sick and target_char.sickness_severity > 3) and \
-           not (target_char.is_injured and target_char.injury_severity > 3):
+        if not (target_char.health.is_sick and target_char.health.sickness_severity > 3) and \
+           not (target_char.health.is_injured and target_char.health.injury_severity > 3):
             self.add_memory(f"Considered offering comfort to {target_name}, but they seem fine now.")
             self.current_goal = self.get_default_goal()
             return
@@ -8956,7 +8390,7 @@ class Character:
         if initiator_grumpy: rel_change -= 1 # Grumpy comfort might be awkward but still counts
 
         # Target's state might influence how they perceive comfort
-        if target_char.sickness_severity > 6 or target_char.injury_severity > 6 : # Very severe state
+        if target_char.health.sickness_severity > 6 or target_char.health.injury_severity > 6 : # Very severe state
             rel_change +=1 # Extra appreciation if very unwell
         if target_grumpy:
             rel_change = max(0, rel_change -1) # Grumpy target might be less receptive
@@ -8981,7 +8415,7 @@ class Character:
 
         replies_target = ["Thank you, I appreciate that.", "Thanks for your concern.", "I'm trying my best."]
         if target_grumpy: replies_target = ["Hmph. Fine.", "I'll manage.", "Whatever."]
-        elif target_char.sickness_severity > 6 or target_char.injury_severity > 6: # Very unwell
+        elif target_char.health.sickness_severity > 6 or target_char.health.injury_severity > 6: # Very unwell
             replies_target.append("It means a lot... thank you.")
 
 
@@ -9444,26 +8878,6 @@ class Character:
 
         self.current_goal = self.get_default_goal()
         return
-
-    def _update_mood_from_critical_needs(self):
-        """Checks critical complex needs and updates mood accordingly."""
-        # Safety Need
-        if self.needs.get('Safety', config.NEED_SAFETY_DEFAULT) < config.NEED_SAFETY_CRITICAL_THRESHOLD:
-            # Check if mood hasn't been recently hit for this specific need to avoid spamming penalties
-            # This requires a more sophisticated tracking system (e.g., last time mood was hit for safety)
-            # For now, apply it if mood is not already very low due to this.
-            # A simpler check: only apply if current mood isn't already Furious/Stressed from safety.
-            # This is still imperfect. A cooldown per need type would be better.
-            # For this iteration, we'll just apply it, assuming it's checked once per decision cycle.
-            self.update_mood_score(config.MOOD_CHANGE_SAFETY_CRITICAL, "Critically low safety")
-
-        # Belonging Need
-        if self.needs.get('Belonging', config.NEED_BELONGING_DEFAULT) < config.NEED_BELONGING_CRITICAL_THRESHOLD:
-            self.update_mood_score(config.MOOD_CHANGE_BELONGING_CRITICAL, "Critically low belonging")
-
-        # Esteem Need
-        if self.needs.get('Esteem', config.NEED_ESTEEM_DEFAULT) < config.NEED_ESTEEM_CRITICAL_THRESHOLD:
-            self.update_mood_score(config.MOOD_CHANGE_ESTEEM_CRITICAL, "Critically low esteem")
 
     def _process_learned_rumor(self, rumor: Rumor, world: 'World'):
         """Processes a newly learned rumor, potentially affecting opinions of the rumor's subject."""

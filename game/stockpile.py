@@ -93,6 +93,21 @@ class Stockpile:
     def get_current_load(self) -> int:
         return sum(self.inventory.values())
 
+    def get_remaining_capacity(self, resource_name: str) -> int:
+        if not self.is_allowed(resource_name):
+            return 0
+
+        remaining = float('inf')
+
+        if self.total_capacity is not None:
+            remaining = self.total_capacity - self.get_current_load()
+
+        if self.capacity_per_resource is not None:
+            per_resource_remaining = self.capacity_per_resource - self.inventory.get(resource_name, 0)
+            remaining = min(remaining, per_resource_remaining)
+
+        return max(0, int(remaining))
+
     def has_space_for(self, resource_name: str, quantity: int = 1) -> bool:
         if not self.is_allowed(resource_name):
 
@@ -120,6 +135,8 @@ class Stockpile:
         if not self.is_allowed(resource_name): # Double check, though has_space_for should catch it
 
             return False, 0
+
+        quantity = int(quantity)
 
         # Calculate how much can actually be added based on available space
         actual_add_qty = 0
@@ -154,6 +171,14 @@ class Stockpile:
 
     def to_dict(self):
         """Converts the stockpile object to a dictionary for serialization."""
+        return {
+            "name": self.name,
+            "rect": self.rect,
+            "map_char": self.get_map_char(),
+        }
+
+    def to_dict_detailed(self):
+        """Converts the stockpile object to a detailed dictionary for serialization."""
         return {
             "name": self.name,
             "rect": self.rect,
