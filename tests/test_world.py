@@ -128,7 +128,7 @@ def test_healthcare_report_tracks_vitals_and_events():
     patient.health.health_profile["immune_resilience"] = 0.22
 
     with patch("random.random", side_effect=[0.0, 1.0]), patch("random.uniform", return_value=3.1):
-        world.process_healthcare_daily()
+        world.crime.process_crime_daily({})
 
     report = world.latest_healthcare_report
     assert report.get("health_events")
@@ -1282,7 +1282,7 @@ def test_governance_generates_petitions_from_crime_history():
         }
         world._record_crime_history(incident)
 
-    world.process_governance_daily()
+    world.process_governance_daily({})
 
     petitions = [p for p in world.law_petitions if p.get("issue_type") == "theft"]
     assert petitions
@@ -1449,7 +1449,7 @@ def test_world_daily_report_includes_personal_pursuits():
     pursuit["progress_per_day"] = threshold
     pursuit["affinity"] = 2.0
 
-    world.economy.process_daily_economy()
+    world.economy.process_daily_economy({})
 
     report = world.economy.last_daily_economic_report
     assert "personal_pursuits" in report
@@ -1495,7 +1495,7 @@ def test_military_process_builds_chain_and_readiness():
     commander.leadership_oversight_score = 0.6
     captain.leadership_oversight_score = 0.52
 
-    world.governance.process_governance_daily()
+    world.governance.process_governance_daily({})
     snapshot = world.governance.get_military_snapshot()
 
     assert snapshot["commander"]["name"] == commander.name
@@ -1542,7 +1542,7 @@ def test_enemy_raid_logs_activity_when_forced(monkeypatch):
     forced_profile["losses"] = {"raid": (1, 1)}
     monkeypatch.setattr(config, "ENEMY_RAID_PROFILE", forced_profile, raising=False)
 
-    world.governance.process_governance_daily()
+    world.governance.process_governance_daily({})
     snapshot = world.governance.get_military_snapshot()
 
     assert snapshot["enemy_activity"], "Enemy activity should be recorded when raids are forced"

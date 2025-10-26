@@ -1016,6 +1016,5 @@ class Housing:
 
         return family_events
 
-    def process_daily_housing(self) -> Dict[str, Any]:
-        report: Dict[str, Any] = {}
-        return self._evaluate_housing_daily(report)
+    def process_daily_housing(self, daily_report: Dict[str, Any]) -> Dict[str, Any]:
+        return self._evaluate_housing_daily(daily_report)

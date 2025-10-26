@@ -131,6 +131,15 @@ class Health:
     def to_dict(self) -> Dict[str, Any]:
         return self.get_health_snapshot()
 
+    def get_health_summary(self) -> Dict[str, Any]:
+        """Returns a simplified health summary for UI purposes."""
+        profile = getattr(self, "health_profile", {})
+        return {
+            "vitality": round(float(profile.get("vitality", 0.0)), 1),
+            "is_sick": self.is_sick,
+            "is_injured": self.is_injured,
+        }
+
     def record_health_event(
         self,
         world: Optional['World'],

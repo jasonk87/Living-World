@@ -951,7 +951,7 @@ class Economy:
                 self._handle_surplus_trade(resource, severity)
                 self._spawn_conversion_work_order(resource, severity)
 
-    def process_daily_economy(self):
+    def process_daily_economy(self, report: Dict[str, Any]):
         if not self.world.game_time:
             return
 
@@ -961,7 +961,7 @@ class Economy:
         self.todays_wages_paid = 0
         self.todays_wages_owed = 0
 
-        report: Dict[str, Any] = {
+        report.update({
             "day": self.world.game_time.current_day,
             "tax_collected": 0,
             "food_consumed": 0,
@@ -977,7 +977,7 @@ class Economy:
             "surplus_trades": list(self.today_surplus_sales),
             "pending_crimes": len(self.world.crime.pending_crimes),
             "environment": self.world.environment_effect_snapshot,
-        }
+        })
 
         tax_income = getattr(config, "DAILY_BASE_TAX_INCOME", 0)
         if tax_income:
@@ -988,27 +988,14 @@ class Economy:
         report["treasury"] = self.treasury_coins
         report["arrears"] = sum(debt.get("amount_due", 0) for debt in self.pending_wages)
 
-        housing_snapshot = self.world.housing._evaluate_housing_daily(report)
         business_events = self._update_businesses(report)
         wealth_snapshot = self._update_character_wealth(report)
-        profession_events = []
-        for character in self.world.characters:
-            if hasattr(character, "evaluate_profession_daily"):
-                profession_events.extend(character.evaluate_profession_daily(self.world))
-            if character.current_goal and character.current_goal.type == "InvestigateDisturbance":
-                self.world.crime.investigate_disturbance(character)
         self._evaluate_wealth_tensions(report, wealth_snapshot)
-        self._update_businesses(report)
-        report["pending_crimes"] = len(self.world.crime.pending_crimes)
-        report["surplus_trades"] = list(self.today_surplus_sales)
-        self.world.evaluate_population_dynamics(report, housing_snapshot)
-        training_report = self.world.process_training_daily(report)
-        personal_events = []
-        for character in self.world.characters:
-            if hasattr(character, "evaluate_personal_pursuits_daily"):
-                personal_events.extend(character.evaluate_personal_pursuits_daily(self.world))
-        if personal_events:
-            report["personal_pursuits"] = personal_events
+
+        # Process personal pursuits and add them to the report
+        personal_pursuits_events = self.world.process_personal_pursuits_daily()
+        if personal_pursuits_events:
+            report["personal_pursuits"] = personal_pursuits_events
 
         summary = (
             f"Economic summary — Treasury {self.treasury_coins}c "
@@ -1017,28 +1004,6 @@ class Economy:
             f" water deficit {report['water_deficit']} casks."
         )
         self.world.add_event_log_message(summary)
-        if housing_snapshot:
-            homeless_count = len(housing_snapshot.get("homeless_characters", []))
-            available_beds = housing_snapshot.get("available_beds")
-            if homeless_count:
-                self.world.add_event_log_message(
-                    f"Housing report: {homeless_count} citizen{'s' if homeless_count != 1 else ''} slept outdoors."
-                )
-            elif isinstance(available_beds, int):
-                self.world.add_event_log_message(
-                    f"Housing report: {available_beds} bed{'s' if available_beds != 1 else ''} currently open."
-                )
-        if training_report:
-            active_count = len(training_report.get("active_sessions", []))
-            queued_total = sum(
-                len(entry.get("queued", []))
-                for entry in training_report.get("waitlists", [])
-            )
-            if active_count or queued_total:
-                self.world.add_event_log_message(
-                    f"Training grounds: {active_count} session{'s' if active_count != 1 else ''} active, "
-                    f"{queued_total} queued for instruction."
-                )
         for business_event in business_events:
             if business_event.get("status") == "closed":
                 self.world.add_event_log_message(
@@ -1090,42 +1055,6 @@ class Economy:
                 self.world.add_event_log_message(
                     f"{wealth_event['character']} earns the title {nobility.get('title')} through amassed wealth."
                 )
-        for profession_event in profession_events:
-            name = profession_event.get("character")
-            if not name:
-                continue
-            current_char = self.world.get_character_by_name(name)
-            if "job_change" in profession_event:
-                change = profession_event["job_change"]
-                from_job = change.get("from", "Unassigned")
-                to_job = change.get("to", "Unassigned")
-                tenure = change.get("tenure")
-                if isinstance(tenure, (int, float)):
-                    self.world.add_event_log_message(
-                        f"{name} transitioned from {from_job} to {to_job} after {int(tenure)} day{'s' if tenure != 1 else ''}."
-                    )
-                else:
-                    self.world.add_event_log_message(f"{name} assumed the role of {to_job}.")
-            if "stage_change" in profession_event:
-                stage_data = profession_event["stage_change"]
-                new_stage = stage_data.get("to") or "Skilled"
-                job_label = current_char.job if current_char else "their craft"
-                self.world.add_event_log_message(f"{name} is now a {new_stage} {job_label}.")
-            if "tenure_milestones" in profession_event:
-                for milestone in profession_event["tenure_milestones"]:
-                    self.world.add_event_log_message(
-                        f"{name} has served {milestone} day{'s' if milestone != 1 else ''} as {current_char.job if current_char else 'their role'}."
-                    )
-            if "burnout" in profession_event:
-                burn = profession_event["burnout"]
-                self.world.add_event_log_message(
-                    f"{name} struggles with their duties (satisfaction {burn.get('satisfaction', 0):.2f})."
-                )
-            if "thriving" in profession_event:
-                high = profession_event["thriving"]
-                self.world.add_event_log_message(
-                    f"{name} thrives in their work (satisfaction {high.get('satisfaction', 0):.2f})."
-                )
         if report.get("wealth_tensions"):
             for tension in report["wealth_tensions"]:
                 self.world.add_event_log_message(
@@ -1146,28 +1075,6 @@ class Economy:
                     if len(parents) == 2 and child:
                         self.world.add_event_log_message(
                             f"{parents[0]} and {parents[1]} welcome {child}."
-                        )
-        if personal_events:
-            for event in personal_events:
-                event_type = event.get("type")
-                pursuit_name = event.get("name") or event.get("pursuit")
-                actor = event.get("character")
-                if event_type == "pursuit_milestone":
-                    if pursuit_name and actor:
-                        stage = event.get("stage")
-                        self.world.add_event_log_message(
-                            f"{actor} reached {pursuit_name} stage {stage}."
-                        )
-                elif event_type == "pursuit_engaged":
-                    if pursuit_name and actor:
-                        self.world.add_event_log_message(
-                            f"{actor} dedicated time to {pursuit_name} (progress {event.get('progress')})."
-                        )
-                elif event_type == "pursuit_skipped":
-                    if pursuit_name and actor:
-                        reason = event.get("reason", "tired")
-                        self.world.add_event_log_message(
-                            f"{actor} deferred {pursuit_name} today ({reason})."
                         )
 
         self.last_daily_economic_report = report

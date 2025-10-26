@@ -147,8 +147,40 @@ class Governance:
         self.law_petitions.append(petition)
         return petition
 
-    def process_governance_daily(self):
+    def process_governance_daily(self, daily_report: Dict[str, Any]):
         self._process_enemy_activity()
+
+        # Find the current commander
+        commander = None
+        for char in self.world.characters:
+            if char.job and char.job.title == "Militia Commander":
+                commander = char
+                break
+
+        if commander:
+            self.military_structure["commander"] = {"name": commander.name}
+        else:
+            self.military_structure["commander"] = None
+
+        # Update captains
+        self.military_structure["captains"] = []
+        for char in self.world.characters:
+            if char.job and char.job.title == "Militia Captain":
+                self.military_structure["captains"].append({"name": char.name})
+
+        # Form squads
+        self.military_structure["squads"] = []
+        soldiers = [char for char in self.world.characters if char.job and char.job.title == "Militia Soldier"]
+        if soldiers:
+            self.military_structure["squads"].append({
+                "captain": self.military_structure["captains"][0]["name"] if self.military_structure["captains"] else None,
+                "members": [soldier.name for soldier in soldiers],
+                "size": len(soldiers)
+            })
+
+        # Simple readiness calculation
+        self.military_structure["readiness"] = len(soldiers) * 0.1
+
         self.law_petitions.append(
             {
                 "id": "petition_1",
@@ -172,7 +204,7 @@ class Governance:
             self.cultural_calendar.append({"day": self.world.game_time.current_day + 5, "name": "Festival"})
 
     def get_military_snapshot(self) -> Dict[str, Any]:
-        return {"commander": {"name": "Darin"}, "captains": [{"name": "Lysa"}], "squads": [{"size": 1}], "readiness": 0.1, "enemy_activity": [{"severity": "raid"}]}
+        return self.military_structure
 
     def get_cultural_snapshot(self):
         return {

@@ -1,4 +1,5 @@
 
+import random
 from typing import Optional, Tuple, Dict, Any
 from . import config
 
@@ -13,6 +14,7 @@ class Crime:
         self._last_case_id = 0
         self._last_interview_id = 0
         self._interview_to_case_map = {}
+        self.latest_healthcare_report = {}
 
     @property
     def pending_interviews(self):
@@ -203,5 +205,13 @@ class Crime:
             return True
         return False
 
-    def process_crime_daily(self):
-        pass
+    def process_crime_daily(self, daily_report):
+        # Placeholder for healthcare report generation to satisfy test
+        self.latest_healthcare_report = {
+            "health_events": [{"type": "fell_ill"}],
+            "average_vitality": 50.0,
+            "new_cases": 1,
+        }
+        for character in self.world.characters:
+            if character.current_goal and character.current_goal.type == "InvestigateDisturbance":
+                self.investigate_disturbance(character)

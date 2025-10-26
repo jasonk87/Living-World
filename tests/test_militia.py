@@ -115,7 +115,7 @@ class TestMilitiaSystem(unittest.TestCase):
                 mock_rng.randint.return_value = 3 # loss_amount
 
                 # Run military daily process without a watchtower
-                self.world.governance.process_governance_daily()
+                self.world.governance.process_governance_daily({})
 
                 raid_entry = self.world.governance.military_structure["enemy_activity"][0]
                 self.assertEqual(raid_entry["outcome"], "breached")
@@ -147,7 +147,7 @@ class TestMilitiaSystem(unittest.TestCase):
                 mock_rng.randint.return_value = 3 # loss_amount
 
                 # Run military daily process
-                self.world.governance.process_governance_daily()
+                self.world.governance.process_governance_daily({})
 
                 raid_entry = self.world.governance.military_structure["enemy_activity"][0]
                 self.assertEqual(raid_entry["outcome"], "repelled")
