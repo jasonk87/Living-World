@@ -14,6 +14,7 @@ from game.work_order import WorkOrder
 from game.data import BLUEPRINTS, JOB_TASK_DEFINITIONS, STRUCTURE_BLUEPRINTS
 from game.job import Job
 from game.building import Building
+from game.family import Family
 from game import config
 
 import random
@@ -179,6 +180,9 @@ def tick_simulation():
             if char_to_act not in game_world.characters: continue # If character was removed (e.g. fired and despawned)
             # if hasattr(char_to_act, 'process_status_effects'): char_to_act.process_status_effects(game_world) # If status effects exist
             char_to_act.decide_action(game_world)
+            family_actions = char_to_act.evaluate_family_daily(game_world)
+            if family_actions:
+                game_world._handle_family_actions(char_to_act, family_actions)
 
         if new_day:
             day_msg = f"*** NEW DAY: Day {game_time_obj.current_day}. Weather: {game_world.weather}, Season: {game_world.season} ***"

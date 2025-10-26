@@ -1713,6 +1713,7 @@ RUMOR_PASSIVE_SUBJECT_REACTION_PENALTY = -2 # How the subject reacts when others
 HUNGER_THRESHOLD_EAT = 45 # Below this, character will try to eat
 THIRST_THRESHOLD_DRINK = 60 # Below this, characters will seek water
 ENERGY_THRESHOLD_REST = 45 # Below this, characters look for rest
+FAMILIAL_THRESHOLD_SPEND_TIME = 40
 ENERGY_THRESHOLD_FULLY_RESTED = 92 # Energy level that ends resting behavior
 ENERGY_REST_GAIN_PER_TICK = 6 # How much energy is restored per rest tick
 ENERGY_PASSIVE_RECOVERY_WHILE_IDLE = 1 # Minor energy recovered when idle and safe
@@ -1722,6 +1723,7 @@ NEED_SCORE_MAX = 100
 NEED_SAFETY_DEFAULT = 70
 NEED_BELONGING_DEFAULT = 60 # Social is primary, this is a deeper sense of community
 NEED_ESTEEM_DEFAULT = 50
+NEED_FAMILIAL_DEFAULT = 70
 
 NEED_SAFETY_DECAY_DAILY = 3
 NEED_BELONGING_DECAY_DAILY = 5 # Decays a bit faster, encouraging social upkeep

@@ -96,6 +96,7 @@ class GoalType(Enum):
     SEEK_RECOGNITION = auto() # Esteem
     IMPROVE_DWELLING = auto() # Safety
     HELP_FRIEND = auto() # Belonging / Relationship
+    SPEND_TIME_WITH_FAMILY = auto() # Familial
 
     # Noble Specific
     OVERSEE_DOMAIN = auto() # Landed Nobles

@@ -34,6 +34,7 @@ from .crime import Crime
 from .economy import Economy
 from .housing import Housing
 from .governance import Governance
+from .family import Family
 
 if TYPE_CHECKING:
     from .character import Character
@@ -1483,11 +1484,6 @@ class World:
         }
         mirror_role = mirror_map.get(canonical_role, canonical_role)
 
-        if relative_name not in subject.family_members:
-            subject.family_members.append(relative_name)
-        if subject.name not in relative.family_members:
-            relative.family_members.append(subject.name)
-
         subject.register_family_role(canonical_role, relative.name)
         relative.register_family_role(mirror_role, subject.name)
 
@@ -1510,10 +1506,6 @@ class World:
         elif canonical_role == "partners":
             subject_entry["partners"].add(relative.name)
             relative_entry["partners"].add(subject.name)
-            if hasattr(subject, "handle_union_formed"):
-                subject.handle_union_formed(self, relative.name)
-            if hasattr(relative, "handle_union_formed"):
-                relative.handle_union_formed(self, subject.name)
         else:
             subject_entry.setdefault(canonical_role, set()).add(relative.name)
             relative_entry.setdefault(mirror_role, set()).add(subject.name)
@@ -1555,11 +1547,6 @@ class World:
             "kin": "kin",
         }
         mirror_role = mirror_map.get(canonical_role, canonical_role)
-
-        if relative_name in subject.family_members:
-            subject.family_members.remove(relative_name)
-        if subject.name in relative.family_members:
-            relative.family_members.remove(subject.name)
 
         if hasattr(subject, "deregister_family_role"):
             subject.deregister_family_role(canonical_role, relative.name)
@@ -2554,6 +2541,18 @@ class World:
 
     def claim_residential_spot(self, character):
         return self.housing.claim_residential_spot(character)
+
+    def _handle_family_actions(self, character: 'Character', actions: List[Dict[str, Any]]):
+        for action in actions:
+            action_type = action.get("type")
+            if action_type == "propose_union":
+                partner_name = action.get("with")
+                partner = self.get_character_by_name(partner_name)
+                if partner:
+                    self.register_union(character.name, partner.name)
+            elif action_type == "plan_child":
+                partner_name = action.get("with")
+                self.record_birth(character.name, other_parent=partner_name)
 
     def _resolve_household_evenings(self, snapshot, report):
         return self.housing._resolve_household_evenings(snapshot, report)

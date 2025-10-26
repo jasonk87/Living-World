@@ -14,6 +14,7 @@ class Needs:
         if 'Safety' not in self.needs: self.needs['Safety'] = config.NEED_SAFETY_DEFAULT
         if 'Belonging' not in self.needs: self.needs['Belonging'] = config.NEED_BELONGING_DEFAULT
         if 'Esteem' not in self.needs: self.needs['Esteem'] = config.NEED_ESTEEM_DEFAULT
+        if 'Familial' not in self.needs: self.needs['Familial'] = config.NEED_FAMILIAL_DEFAULT
 
     def to_dict(self) -> Dict[str, int]:
         return self.needs.copy()

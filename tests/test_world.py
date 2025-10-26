@@ -1089,14 +1089,14 @@ def test_family_arrival_event_and_profile():
         personality="Brave",
         traits=[],
         skills={},
-        family_members=["Bryn"], job=Job("Unemployed", None, 0)
+        spouse="Bryn", job=Job("Unemployed", None, 0)
     )
     bryn = Character(
         name="Bryn",
         personality="Calm",
         traits=[],
         skills={},
-        family_members=["Alice"], job=Job("Unemployed", None, 0)
+        spouse="Alice", job=Job("Unemployed", None, 0)
     )
 
     world.add_character(alice)
@@ -1164,14 +1164,14 @@ def test_medical_events_populate_life_history():
         personality="Patient",
         traits=[],
         skills={},
-        family_members=["Nox"], job=Job("Unemployed", None, 0)
+        spouse="Nox", job=Job("Unemployed", None, 0)
     )
     kin = Character(
         name="Nox",
         personality="Guarded",
         traits=[],
         skills={},
-        family_members=["Mae"], job=Job("Unemployed", None, 0)
+        spouse="Mae", job=Job("Unemployed", None, 0)
     )
 
     world.add_character(patient)
@@ -1245,8 +1245,8 @@ def test_relationship_tier_change_creates_life_event():
 def test_fatal_medical_case_creates_bereavement_events():
     world, _ = _make_world()
 
-    patient = Character(name="Calla", personality="Stoic", traits=[], skills={}, family_members=["Ivor"], job=Job("Unemployed", None, 0))
-    kin = Character(name="Ivor", personality="Loyal", traits=[], skills={}, family_members=["Calla"], job=Job("Unemployed", None, 0))
+    patient = Character(name="Calla", personality="Stoic", traits=[], skills={}, children=["Ivor"], job=Job("Unemployed", None, 0))
+    kin = Character(name="Ivor", personality="Loyal", traits=[], skills={}, parents=["Calla"], job=Job("Unemployed", None, 0))
     medic = Character(name="Mae", personality="Patient", traits=[], skills={}, job=Job("Unemployed", None, 0))
 
     world.add_character(patient)

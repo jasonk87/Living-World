@@ -188,6 +188,7 @@ class Health:
             )
             life_event_logged = True
         except Exception as exc:  # noqa: BLE001
+            print(f"DEBUG: Exception in record_life_event: {exc}")
             life_event_error = f"{exc.__class__.__name__}: {exc}"
             if world and hasattr(world, "add_event_log_message"):
                 world.add_event_log_message(

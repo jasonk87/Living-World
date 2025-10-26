@@ -40,7 +40,9 @@ class Character:
                  max_inventory_items: int = 10,
                  rank: str = "Worker",
                  money: int = 10,
-                 family_members: Optional[List[str]] = None,
+                 parents: Optional[List[str]] = None,
+                 children: Optional[List[str]] = None,
+                 spouse: Optional[str] = None,
                  liege: Optional[str] = None,
                  vassals: Optional[List[str]] = None,
                  supervisor_name: Optional[str] = None,
@@ -59,7 +61,8 @@ class Character:
         self._last_business_check_day: Optional[int] = None
         self._last_wealth_evaluation_day: Optional[int] = None
         self._last_jealousy_day: Optional[int] = None
-        self.family_members: List[str] = family_members if family_members else []
+        self.spouse: Optional[str] = spouse
+        self.origin: Optional[str] = origin
         self.skills: Dict[str, Dict[str, Any]] = {}
         if skills:
             for skill_name, level_val in skills.items():
@@ -87,11 +90,11 @@ class Character:
             self.job: Optional[Job] = job
 
         self.relationships = {} # Initialize relationships first
-        self.family_roles: Dict[str, Set[str]] = {}
         self.romantic_partners: Set[str] = set()
         self.ex_partners: Set[str] = set()
-        self.children_names: Set[str] = set()
-        self.parent_names: Set[str] = set()
+        self.family_roles: Dict[str, Set[str]] = {}
+        self.children_names: Set[str] = set(children) if children else set()
+        self.parent_names: Set[str] = set(parents) if parents else set()
         self.active_romances: Dict[str, Dict[str, Any]] = {}
         self.marriage_history: List[Dict[str, Any]] = []
         self._last_family_daily_day: Optional[int] = None
@@ -100,12 +103,11 @@ class Character:
         self._romance_attempt_window: Deque[Tuple[int, str]] = deque(maxlen=10)
         self._last_romance_eval_day: Optional[int] = None
         self._last_commitment_check: Optional[int] = None
+
         if self.family_members: # Then set family scores
             for member_name in self.family_members:
                 if member_name != self.name:
                     self.relationships[member_name] = config.RELATIONSHIP_SCORE_FAMILY_BASE
-                    kin_set = self.family_roles.setdefault("kin", set())
-                    kin_set.add(member_name)
 
         # Initialize current_goal with a Goal object
         if current_goal_obj:
@@ -256,6 +258,15 @@ class Character:
 
         self.ambition: Optional[Ambition] = None
         self._last_ambition_evaluation_day: Optional[int] = None
+
+    @property
+    def family_members(self) -> Set[str]:
+        """Returns a set of all family members."""
+        members = set(self.parent_names)
+        members.update(self.children_names)
+        if self.spouse:
+            members.add(self.spouse)
+        return members
 
     def to_dict(self):
         """Converts the character object to a dictionary for serialization."""
@@ -1719,64 +1730,6 @@ class Character:
         compatibility = max(0.0, min(1.0, compatibility))
         return compatibility
 
-    def _child_desire_score(self, partner: 'Character') -> float:
-        base = getattr(config, "FAMILY_CHILD_DESIRE_BASE", 0.12)
-        personality_bonus = getattr(config, "FAMILY_CHILD_PERSONALITY_BONUS", {})
-        trait_bonus = getattr(config, "FAMILY_CHILD_TRAIT_BONUS", {})
-        base += personality_bonus.get(self.personality, 0.0)
-        base += personality_bonus.get(getattr(partner, "personality", ""), 0.0)
-        for trait in self.traits:
-            base += trait_bonus.get(trait, 0.0)
-        for trait in getattr(partner, "traits", []):
-            base += trait_bonus.get(trait, 0.0)
-        belonging = min(self.needs.get("Belonging", 0), partner.needs.get("Belonging", 0))
-        threshold = getattr(config, "FAMILY_CHILD_MIN_BELONGING", 55)
-        if belonging < threshold:
-            base -= 0.3
-        wealth_total = getattr(self, "net_worth", 0) + getattr(partner, "net_worth", 0)
-        if wealth_total > 500:
-            base += 0.05
-        elif wealth_total < 60:
-            base -= 0.05
-        if getattr(self, "retired", False) or getattr(partner, "retired", False):
-            base -= 0.05
-        return max(0.0, min(0.9, base))
-
-    def _can_plan_child_with(self, partner: 'Character', world: 'World', day: int) -> bool:
-        min_age = getattr(config, "FAMILY_CHILD_MIN_AGE", 18)
-        max_age = getattr(config, "FAMILY_CHILD_MAX_AGE", 45)
-        my_age = getattr(self, "age_years", min_age)
-        partner_age = getattr(partner, "age_years", min_age)
-        if not (min_age <= my_age <= max_age):
-            return False
-        if not (min_age <= partner_age <= max_age):
-            return False
-        cooldown = getattr(config, "FAMILY_CHILD_COOLDOWN_DAYS", 18)
-        if self._last_child_day is not None and day - self._last_child_day < cooldown:
-            return False
-        if getattr(partner, "_last_child_day", None) is not None and day - partner._last_child_day < cooldown:
-            return False
-        if getattr(self, "is_sick", False) or getattr(self, "is_injured", False):
-            return False
-        if getattr(partner, "is_sick", False) or getattr(partner, "is_injured", False):
-            return False
-        housing_requirement = getattr(config, "FAMILY_CHILD_HOUSING_REQUIREMENT", 0)
-        if housing_requirement:
-            has_home = bool(self.home_location or partner.home_location)
-            if not has_home:
-                return False
-        if self.get_relationship_score(partner.name) < getattr(config, "ROMANCE_RELATIONSHIP_THRESHOLD_TO_COMMIT", 55) // 2:
-            return False
-        if partner.get_relationship_score(self.name) < getattr(config, "ROMANCE_RELATIONSHIP_THRESHOLD_TO_COMMIT", 55) // 2:
-            return False
-        return True
-
-    def _should_plan_child(self, world: 'World', partner: 'Character', day: int) -> bool:
-        if not self._can_plan_child_with(partner, world, day):
-            return False
-        desire = self._child_desire_score(partner)
-        return random.random() < desire
-
     def _select_romance_candidate(self, world: 'World') -> Optional['Character']:
         candidates: List['Character'] = []
         threshold = getattr(config, "ROMANCE_RELATIONSHIP_THRESHOLD_TO_DATE", 25)
@@ -1919,11 +1872,17 @@ class Character:
                     "divorce": False,
                 })
                 continue
-            if self.name < partner_name and self._should_plan_child(world, other, day):
-                actions.append({
-                    "type": "plan_child",
-                    "with": partner_name,
-                })
+            family_id = world._family_lookup.get(self.name)
+            if family_id:
+                family_profile = world.family_profiles.get(family_id)
+                if family_profile:
+                    from .family import Family
+                    family = Family.from_dict(family_profile)
+                    if family.should_plan_child(world):
+                        actions.append({
+                            "type": "plan_child",
+                            "with": partner_name,
+                        })
 
         if self.is_single():
             interest = self._romance_interest_chance()
@@ -6017,6 +5976,29 @@ class Character:
                 self.add_memory(f"I am hungry (Hunger: {self.needs.get('Hunger', 100)}) and have no food. I must go to the market.")
                 self.current_goal = Goal(GoalType.SEEK_TO_BUY_ITEM, assignee_id=self.name, originator_id=self.name, parameters={"item_name": "Food"}, priority=2)
 
+        # Familial Need Check
+        if self.needs.get('Familial', config.NEED_FAMILIAL_DEFAULT) < config.FAMILIAL_THRESHOLD_SPEND_TIME and self.current_goal.type not in [GoalType.SPEND_TIME_WITH_FAMILY]:
+            # Find a family member to spend time with.
+            # Spouse is highest priority, then children, then parents.
+            family_members = []
+            if self.spouse:
+                family_members.append(self.spouse)
+            family_members.extend(list(self.children))
+            family_members.extend(list(self.parents))
+
+            if family_members:
+                target_family_member_name = random.choice(family_members)
+                target_char = world.get_character_by_name(target_family_member_name)
+                if target_char:
+                    self.add_memory(f"Feeling a need to connect with family (Familial: {self.needs.get('Familial', 0):.0f}). I will go see {target_char.name}.")
+                    self.current_goal = Goal(
+                        GoalType.SPEND_TIME_WITH_FAMILY,
+                        assignee_id=self.name,
+                        originator_id=self.name,
+                        parameters={"target_char_name": target_char.name},
+                        priority=4 # Social goals are important but not critical
+                    )
+
         # Mood-driven goal check (simple example: seek solitude if very sad/stressed)
         # This should ideally be before job-default goals but after critical needs like medical attention.
         if self.current_goal.type not in [GoalType.SEEK_MEDICAL_ATTENTION, GoalType.ASK_FOR_HELP]: # Don't override critical states
@@ -6311,6 +6293,7 @@ class Character:
         elif self.current_goal.type == GoalType.SEEK_RECOGNITION: self._execute_seek_recognition(world)
         elif self.current_goal.type == GoalType.MAKE_NEW_FRIEND: self._execute_make_new_friend(world)
         elif self.current_goal.type == GoalType.IMPROVE_DWELLING: self._execute_improve_dwelling(world)
+        elif self.current_goal.type == GoalType.SPEND_TIME_WITH_FAMILY: self._execute_spend_time_with_family(world)
 
         # Default/Fallback Behaviors
         elif self.current_goal.type == GoalType.IDLE:
@@ -6823,6 +6806,73 @@ class Character:
                 # The belonging need will be fulfilled within _execute_introduce_self.
             else:
                 self.move_towards(stranger.x, stranger.y, world)
+
+    def _execute_spend_time_with_family(self, world: 'World'):
+        if not self.current_goal or not self.current_goal.parameters or "target_char_name" not in self.current_goal.parameters:
+            self.add_memory("Wanted to spend time with family, but didn't know who to see.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        target_name = self.current_goal.parameters["target_char_name"]
+        target_char = world.get_character_by_name(target_name)
+
+        if not target_char:
+            self.add_memory(f"I wanted to see {target_name}, but I couldn't find them.")
+            self.current_goal.set_failed(reason=f"Family member {target_name} not found.")
+            self.current_goal = self.get_default_goal()
+            return
+
+        distance = abs(self.x - target_char.x) + abs(self.y - target_char.y)
+        if distance > 2:
+            self.add_memory(f"On my way to spend time with {target_name}.")
+            self.move_towards(target_char.x, target_char.y, world)
+            return
+
+        # --- At Interaction Distance with Family Member ---
+        self.add_memory(f"Spending some quality time with {target_name}.")
+
+        # 1. Generate Dialogue
+        dialogue_line_self = random.choice([
+            f"It's so good to see you, {target_name}.",
+            "How have you been?",
+            "I wanted to make sure I spent some time with you today."
+        ])
+        dialogue_line_target = random.choice([
+            f"It's wonderful to see you too, {self.name}!",
+            "I'm doing well, thank you for asking.",
+            "I'm so glad you did."
+        ])
+        dialogue_entry = {
+            "type": "spend_time_with_family",
+            "initiator": self.name,
+            "target": target_name,
+            "day": world.game_time.current_day if world.game_time else -1,
+            "dialogue_exchanges": [
+                {"speaker": self.name, "line": dialogue_line_self},
+                {"speaker": target_name, "line": dialogue_line_target}
+            ]
+        }
+        self.dialogue_history.append(dialogue_entry)
+        target_char.dialogue_history.append(dialogue_entry)
+
+        # 2. Fulfill Familial Need (significant fulfillment)
+        familial_fulfillment = 35 # A dedicated visit is very fulfilling
+        self.needs['Familial'] = min(100, self.needs.get('Familial', 0) + familial_fulfillment)
+        target_char.needs['Familial'] = min(100, target_char.needs.get('Familial', 0) + familial_fulfillment)
+        self.add_memory(f"My need to connect with family is now {self.needs['Familial']:.0f}.")
+        target_char.add_memory(f"Spending time with {self.name} was lovely. My familial need is now {target_char.needs['Familial']:.0f}.")
+
+        # 3. Boost Mood
+        self.update_mood_score(15, f"Spent quality time with {target_name}")
+        target_char.update_mood_score(15, f"Spent quality time with {self.name}")
+
+        # 4. Strengthen Relationship
+        self.modify_relationship(target_name, 5, world, reason="Spent quality time together.")
+        target_char.modify_relationship(self.name, 5, world, reason="Spent quality time together.")
+
+        # Goal is completed after one interaction
+        self.current_goal.set_completed()
+        self.current_goal = self.get_default_goal()
 
     def _execute_improve_dwelling(self, world: 'World'):
         """
@@ -7373,7 +7423,7 @@ class Character:
         """Determines the descriptive relationship tier with another character."""
         if target_char_name == self.name:
             return "Self"
-        if target_char_name in self.family_members:
+        if target_char_name in self.parent_names or target_char_name in self.children_names or target_char_name == self.spouse:
             # Family can also have scores, but "Family" tier might override or add nuance
             # For now, if explicitly family, return that. Score still matters for non-family interactions.
             return config.RELATIONSHIP_TIER_FAMILY
