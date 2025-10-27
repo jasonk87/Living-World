@@ -15,7 +15,7 @@ MAX_AGE = 80 # The maximum age a character can reach before dying of natural cau
 IMPASSABLE_TERRAINS = {"Mountain", "Water", "DeepWater", "Chasm", "Void"}
 
 # World Map Generation
-MAP_DEFAULT_SIZE = (200, 200)
+MAP_DEFAULT_SIZE = (10, 10)
 MAP_RANDOM_SEED = None  # Set to an int to make initial landscapes deterministic
 MAP_GENERATION_DISABLED = False
 MAP_RESERVED_CLEARING_RADIUS = 2
@@ -1303,6 +1303,29 @@ CAMPAIGN_PROMISE_DEADLINES = {
 CAMPAIGN_PROMISE_FAILURE_REPUTATION = -6
 MOOD_CHANGE_CAMPAIGN_PROMISE_FAILED = -12
 
+# Reputation System Configs (Basic)
+REPUTATION_SCORE_MIN = -100
+REPUTATION_SCORE_MAX = 100
+REPUTATION_CHANGE_HELPED_OTHER = 2
+REPUTATION_CHANGE_APOLOGY_ACCEPTED = 1
+REPUTATION_CHANGE_FIRED = -5
+REPUTATION_EFFECT_ON_INITIAL_RELATIONSHIP = 0.1 # e.g. 10 reputation = +1 initial relationship score
+REPUTATION_EFFECT_ON_WILLINGNESS_TO_HELP = 0.005 # e.g. 10 reputation = +0.05 to willingness chance
+REPUTATION_EFFECT_ON_GREETING = 0.05 # e.g. 10 reputation = +0.5 to relationship change
+REPUTATION_EFFECT_ON_SMALL_TALK = 0.05 # e.g. 10 reputation = +0.5 to relationship change
+
+# Reputation Tiers (Score Thresholds - lower bound for each tier)
+# Order matters for lookup (highest score first)
+REPUTATION_TIERS = [
+    ("Venerated", 80),
+    ("Respected", 50),
+    ("Upstanding", 20),
+    ("Neutral", -20),
+    ("Unsavory", -50),
+    ("Shunned", -80),
+    ("Despised", -101) # Catch-all for the lowest scores
+]
+
 # Social Interaction
 REACTIVE_SOCIAL_BASE_CHANCE = 0.05 # Base chance for reactive social interactions like offering comfort
 SOCIAL_INTERACTION_CHANCE = 0.10 # Chance per tick (if idle/wandering) to initiate a social interaction like greeting (Increased for testing)
@@ -1627,27 +1650,6 @@ FAMILY_CHILD_MIN_BELONGING = 55
 FAMILY_CHILD_COOLDOWN_DAYS = 18
 FAMILY_CHILD_HOUSING_REQUIREMENT = 1
 
-# Reputation System Configs (Basic)
-REPUTATION_SCORE_MIN = -100
-REPUTATION_SCORE_MAX = 100
-REPUTATION_CHANGE_HELPED_OTHER = 2
-REPUTATION_CHANGE_APOLOGY_ACCEPTED = 1
-REPUTATION_CHANGE_FIRED = -5
-REPUTATION_EFFECT_ON_INITIAL_RELATIONSHIP = 0.1 # e.g. 10 reputation = +1 initial relationship score
-REPUTATION_EFFECT_ON_WILLINGNESS_TO_HELP = 0.005 # e.g. 10 reputation = +0.05 to willingness chance
-
-# Reputation Tiers (Score Thresholds - lower bound for each tier)
-# Order matters for lookup (highest score first)
-REPUTATION_TIERS = [
-    ("Venerated", 80),
-    ("Respected", 50),
-    ("Upstanding", 20),
-    ("Neutral", -20),
-    ("Unsavory", -50),
-    ("Shunned", -80),
-    ("Despised", -101) # Catch-all for the lowest scores
-]
-
 # Relationship Tiers (Score Thresholds - lower bound for each tier)
 # Order matters for get_relationship_tier lookup (highest score first)
 RELATIONSHIP_TIERS = [
@@ -1692,6 +1694,7 @@ RELATIONSHIP_ASK_FOR_HELP_MODIFIERS = {
 FAMILY_RELATIONSHIP_SPLASH_FACTOR = 0.25 # How much of a relationship change is "splashed" to family members
 
 # Rumor System Configs
+RUMOR_DAILY_DECAY_RATE = 0.5
 RUMOR_STRENGTH_DECAY_DAILY = 5 # How much strength a rumor loses each day
 MIN_RUMOR_STRENGTH_TO_SPREAD = 10 # Rumor must have at least this strength to be considered for spreading
 RUMOR_MAX_STRENGTH = 100
@@ -1718,7 +1721,9 @@ FAMILIAL_THRESHOLD_SPEND_TIME = 40
 ENERGY_THRESHOLD_FULLY_RESTED = 92 # Energy level that ends resting behavior
 ENERGY_REST_GAIN_PER_TICK = 6 # How much energy is restored per rest tick
 ENERGY_PASSIVE_RECOVERY_WHILE_IDLE = 1 # Minor energy recovered when idle and safe
-HUNGER_DECAY_RATE_PER_TICK = 0.5 # How much hunger decays each tick
+DAILY_HUNGER_DECAY = 20 # How much hunger decays each day
+DAILY_THIRST_DECAY = 25 # How much thirst decays each day
+DAILY_ENERGY_DECAY = 30 # How much energy decays each day
 NEED_SCORE_MIN = 0
 NEED_SCORE_MAX = 100
 NEED_SAFETY_DEFAULT = 70

@@ -12,6 +12,7 @@ from .ledger import Ledger
 from .time import Time
 from .work_order import WorkOrder
 from .building import Building
+from .rumor import Rumor
 from .data import (
     STRUCTURE_BLUEPRINTS,
     MARKET_PRICES,
@@ -124,7 +125,9 @@ class World:
         self._feature_margin = max(1, int(getattr(config, "MAP_FEATURE_MARGIN", 2)))
         self.work_shift_definitions = deepcopy(config.WORK_SHIFT_DEFINITIONS)
         self.work_shift_backlog = {key: 0.0 for key in self.work_shift_definitions}
+        print("World init: About to generate landscape...")
         self._generate_initial_landscape()
+        print("World init: Landscape generated.")
 
 
     def add_object(self, x, y, obj):
@@ -168,15 +171,16 @@ class World:
 
     def _generate_initial_landscape(self) -> None:
         if getattr(config, "MAP_GENERATION_DISABLED", False):
+            print("MAP_GENERATION_DISABLED is True, skipping landscape generation.")
             total_tiles = self.grid_size[0] * self.grid_size[1]
             self.landscape_profile = {
                 "tiles": {"Grass": total_tiles},
                 "resources": {},
                 "reserved": 0,
             }
-            if not getattr(config, "MAP_TERRAIN_FEATURES", None):
-                return
+            return
 
+        print("MAP_GENERATION_DISABLED is False, proceeding with landscape generation.")
         self._prepare_reserved_tiles()
 
         terrain_features = getattr(config, "MAP_TERRAIN_FEATURES", None)
@@ -707,13 +711,13 @@ class World:
 
     def update_rumors_daily(self):
         """Decays strength of all rumors and removes very weak ones."""
-        if not self.rumors:
+        if not self.rumors or not self.game_time:
             return
 
         # Iterate backwards for safe removal
         for i in range(len(self.rumors) - 1, -1, -1):
             rumor = self.rumors[i]
-            rumor.decay(config.RUMOR_STRENGTH_DECAY_DAILY)
+            rumor.decay(self.game_time.current_day, config.RUMOR_DAILY_DECAY_RATE)
             if rumor.current_strength <= 0:
                 self.add_event_log_message(f"Rumor faded: {rumor.subject_char_id} - {rumor.content_key} (ID: {rumor.rumor_id[:4]})")
                 self.rumors.pop(i)
@@ -721,7 +725,148 @@ class World:
         if self.rumors:
             self._propagate_rumors_daily()
 
+    def add_rumor(self, rumor: Rumor):
+        """Adds a new rumor to the world, ensuring it's not a duplicate subject/key too recently."""
+        # Optional: Check for existing very similar rumors to avoid spam, or just let them stack/replace.
+        # For now, just add. More complex logic could check if a rumor about subject_char_id with content_key
+        # was added very recently.
+        self.rumors.append(rumor)
+        self.add_event_log_message(f"New Rumor Circulating: {rumor.subject_char_id} - {rumor.content_key} (Strength: {rumor.initial_strength})")
+        self.add_notable_event(
+            "RumorStarted",
+            {
+                "summary": f"Rumor about {rumor.subject_char_id}: {rumor.content_key}",
+                "subject": rumor.subject_char_id,
+                "strength": rumor.initial_strength,
+            },
+        )
 
+
+    def get_rumor_by_id(self, rumor_id: str) -> Optional[Rumor]:
+        """Finds a rumor in the world by its unique ID."""
+        for rumor in self.rumors:
+            if rumor.rumor_id == rumor_id:
+                return rumor
+        return None
+
+    def get_rumor_digest(self, limit: int = 8) -> List[Dict[str, Any]]:
+        if not self.rumors:
+            return []
+        sorted_rumors = sorted(self.rumors, key=lambda r: r.current_strength, reverse=True)
+        digest: List[Dict[str, Any]] = []
+        for rumor in sorted_rumors[:limit]:
+            digest.append({
+                "id": rumor.rumor_id,
+                "subject": rumor.subject_char_id,
+                "content": rumor.content_key,
+                "strength": rumor.current_strength,
+                "known_count": len(rumor.known_by_char_ids),
+                "is_positive": rumor.is_positive,
+            })
+        return digest
+
+    def _propagate_rumors_daily(self) -> None:
+        """Passively spreads strong rumors to nearby citizens to keep the social web alive."""
+        if not self.game_time or not self.characters:
+            return
+
+        attempts = getattr(config, "DAILY_RUMOR_SPREAD_ATTEMPTS", 0)
+        if attempts <= 0:
+            return
+
+        min_strength = getattr(config, "MIN_RUMOR_STRENGTH_TO_SPREAD", 0)
+        viable_rumors = [
+            rumor for rumor in sorted(self.rumors, key=lambda r: r.current_strength, reverse=True)
+            if rumor.current_strength >= min_strength
+        ]
+        if not viable_rumors:
+            return
+
+        attempts = min(attempts, len(viable_rumors))
+        for rumor in viable_rumors[:attempts]:
+            subject_char = self.get_character_by_name(rumor.subject_char_id)
+            carriers = [
+                char for char in self.characters
+                if rumor.rumor_id in getattr(char, "known_rumor_ids", set())
+            ]
+            if not carriers:
+                if subject_char:
+                    carriers.append(subject_char)
+            if not carriers:
+                continue
+
+            carrier = random.choice(carriers)
+            rumor.add_knower(carrier.name)
+
+            potential_listeners = [
+                char
+                for char in self.characters
+                if char.name != carrier.name and rumor.rumor_id not in char.known_rumor_ids
+            ]
+            if not potential_listeners:
+                continue
+
+            acquainted_listeners = [
+                char
+                for char in potential_listeners
+                if carrier.name in char.known_characters or char.name in carrier.known_characters
+            ]
+            if acquainted_listeners:
+                potential_listeners = acquainted_listeners
+
+            listener = random.choice(potential_listeners)
+            listener.known_rumor_ids.add(rumor.rumor_id)
+            rumor.add_knower(listener.name)
+            if carrier.name not in listener.known_characters:
+                listener.known_characters.append(carrier.name)
+
+            if subject_char and subject_char.name not in listener.known_characters:
+                listener.known_characters.append(subject_char.name)
+
+            listener.add_memory(
+                f"Heard a rumor about {rumor.subject_char_id} from {carrier.name}."
+            )
+            carrier.add_memory(
+                f"Rumor about {rumor.subject_char_id} reached {listener.name}."
+            )
+
+            rumor.current_strength += getattr(config, "RUMOR_SPREAD_STRENGTH_INCREASE", 0)
+            rumor.current_strength = min(rumor.current_strength, getattr(config, "RUMOR_MAX_STRENGTH", 100))
+            rumor.last_spread_day = self.game_time.current_day
+
+            # Let the listener react to the rumor's content.
+            listener._process_learned_rumor(rumor, self)
+
+            relation_delta = (
+                getattr(config, "RUMOR_PASSIVE_RELATIONSHIP_POSITIVE", 0)
+                if rumor.is_positive
+                else getattr(config, "RUMOR_PASSIVE_RELATIONSHIP_NEGATIVE", 0)
+            )
+            if relation_delta and subject_char:
+                listener.modify_relationship(
+                    subject_char.name,
+                    relation_delta,
+                    self,
+                    reason="Rumor shaped my view of them.",
+                )
+
+                subject_reaction = (
+                    getattr(config, "RUMOR_PASSIVE_SUBJECT_REACTION_BONUS", 0)
+                    if rumor.is_positive
+                    else getattr(config, "RUMOR_PASSIVE_SUBJECT_REACTION_PENALTY", 0)
+                )
+                if subject_reaction and listener.name in subject_char.known_characters:
+                    subject_char.modify_relationship(
+                        listener.name,
+                        subject_reaction,
+                        self,
+                        reason="They believed a story about me.",
+                    )
+
+            sentiment = "praises" if rumor.is_positive else "slanders"
+            self.add_event_log_message(
+                f"Rumor travels: {carrier.name} {sentiment} {rumor.subject_char_id} to {listener.name}."
+            )
 
     def __str__(self):
         # furniture_count = len(self.furniture) if hasattr(self, 'furniture') else 0
@@ -787,6 +932,10 @@ class World:
 
         tile_type = self.grid[x][y]
         if tile_type in config.IMPASSABLE_TERRAINS and not goal_override:
+            return False
+
+        building = self.get_building_at(x, y)
+        if building and not goal_override:
             return False
 
         reservation_holder = self._tile_reservations.get((x, y))
@@ -884,14 +1033,14 @@ class World:
             new_building_tiles = building.get_tiles_occupied()
             for tile_coord in new_building_tiles:
                 if not (0 <= tile_coord[0] < self.grid_size[0] and 0 <= tile_coord[1] < self.grid_size[1]):
-                    # print(f"Error: Building '{building.display_name}' at {building.location} is out of bounds.")
+                    print(f"Error: Building '{building.display_name}' at {building.location} is out of bounds.")
                     return
                 for existing_b in self.buildings:
                     if tile_coord in existing_b.get_tiles_occupied():
-                        # print(f"Error: Building '{building.display_name}' overlaps with '{existing_b.display_name}' at {tile_coord}.")
+                        print(f"Error: Building '{building.display_name}' overlaps with '{existing_b.display_name}' at {tile_coord}.")
                         return
             self.buildings.append(building)
-            # print(f"Building: {building.display_name} added at {building.location} to world model.")
+            print(f"Building: {building.display_name} added at {building.location} to world model.")
             self.map_revision += 1
 
 
@@ -1008,12 +1157,14 @@ class World:
         if not node or node["resource"] != resource_name:
             return
 
-        if node.get("depleted") or node.get("max_durability", 0) >= 999:
+        if node.get("depleted"):
             return
+
         node["durability"] = max(0, node.get("durability", 0) - amount)
+
         node.setdefault("harvested_today", 0)
         node["harvested_today"] += amount
-        if node["durability"] <= 0:
+        if node.get("durability", 0) <= 0:
             node["depleted"] = True
             node["regrowth_progress"] = 0.0
             depleted_tile = node.get("depleted_tile")
@@ -1332,7 +1483,7 @@ class World:
         if hasattr(character, "arrival_day") and character.arrival_day is None and self.game_time:
             character.arrival_day = self.game_time.current_day
         lineage_entry = self._ensure_lineage_entry(character.name)
-        for kin_name in character.family_members:
+        for kin_name in character.get_family_members():
             if not kin_name or kin_name == character.name:
                 continue
             lineage_entry.setdefault("kin", set()).add(kin_name)
@@ -1361,21 +1512,21 @@ class World:
 
     def _handle_inheritance(self, deceased_character: 'Character'):
         """Handles the transfer of assets from a deceased character to their heirs."""
-        if not deceased_character.is_deceased:
+        if not deceased_character.health.is_deceased:
             return
 
         heirs = []
         # Spouse is the primary heir
-        if deceased_character.spouse:
-            spouse_char = self.get_character_by_name(deceased_character.spouse)
-            if spouse_char and not spouse_char.is_deceased:
+        if deceased_character.spouse_name:
+            spouse_char = self.get_character_by_name(deceased_character.spouse_name)
+            if spouse_char and not spouse_char.health.is_deceased:
                 heirs.append(spouse_char)
 
         # If no spouse, children inherit
-        if not heirs and deceased_character.children:
-            for child_name in deceased_character.children:
+        if not heirs and deceased_character.children_names:
+            for child_name in deceased_character.children_names:
                 child_char = self.get_character_by_name(child_name)
-                if child_char and not child_char.is_deceased:
+                if child_char and not child_char.health.is_deceased:
                     heirs.append(child_char)
 
         # --- No Heirs ---
@@ -1805,7 +1956,7 @@ class World:
         if family_id:
             self.record_family_event(family_id, grief_event)
 
-        for kin_name in getattr(patient, "family_members", []) or []:
+        for kin_name in patient.get_family_members():
             if kin_name == patient.name:
                 continue
             kin = self.get_character_by_name(kin_name)
@@ -1926,7 +2077,9 @@ class World:
 
         adjacency: Dict[str, Set[str]] = {}
         for char in self.characters:
-            related = set(char.family_members or [])
+            related = set([name for name in (list(char.romantic_partners) + list(char.children_names) + list(char.parent_names)) if name])
+            if char.spouse_name:
+                related.add(char.spouse_name)
             related.add(char.name)
             adjacency[char.name] = related
             for relative in related:
@@ -2503,6 +2656,7 @@ class World:
         self._maybe_trigger_weather_event()
         self._recalculate_environment_effects()
         self._advance_resource_regrowth()
+        self.update_rumors_daily()
 
     def daily_environment_tick(self):
         """Processes daily updates based on game time."""
@@ -2550,7 +2704,7 @@ class World:
         self.evaluate_population_dynamics(daily_report, housing_snapshot)
 
         # Process deaths after aging and other evaluations
-        deceased_today = [char for char in self.characters if char.is_deceased]
+        deceased_today = [char for char in self.characters if char.health.is_deceased]
         if deceased_today:
             daily_report.setdefault("population_events", []).extend(
                 [{"type": "death", "name": char.name, "age": char.age_years} for char in deceased_today]
@@ -2613,8 +2767,8 @@ class World:
     def get_housing_snapshot(self):
         return self.housing.get_housing_snapshot()
 
-    def claim_residential_spot(self, character):
-        return self.housing.claim_residential_spot(character)
+    def claim_residential_spot(self, character: 'Character', preferred_tier: Optional[str] = None):
+        return self.housing.claim_residential_spot(character, preferred_tier=preferred_tier)
 
     def _handle_family_actions(self, character: 'Character', actions: List[Dict[str, Any]]):
         for action in actions:

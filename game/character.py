@@ -40,17 +40,17 @@ class Character:
                  max_inventory_items: int = 10,
                  rank: str = "Worker",
                  money: int = 10,
-                 parents: Optional[List[str]] = None,
-                 children: Optional[List[str]] = None,
-                 spouse: Optional[str] = None,
+                 family_members: Optional[List[str]] = None,
                  liege: Optional[str] = None,
                  vassals: Optional[List[str]] = None,
                  supervisor_name: Optional[str] = None,
+                 spouse_name: Optional[str] = None,
                  age: Optional[int] = None,
                  origin: Optional[str] = None,
                  citizenship: str = "Resident",
                  arrival_day: Optional[int] = None):
         self.name = name; self.personality = personality; self.traits = traits;
+        self.spouse_name = spouse_name
         self.money: int = money
         self.net_worth: int = money
         self.wealth_status: str = "modest"
@@ -61,8 +61,7 @@ class Character:
         self._last_business_check_day: Optional[int] = None
         self._last_wealth_evaluation_day: Optional[int] = None
         self._last_jealousy_day: Optional[int] = None
-        self.spouse: Optional[str] = spouse
-        self.origin: Optional[str] = origin
+        self.family_members: List[str] = family_members if family_members else []
         self.skills: Dict[str, Dict[str, Any]] = {}
         if skills:
             for skill_name, level_val in skills.items():
@@ -90,11 +89,11 @@ class Character:
             self.job: Optional[Job] = job
 
         self.relationships = {} # Initialize relationships first
+        self.family_roles: Dict[str, Set[str]] = {}
         self.romantic_partners: Set[str] = set()
         self.ex_partners: Set[str] = set()
-        self.family_roles: Dict[str, Set[str]] = {}
-        self.children_names: Set[str] = set(children) if children else set()
-        self.parent_names: Set[str] = set(parents) if parents else set()
+        self.children_names: Set[str] = set()
+        self.parent_names: Set[str] = set()
         self.active_romances: Dict[str, Dict[str, Any]] = {}
         self.marriage_history: List[Dict[str, Any]] = []
         self._last_family_daily_day: Optional[int] = None
@@ -103,11 +102,12 @@ class Character:
         self._romance_attempt_window: Deque[Tuple[int, str]] = deque(maxlen=10)
         self._last_romance_eval_day: Optional[int] = None
         self._last_commitment_check: Optional[int] = None
-
         if self.family_members: # Then set family scores
             for member_name in self.family_members:
                 if member_name != self.name:
                     self.relationships[member_name] = config.RELATIONSHIP_SCORE_FAMILY_BASE
+                    kin_set = self.family_roles.setdefault("kin", set())
+                    kin_set.add(member_name)
 
         # Initialize current_goal with a Goal object
         if current_goal_obj:
@@ -258,16 +258,6 @@ class Character:
 
         self.ambition: Optional[Ambition] = None
         self._last_ambition_evaluation_day: Optional[int] = None
-        self.is_deceased: bool = False
-
-    @property
-    def family_members(self) -> Set[str]:
-        """Returns a set of all family members."""
-        members = set(self.parent_names)
-        members.update(self.children_names)
-        if self.spouse:
-            members.add(self.spouse)
-        return members
 
     def to_dict(self):
         """Converts the character object to a dictionary for serialization."""
@@ -1514,6 +1504,15 @@ class Character:
     def get_children(self) -> List[str]:
         return sorted(self.children_names)
 
+    def get_family_members(self) -> Set[str]:
+        """Returns a set of all unique family members' names."""
+        family = set(self.family_members)
+        family.update(self.parent_names)
+        family.update(self.children_names)
+        if self.romantic_partners:
+            family.update(self.romantic_partners)
+        return family
+
     def get_parents(self) -> List[str]:
         return sorted(self.parent_names)
 
@@ -1731,6 +1730,64 @@ class Character:
         compatibility = max(0.0, min(1.0, compatibility))
         return compatibility
 
+    def _child_desire_score(self, partner: 'Character') -> float:
+        base = getattr(config, "FAMILY_CHILD_DESIRE_BASE", 0.12)
+        personality_bonus = getattr(config, "FAMILY_CHILD_PERSONALITY_BONUS", {})
+        trait_bonus = getattr(config, "FAMILY_CHILD_TRAIT_BONUS", {})
+        base += personality_bonus.get(self.personality, 0.0)
+        base += personality_bonus.get(getattr(partner, "personality", ""), 0.0)
+        for trait in self.traits:
+            base += trait_bonus.get(trait, 0.0)
+        for trait in getattr(partner, "traits", []):
+            base += trait_bonus.get(trait, 0.0)
+        belonging = min(self.needs.get("Belonging", 0), partner.needs.get("Belonging", 0))
+        threshold = getattr(config, "FAMILY_CHILD_MIN_BELONGING", 55)
+        if belonging < threshold:
+            base -= 0.3
+        wealth_total = getattr(self, "net_worth", 0) + getattr(partner, "net_worth", 0)
+        if wealth_total > 500:
+            base += 0.05
+        elif wealth_total < 60:
+            base -= 0.05
+        if getattr(self, "retired", False) or getattr(partner, "retired", False):
+            base -= 0.05
+        return max(0.0, min(0.9, base))
+
+    def _can_plan_child_with(self, partner: 'Character', world: 'World', day: int) -> bool:
+        min_age = getattr(config, "FAMILY_CHILD_MIN_AGE", 18)
+        max_age = getattr(config, "FAMILY_CHILD_MAX_AGE", 45)
+        my_age = getattr(self, "age_years", min_age)
+        partner_age = getattr(partner, "age_years", min_age)
+        if not (min_age <= my_age <= max_age):
+            return False
+        if not (min_age <= partner_age <= max_age):
+            return False
+        cooldown = getattr(config, "FAMILY_CHILD_COOLDOWN_DAYS", 18)
+        if self._last_child_day is not None and day - self._last_child_day < cooldown:
+            return False
+        if getattr(partner, "_last_child_day", None) is not None and day - partner._last_child_day < cooldown:
+            return False
+        if getattr(self, "is_sick", False) or getattr(self, "is_injured", False):
+            return False
+        if getattr(partner, "is_sick", False) or getattr(partner, "is_injured", False):
+            return False
+        housing_requirement = getattr(config, "FAMILY_CHILD_HOUSING_REQUIREMENT", 0)
+        if housing_requirement:
+            has_home = bool(self.home_location or partner.home_location)
+            if not has_home:
+                return False
+        if self.get_relationship_score(partner.name) < getattr(config, "ROMANCE_RELATIONSHIP_THRESHOLD_TO_COMMIT", 55) // 2:
+            return False
+        if partner.get_relationship_score(self.name) < getattr(config, "ROMANCE_RELATIONSHIP_THRESHOLD_TO_COMMIT", 55) // 2:
+            return False
+        return True
+
+    def _should_plan_child(self, world: 'World', partner: 'Character', day: int) -> bool:
+        if not self._can_plan_child_with(partner, world, day):
+            return False
+        desire = self._child_desire_score(partner)
+        return random.random() < desire
+
     def _select_romance_candidate(self, world: 'World') -> Optional['Character']:
         candidates: List['Character'] = []
         threshold = getattr(config, "ROMANCE_RELATIONSHIP_THRESHOLD_TO_DATE", 25)
@@ -1873,17 +1930,11 @@ class Character:
                     "divorce": False,
                 })
                 continue
-            family_id = world._family_lookup.get(self.name)
-            if family_id:
-                family_profile = world.family_profiles.get(family_id)
-                if family_profile:
-                    from .family import Family
-                    family = Family.from_dict(family_profile)
-                    if family.should_plan_child(world):
-                        actions.append({
-                            "type": "plan_child",
-                            "with": partner_name,
-                        })
+            if self.name < partner_name and self._should_plan_child(world, other, day):
+                actions.append({
+                    "type": "plan_child",
+                    "with": partner_name,
+                })
 
         if self.is_single():
             interest = self._romance_interest_chance()
@@ -2653,12 +2704,15 @@ class Character:
         path = world.find_path((self.x, self.y), target, ignore_characters={self.name})
         if not path:
             self._clear_cached_path()
+            print(f"DEBUG {self.name}: Pathfinder returned no path from ({self.x},{self.y}) to {target}.")
             return False
 
         if len(path) <= 1:
             self._cached_path = deque()
+            print(f"DEBUG {self.name}: Path found, but it's only the start point. Target reached or no move needed.")
         else:
             self._cached_path = deque(path[1:])
+            print(f"DEBUG {self.name}: New path cached: {list(self._cached_path)}")
         self._cached_path_target = target
         self._cached_path_revision = current_revision
         return bool(self._cached_path) or (self.x, self.y) == target
@@ -2674,6 +2728,7 @@ class Character:
             failure_dy = 1 if target_y > self.y else -1 if target_y < self.y else 0
             if failure_dx != 0 or failure_dy != 0:
                 self._handle_failed_move_attempt(failure_dx, failure_dy, world)
+            print(f"DEBUG {self.name}: No path found from ({self.x},{self.y}) to {target}")
             return False
 
         speed_modifier = 1.0
@@ -2695,11 +2750,14 @@ class Character:
         moved = False
         for _ in range(steps_to_take):
             if not self._cached_path:
+                print(f"DEBUG {self.name}: Ran out of path steps before reaching target.")
                 break
 
             next_step = self._cached_path[0]
+            print(f"DEBUG {self.name}: Attempting to move from ({self.x},{self.y}) to next step {next_step}. Path left: {list(self._cached_path)}")
             if not world.is_walkable(next_step[0], next_step[1], ignore_characters={self.name}):
                 self._clear_cached_path()
+                print(f"DEBUG {self.name}: Next step {next_step} is not walkable. Clearing path.")
                 failure_dx = 1 if target_x > self.x else -1 if target_x < self.x else 0
                 failure_dy = 1 if target_y > self.y else -1 if target_y < self.y else 0
                 if failure_dx != 0 or failure_dy != 0:
@@ -2710,8 +2768,10 @@ class Character:
                 self._clear_cached_path()
                 return moved and (self.x, self.y) == target
 
+            old_coords = (self.x, self.y)
             self._cached_path.popleft()
             self.x, self.y = next_step
+            world.update_character_position(self, old_coords, (self.x, self.y))
             world.release_tile(self.name)
             moved = True
 
@@ -2737,12 +2797,9 @@ class Character:
             self.add_memory(birthday_message)
             if hasattr(world, "add_event_log_message"):
                 world.add_event_log_message(f"{self.name} celebrates a birthday (age {self.age_years}).")
-            if self.age_years > config.MAX_AGE:
-                self.is_deceased = True
-                death_message = f"Died of natural causes at age {self.age_years}."
-                self.add_memory(death_message)
-                if hasattr(world, "add_event_log_message"):
-                    world.add_event_log_message(f"{self.name} has died of natural causes at age {self.age_years}.")
+
+        if self.age_years > config.MAX_AGE:
+            self.health.is_deceased = True
 
     def _apply_phase_behavior(self, world: 'World', phase_info: Optional[Dict[str, Any]]):
         """Adjust daily behavior based on the active phase schedule."""
@@ -3286,6 +3343,25 @@ class Character:
         # --- Task Completion and Yield ---
         while self.task_work_progress >= task_def.get("base_time_per_yield", 1):
             res_prod = task_def.get("resource_produced")
+            if not res_prod:
+                self.task_work_progress -= task_def.get("base_time_per_yield", 1)
+                continue
+
+            blueprint = BLUEPRINTS.get(res_prod)
+            required_resources = blueprint.get("required_resources") if blueprint else None
+
+            if required_resources:
+                can_craft = all(self.inventory.get(res, 0) >= amount for res, amount in required_resources.items())
+                if not can_craft:
+                    self.add_memory(f"Tried to craft {res_prod}, but missing resources.")
+                    self.task_work_progress = 0
+                    break
+
+                for res, amount in required_resources.items():
+                    self.inventory[res] -= amount
+                    if self.inventory[res] <= 0:
+                        del self.inventory[res]
+
             base_yield_amount = task_def.get("base_yield",1)
 
             # Trait Effect on Yield (e.g., Strong)
@@ -3909,104 +3985,142 @@ class Character:
         # If no tasks, wander
         self.current_goal = Goal(GoalType.WANDER, self.name, self.name)
         return False
-    def _handle_gathering_and_crafting_logic(self, world: 'World', item_to_craft: str, task_name: str, workshop_type: str, item_threshold: int):
+    def _handle_gathering_and_crafting_logic(self, world: 'World', item_to_craft: str, task_name: str, item_threshold: int):
         params = self.job_duty_params
         params.setdefault("phase", "gathering")
-        blueprint = BLUEPRINTS[item_to_craft]
-
-        # Determine all required resources and amounts
-        required_resources = blueprint["required_resources"]
-
-        if self.inventory.get(item_to_craft, 0) >= item_threshold:
-            params["phase"] = "delivering"
-
-        if params["phase"] == "delivering":
-            if self._deposit_resource_to_nearest_stockpile(item_to_craft, world):
-                params["phase"] = "gathering"
-                params.pop(f"_last_{item_to_craft}_count", None)
-                self.current_goal = self.get_default_goal()
-            return
-
-        # Check if all resources are present
-        all_resources_present = True
-        for resource, amount_needed in required_resources.items():
-            if self.inventory.get(resource, 0) < amount_needed:
-                all_resources_present = False
-                params["resource_to_gather"] = resource
-                break
-
-        if all_resources_present:
-            params["phase"] = "crafting"
-        else:
-            params["phase"] = "gathering"
-
-        if params["phase"] == "gathering":
-            resource_needed = params.get("resource_to_gather")
-            if not resource_needed:
-                self.current_goal = self.get_default_goal(); return
-
-            stockpiles = [sp for sp in world.get_stockpiles_for_resource(resource_needed) if sp.inventory.get(resource_needed, 0) > 0]
-            if not stockpiles:
-                self.add_memory(f"No {resource_needed} to make {item_to_craft}."); self.current_goal = self.get_default_goal(); return
-
-            target_sp = min(stockpiles, key=lambda sp: abs(sp.rect[0] - self.x) + abs(sp.rect[1] - self.y))
-            access_point = min(target_sp.access_points, key=lambda loc: abs(loc[0] - self.x) + abs(loc[1] - self.y))
-
-            if (self.x, self.y) != access_point:
-                self.move_towards(access_point[0], access_point[1], world); return
-            else:
-                can_carry = self.max_inventory_items - self.get_inventory_load()
-                amount_needed = required_resources[resource_needed]
-                # Gather enough for a few crafts to minimize trips
-                to_take = min(can_carry, amount_needed * 2)
-                if to_take > 0:
-                    _, taken = target_sp.remove_item(resource_needed, to_take)
-                    self.inventory[resource_needed] = self.inventory.get(resource_needed, 0) + taken
-            return
-
-        if params["phase"] == "crafting":
-            workshop = next((b for b in world.buildings if b.structure_type == workshop_type), None)
-            if not workshop:
-                self.add_memory(f"No {workshop_type} to work at."); self.current_goal = self.get_default_goal(); return
-
-            if (self.x, self.y) != workshop.location:
-                self.move_towards(workshop.location[0], workshop.location[1], world); return
-
-            if self._execute_generic_task(world, task_name):
-                last_count_key = f"_last_{item_to_craft}_count"
-                produced = self.inventory.get(item_to_craft, 0) - params.get(last_count_key, 0)
-                if produced > 0:
-                    for resource, amount_needed in required_resources.items():
-                        res_used = produced * amount_needed
-                        self.inventory[resource] = self.inventory.get(resource, 0) - res_used
-                        if self.inventory[resource] <= 0: del self.inventory[resource]
-                params[last_count_key] = self.inventory.get(item_to_craft, 0)
-            return
-        params.setdefault("phase", "gather")
-        deliver_threshold = max(3, min(self.max_inventory_items, 6))
-
-        if params.get("phase") == "deliver" or self.inventory.get("Food", 0) >= deliver_threshold:
-            params["phase"] = "deliver"
-            if self._deposit_resource_to_nearest_stockpile("Food", world):
-                params["phase"] = "gather"
-                self.current_goal = self.get_default_goal()
-            return
-
-        field_location = self.find_task_location("Tend Fields", world)
-        if not field_location:
-            self.add_memory("No open fields to tend today; shifting to other duties.")
+        blueprint = BLUEPRINTS.get(item_to_craft)
+        if not blueprint:
+            self.add_memory(f"Unknown blueprint for {item_to_craft}.")
             self.current_goal = self.get_default_goal()
             return
 
-        if (self.x, self.y) != field_location:
-            self.move_towards(field_location[0], field_location[1], world)
+        required_resources = blueprint["required_resources"]
+
+        print(f"DEBUG {self.name} ({self.job.title if self.job else ''}): Tick entry. Phase: {params['phase']}. Inventory: {self.inventory}")
+
+
+        # Phase transitions
+        if self.inventory.get(item_to_craft, 0) >= item_threshold:
+            print(f"DEBUG {self.name}: Met threshold for {item_to_craft}. Switching to delivering.")
+            params["phase"] = "delivering"
+
+        has_resources_for_one_craft = all(
+            self.inventory.get(res, 0) >= amount
+            for res, amount in required_resources.items()
+        )
+
+        if params["phase"] == "gathering":
+            missing_resources = [res for res, amount in required_resources.items() if self.inventory.get(res, 0) < amount]
+            if not missing_resources:
+                print(f"DEBUG {self.name}: All resources gathered for at least one craft. Switching to crafting.")
+                params["phase"] = "crafting"
+            elif self.get_inventory_load() >= self.max_inventory_items and has_resources_for_one_craft:
+                print(f"DEBUG {self.name}: Inventory full but has resources for one craft. Switching to crafting.")
+                params["phase"] = "crafting"
+
+        if params["phase"] == "crafting" and not has_resources_for_one_craft:
+            print(f"DEBUG {self.name}: In crafting phase but missing resources. Switching back to gathering.")
+            params["phase"] = "gathering"
+
+        # Execution
+        if params["phase"] == "delivering":
+            print(f"DEBUG {self.name}: Executing delivering phase.")
+            if self._deposit_resource_to_nearest_stockpile(item_to_craft, world):
+                print(f"DEBUG {self.name}: Delivering complete. Resetting to gathering.")
+                params["phase"] = "gathering"
+                self.job_duty_params.pop("gathering_resource_idx", None) # Reset for next gathering cycle
+                self.current_goal = self.get_default_goal()
             return
 
-        if not self._execute_generic_task(world, "Tend Fields"):
+        if params["phase"] == "gathering":
+            # Determine what's needed for a batch (e.g., 2 crafts)
+            needed_for_batch = {res: amount * 2 for res, amount in required_resources.items()}
+            missing_resources = {res: amount - self.inventory.get(res, 0) for res, amount in needed_for_batch.items() if self.inventory.get(res, 0) < amount}
+
+            print(f"DEBUG {self.name}: Executing gathering phase. Missing for batch: {missing_resources}")
+
+
+            if not missing_resources:
+                print(f"DEBUG {self.name}: No missing resources for batch. Switching to crafting.")
+                params["phase"] = "crafting"
+                return
+
+            # Cycle through missing resources
+            resource_keys = sorted(missing_resources.keys())
+            current_idx = params.get("gathering_resource_idx", 0) % len(resource_keys)
+            resource_to_gather = resource_keys[current_idx]
+
+            print(f"DEBUG {self.name}: Selected resource to gather: {resource_to_gather}")
+
+
+            if self.get_inventory_load() >= self.max_inventory_items:
+                print(f"DEBUG {self.name}: Inventory full. Switching to crafting.")
+                params["phase"] = "crafting"
+                return
+
+            stockpiles = [sp for sp in world.get_stockpiles_for_resource(resource_to_gather) if sp.inventory.get(resource_to_gather, 0) > 0]
+            if not stockpiles:
+                self.add_memory(f"No {resource_to_gather} in any stockpile to craft {item_to_craft}.")
+                params["gathering_resource_idx"] = (current_idx + 1) % len(resource_keys)
+                return
+
+            target_sp = min(stockpiles, key=lambda sp: min(abs(pt[0] - self.x) + abs(pt[1] - self.y) for pt in sp.access_points))
+            access_point = min(target_sp.access_points, key=lambda loc: abs(loc[0] - self.x) + abs(loc[1] - self.y))
+
+            if (self.x, self.y) != access_point:
+                print(f"DEBUG {self.name}: Moving to stockpile at {access_point} to get {resource_to_gather}.")
+                self.move_towards(access_point[0], access_point[1], world)
+                return
+
+            # Smart gathering: leave space for other ingredients
+            can_carry = self.max_inventory_items - self.get_inventory_load()
+            other_missing_resources_total = sum(amount for res, amount in missing_resources.items() if res != resource_to_gather)
+            space_to_leave = min(can_carry, other_missing_resources_total)
+
+            amount_to_take = max(1, can_carry - space_to_leave)
+            print(f"DEBUG {self.name}: At stockpile. Can carry: {can_carry}, Leaving space: {space_to_leave}, Taking: {amount_to_take} of {resource_to_gather}")
+
+
+            _, taken = target_sp.remove_item(resource_to_gather, amount_to_take)
+            if taken > 0:
+                self.inventory[resource_to_gather] = self.inventory.get(resource_to_gather, 0) + taken
+
+            params["gathering_resource_idx"] = (current_idx + 1) % len(resource_keys)
             return
 
-        if self.inventory.get("Food", 0) >= deliver_threshold:
-            params["phase"] = "deliver"
+        if params["phase"] == "crafting":
+            print(f"DEBUG {self.name}: Executing crafting phase.")
+            task_def = JOB_TASK_DEFINITIONS.get(task_name)
+            required_building_type = task_def.get("required_building") if task_def else None
+
+            print(f"DEBUG {self.name}: Task '{task_name}' requires building '{required_building_type}'.")
+            print(f"DEBUG {self.name}: Checking world buildings: {[b.structure_type for b in world.buildings if b.is_operational]}")
+
+
+            workshop = None
+            if required_building_type:
+                workshop = next((b for b in world.buildings if b.is_operational and b.structure_type == required_building_type), None)
+                print(f"DEBUG {self.name}: Workshop search result for '{required_building_type}': {'Found' if workshop else 'Not Found'}")
+
+
+                if not workshop:
+                    self.add_memory(f"No operational {required_building_type} to work at.")
+                    self.current_goal = self.get_default_goal()
+                    return
+
+                if (self.x, self.y) != workshop.location:
+                    print(f"DEBUG {self.name}: Moving to workshop at {workshop.location}.")
+                    self.move_towards(workshop.location[0], workshop.location[1], world)
+                    return
+
+            if not has_resources_for_one_craft:
+                self.add_memory(f"Came to craft {item_to_craft}, but I'm missing resources. Going back to gather.")
+                params["phase"] = "gathering"
+                self.job_duty_params.pop("gathering_resource_idx", None)
+                return
+
+            print(f"DEBUG {self.name}: At workshop. Crafting {item_to_craft}.")
+            self._execute_generic_task(world, task_name)
 
     def _execute_perform_hunter_duties(self, world: 'World'):
         if not self.job or self.job.title != "Hunter":
@@ -4098,17 +4212,17 @@ class Character:
     def _execute_perform_sawyer_duties(self, world: 'World'):
         if not self.job or self.job.title != "Sawyer":
             self.current_goal = self.get_default_goal(); return
-        self._handle_gathering_and_crafting_logic(world, "Lumber", "Saw Lumber", "sawmill", 4)
+        self._handle_gathering_and_crafting_logic(world, "Lumber", "Saw Lumber", 4)
 
     def _execute_perform_carpenter_duties(self, world: 'World'):
         if not self.job or self.job.title != "Carpenter":
             self.current_goal = self.get_default_goal(); return
-        self._handle_gathering_and_crafting_logic(world, "Furniture", "Craft Furniture", "carpenters_shop", 2)
+        self._handle_gathering_and_crafting_logic(world, "Furniture", "Craft Furniture", 2)
 
     def _execute_perform_smelter_duties(self, world: 'World'):
         if not self.job or self.job.title != "Smelter":
             self.current_goal = self.get_default_goal(); return
-        self._handle_gathering_and_crafting_logic(world, "Iron Ingot", "Smelt Iron Ingot", "smelter_workshop", 4)
+        self._handle_gathering_and_crafting_logic(world, "Iron Ingot", "Smelt Iron Ingot", 4)
 
     def _execute_perform_blacksmith_duties(self, world: 'World'):
         if not self.job or self.job.title != "Blacksmith":
@@ -4125,7 +4239,7 @@ class Character:
 
         task_name = "Forge Iron Axe" if item_to_craft == "Iron Axe" else "Forge Iron Pickaxe"
 
-        self._handle_gathering_and_crafting_logic(world, item_to_craft, task_name, "blacksmith_workshop", 2)
+        self._handle_gathering_and_crafting_logic(world, item_to_craft, task_name, 2)
 
     def _execute_initiate_hauling(self, world: 'World'):
         # Parameters should be in self.current_goal.parameters
@@ -5983,29 +6097,6 @@ class Character:
                 self.add_memory(f"I am hungry (Hunger: {self.needs.get('Hunger', 100)}) and have no food. I must go to the market.")
                 self.current_goal = Goal(GoalType.SEEK_TO_BUY_ITEM, assignee_id=self.name, originator_id=self.name, parameters={"item_name": "Food"}, priority=2)
 
-        # Familial Need Check
-        if self.needs.get('Familial', config.NEED_FAMILIAL_DEFAULT) < config.FAMILIAL_THRESHOLD_SPEND_TIME and self.current_goal.type not in [GoalType.SPEND_TIME_WITH_FAMILY]:
-            # Find a family member to spend time with.
-            # Spouse is highest priority, then children, then parents.
-            family_members = []
-            if self.spouse:
-                family_members.append(self.spouse)
-            family_members.extend(list(self.children_names))
-            family_members.extend(list(self.parent_names))
-
-            if family_members:
-                target_family_member_name = random.choice(family_members)
-                target_char = world.get_character_by_name(target_family_member_name)
-                if target_char:
-                    self.add_memory(f"Feeling a need to connect with family (Familial: {self.needs.get('Familial', 0):.0f}). I will go see {target_char.name}.")
-                    self.current_goal = Goal(
-                        GoalType.SPEND_TIME_WITH_FAMILY,
-                        assignee_id=self.name,
-                        originator_id=self.name,
-                        parameters={"target_char_name": target_char.name},
-                        priority=4 # Social goals are important but not critical
-                    )
-
         # Mood-driven goal check (simple example: seek solitude if very sad/stressed)
         # This should ideally be before job-default goals but after critical needs like medical attention.
         if self.current_goal.type not in [GoalType.SEEK_MEDICAL_ATTENTION, GoalType.ASK_FOR_HELP]: # Don't override critical states
@@ -6300,7 +6391,6 @@ class Character:
         elif self.current_goal.type == GoalType.SEEK_RECOGNITION: self._execute_seek_recognition(world)
         elif self.current_goal.type == GoalType.MAKE_NEW_FRIEND: self._execute_make_new_friend(world)
         elif self.current_goal.type == GoalType.IMPROVE_DWELLING: self._execute_improve_dwelling(world)
-        elif self.current_goal.type == GoalType.SPEND_TIME_WITH_FAMILY: self._execute_spend_time_with_family(world)
 
         # Default/Fallback Behaviors
         elif self.current_goal.type == GoalType.IDLE:
@@ -6813,73 +6903,6 @@ class Character:
                 # The belonging need will be fulfilled within _execute_introduce_self.
             else:
                 self.move_towards(stranger.x, stranger.y, world)
-
-    def _execute_spend_time_with_family(self, world: 'World'):
-        if not self.current_goal or not self.current_goal.parameters or "target_char_name" not in self.current_goal.parameters:
-            self.add_memory("Wanted to spend time with family, but didn't know who to see.")
-            self.current_goal = self.get_default_goal()
-            return
-
-        target_name = self.current_goal.parameters["target_char_name"]
-        target_char = world.get_character_by_name(target_name)
-
-        if not target_char:
-            self.add_memory(f"I wanted to see {target_name}, but I couldn't find them.")
-            self.current_goal.set_failed(reason=f"Family member {target_name} not found.")
-            self.current_goal = self.get_default_goal()
-            return
-
-        distance = abs(self.x - target_char.x) + abs(self.y - target_char.y)
-        if distance > 2:
-            self.add_memory(f"On my way to spend time with {target_name}.")
-            self.move_towards(target_char.x, target_char.y, world)
-            return
-
-        # --- At Interaction Distance with Family Member ---
-        self.add_memory(f"Spending some quality time with {target_name}.")
-
-        # 1. Generate Dialogue
-        dialogue_line_self = random.choice([
-            f"It's so good to see you, {target_name}.",
-            "How have you been?",
-            "I wanted to make sure I spent some time with you today."
-        ])
-        dialogue_line_target = random.choice([
-            f"It's wonderful to see you too, {self.name}!",
-            "I'm doing well, thank you for asking.",
-            "I'm so glad you did."
-        ])
-        dialogue_entry = {
-            "type": "spend_time_with_family",
-            "initiator": self.name,
-            "target": target_name,
-            "day": world.game_time.current_day if world.game_time else -1,
-            "dialogue_exchanges": [
-                {"speaker": self.name, "line": dialogue_line_self},
-                {"speaker": target_name, "line": dialogue_line_target}
-            ]
-        }
-        self.dialogue_history.append(dialogue_entry)
-        target_char.dialogue_history.append(dialogue_entry)
-
-        # 2. Fulfill Familial Need (significant fulfillment)
-        familial_fulfillment = 35 # A dedicated visit is very fulfilling
-        self.needs['Familial'] = min(100, self.needs.get('Familial', 0) + familial_fulfillment)
-        target_char.needs['Familial'] = min(100, target_char.needs.get('Familial', 0) + familial_fulfillment)
-        self.add_memory(f"My need to connect with family is now {self.needs['Familial']:.0f}.")
-        target_char.add_memory(f"Spending time with {self.name} was lovely. My familial need is now {target_char.needs['Familial']:.0f}.")
-
-        # 3. Boost Mood
-        self.update_mood_score(15, f"Spent quality time with {target_name}")
-        target_char.update_mood_score(15, f"Spent quality time with {self.name}")
-
-        # 4. Strengthen Relationship
-        self.modify_relationship(target_name, 5, world, reason="Spent quality time together.")
-        target_char.modify_relationship(self.name, 5, world, reason="Spent quality time together.")
-
-        # Goal is completed after one interaction
-        self.current_goal.set_completed()
-        self.current_goal = self.get_default_goal()
 
     def _execute_improve_dwelling(self, world: 'World'):
         """
@@ -7430,7 +7453,7 @@ class Character:
         """Determines the descriptive relationship tier with another character."""
         if target_char_name == self.name:
             return "Self"
-        if target_char_name in self.parent_names or target_char_name in self.children_names or target_char_name == self.spouse:
+        if target_char_name in self.family_members:
             # Family can also have scores, but "Family" tier might override or add nuance
             # For now, if explicitly family, return that. Score still matters for non-family interactions.
             return config.RELATIONSHIP_TIER_FAMILY
@@ -7896,7 +7919,7 @@ class Character:
             return
 
         item_name = self.current_goal.parameters["item_name"]
-        price = world.get_market_price(item_name) if hasattr(world, "get_market_price") else world.market_prices.get(item_name)
+        price = world.economy.get_market_price(item_name)
 
         if price is None:
             self.add_memory(f"Wanted to buy {item_name}, but it's not sold at the market.")

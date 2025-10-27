@@ -255,24 +255,24 @@ JOB_TASK_DEFINITIONS = {
         "base_time_per_yield": 6
     },
     "Smelt Iron Ingot": {
-        "required_tool_type": None, # Requires a forge/smelter building, not a hand tool
-        "required_building": "smelting",
+        "required_tool_type": None,
+        "required_building": "smelter_workshop",
         "skill_used": "Smelting",
         "resource_produced": "Iron Ingot",
         "base_yield": 1,
         "base_time_per_yield": 8
     },
     "Forge Iron Axe": {
-        "required_tool_type": "Hammer", # Blacksmith hammer
-        "required_building": "blacksmithing",
+        "required_tool_type": "Hammer",
+        "required_building": "blacksmith_workshop",
         "skill_used": "Blacksmithing",
         "resource_produced": "Iron Axe",
         "base_yield": 1,
         "base_time_per_yield": 15
     },
     "Forge Iron Pickaxe": {
-        "required_tool_type": "Hammer", # Blacksmith hammer
-        "required_building": "blacksmithing",
+        "required_tool_type": "Hammer",
+        "required_building": "blacksmith_workshop",
         "skill_used": "Blacksmithing",
         "resource_produced": "Iron Pickaxe",
         "base_yield": 1,
@@ -281,22 +281,22 @@ JOB_TASK_DEFINITIONS = {
     "Saw Lumber": {
         "required_tool_type": "Saw",
         "required_building": "sawmill",
-        "skill_used": "Carpentry",
+        "skill_used": "Woodworking",
         "resource_produced": "Lumber",
         "base_yield": 1,
         "base_time_per_yield": 5,
     },
     "Craft Furniture": {
         "required_tool_type": "Hammer",
-        "required_building": "carpentry",
-        "skill_used": "Carpentry",
+        "required_building": "carpenters_shop",
+        "skill_used": "Woodworking",
         "resource_produced": "Furniture",
         "base_yield": 1,
         "base_time_per_yield": 12,
     },
     "Craft Wooden Sword": {
         "required_tool_type": "Saw",
-        "required_building": "carpentry",
+        "required_building": "carpenters_shop",
         "skill_used": "Woodworking",
         "resource_produced": "Wooden Sword",
         "base_yield": 1,
@@ -624,7 +624,7 @@ STRUCTURE_BLUEPRINTS = {
             {"name": "Main Saw Assembly", "work_required": 60, "map_char_during": "s"},
             {"name": "Roofing", "work_required": 30, "map_char_during": "^"}
         ],
-        "functionality": {"allows_crafting_category": ["sawmill"], "tags": ["indoor", "workshop", "woodworking"]},
+        "functionality": {"allows_crafting_category": ["woodworking"], "tags": ["indoor", "workshop", "woodworking"]},
         "required_skill": {"Construction": 2},
         "map_char_initial": ".",
         "map_char_complete": "S"
@@ -638,7 +638,7 @@ STRUCTURE_BLUEPRINTS = {
             {"name": "Furnace Construction", "work_required": 50, "map_char_during": "s"},
             {"name": "Finishing Touches", "work_required": 25, "map_char_during": "S"}
         ],
-        "functionality": {"allows_crafting_category": ["smelting"], "tags": ["indoor", "workshop", "metalworking"]},
+        "functionality": {"allows_crafting_category": ["metallurgy"], "tags": ["indoor", "workshop", "metalworking"]},
         "required_skill": {"Construction": 3},
         "map_char_initial": ".",
         "map_char_complete": "S"
@@ -666,7 +666,7 @@ STRUCTURE_BLUEPRINTS = {
             {"name": "Workshop Setup", "work_required": 50, "map_char_during": "c"},
             {"name": "Finishing Touches", "work_required": 25, "map_char_during": "C"}
         ],
-        "functionality": {"allows_crafting_category": ["carpentry"], "tags": ["indoor", "workshop", "woodworking"]},
+        "functionality": {"allows_crafting_category": ["woodworking"], "tags": ["indoor", "workshop", "woodworking"]},
         "required_skill": {"Construction": 3},
         "map_char_initial": ".",
         "map_char_complete": "C"

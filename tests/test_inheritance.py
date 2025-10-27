@@ -28,8 +28,8 @@ def test_character_death_and_inheritance():
     # Create a spouse
     spouse = Character(name="Spouse", age=30, skills={}, personality="reserved", traits=["honest"])
     world.add_character(spouse)
-    parent.spouse = spouse.name
-    spouse.spouse = parent.name
+    parent.spouse_name = spouse.name
+    spouse.spouse_name = parent.name
 
     # Create a business for the parent
     business = world.launch_business(parent)
@@ -38,7 +38,7 @@ def test_character_death_and_inheritance():
 
     # Advance age to trigger death
     parent.advance_age(world)
-    assert parent.is_deceased, f"Character should be deceased at age {parent.age_years}"
+    assert parent.health.is_deceased, f"Character should be deceased at age {parent.age_years}"
 
     # Process population to handle death and inheritance
     world.process_population_daily({})

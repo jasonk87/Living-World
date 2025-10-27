@@ -190,6 +190,15 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Utility Helpers ---
     const getTileSize = () => parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--tile-size')) || 48;
 
+    function toKebabCase(str) {
+        if (!str) return '';
+        const s = String(str);
+        return s
+            .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+            .replace(/([A-Z])([A-Z][a-z])/g, '$1-$2')
+            .toLowerCase();
+    }
+
     function isTypingContext(element) {
         if (!element) return false;
         const tagName = element.tagName;
@@ -369,6 +378,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (typeof character.thirst === 'number' && character.thirst < 40) statusFlags.push('Thirsty');
         const statusSignature = statusFlags.join(',');
         const jobTitle = (character.job && character.job.title) || 'Unassigned';
+        const reputationTier = typeof character.reputation_tier === 'string' ? character.reputation_tier : 'Neutral';
         const signature = [
             jobTitle,
             goal,
@@ -376,13 +386,13 @@ document.addEventListener('DOMContentLoaded', () => {
             character.y,
             loadText,
             statusSignature,
+            reputationTier,
         ].join('|');
 
         if (card.dataset.signature !== signature) {
             const statusLine = statusFlags.length
                 ? `<small class="status-flags">${statusFlags.join(' • ')}</small>`
                 : '';
-            const reputationTier = character.reputation_tier || 'Neutral';
             card.dataset.signature = signature;
             card.innerHTML = `
                 <strong>${character.name}</strong>
@@ -2816,8 +2826,8 @@ function buildCareerContent(character) {
         const jobTitle = character.job && character.job.title ? character.job.title : 'Unemployed';
         const stageLabel = character.career_stage ? ` • ${character.career_stage}` : '';
         const satisfactionLabel = formatSatisfaction(character.job_satisfaction);
-        const reputationLabel = character.reputation ?? '—';
-        const reputationTier = character.reputation_tier || 'Neutral';
+        const reputationLabel = character.reputation_score ?? '—';
+    const reputationTier = character.reputation_tier || 'Neutral';
         header.innerHTML = `
             <h3>${character.name}</h3>
             <p>${jobTitle}${stageLabel} • Reputation ${reputationLabel} <span class="reputation-tier reputation-${reputationTier.toLowerCase()}">${reputationTier}</span> • Satisfaction ${satisfactionLabel}</p>
@@ -2917,7 +2927,7 @@ function buildCareerContent(character) {
                 if (tileName) {
                     const safeName = String(tileName);
                     cellEl.classList.add('tile-chip');
-                    cellEl.classList.add(`tile-${safeName}`);
+                    cellEl.classList.add(`tile-${toKebabCase(safeName)}`);
                     cellEl.textContent = abbreviateTileName(safeName);
                     cellEl.title = safeName.replace(/([a-z])([A-Z])/g, '$1 $2');
                 } else {
@@ -3162,7 +3172,7 @@ function buildCareerContent(character) {
                     if (previousClass) {
                         cell.classList.remove(previousClass);
                     }
-                    const tileClass = `tile-${tileType.replace(/\s+/g, '-')}`;
+                    const tileClass = `tile-${toKebabCase(tileType)}`;
                     cell.classList.add(tileClass);
                     cell.dataset.terrainClass = tileClass;
                     mapTerrainCache[index] = tileType;
@@ -3404,7 +3414,7 @@ function buildCareerContent(character) {
                 characterMarkers.set(character.name, marker);
             }
 
-            marker.dataset.job = character.job || 'Unassigned';
+            marker.dataset.job = toKebabCase(character.job || 'Unassigned');
             marker.dataset.name = character.name;
             marker.textContent = character.name.charAt(0).toUpperCase();
             marker.title = `${character.name} (${character.job || 'Unassigned'})`;

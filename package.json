@@ -25,5 +25,11 @@
   "bugs": {
     "url": "https://github.com/jasonk87/Living-World/issues"
   },
-  "homepage": "https://github.com/jasonk87/Living-World#readme"
+  "homepage": "https://github.com/jasonk87/Living-World#readme",
+  "devDependencies": {
+    "eslint": "^9.38.0",
+    "htmlhint": "^1.7.1",
+    "stylelint": "^16.25.0",
+    "stylelint-config-standard": "^39.0.1"
+  }
 }

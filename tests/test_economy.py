@@ -28,17 +28,17 @@ def _basic_needs() -> dict[str, int]:
 
 # Test for Miner
 def test_miner_job(world):
-    miner = Character(name="Test Miner", personality="test", traits=[], skills={}, job="Miner", x=0, y=0, needs=_basic_needs())
+    miner = Character(name="Test Miner", personality="test", traits=[], skills={}, job="Miner", x=2, y=2, needs=_basic_needs())
     miner.inventory["Iron Pickaxe"] = 1
     miner.equip_tool("Iron Pickaxe")
     world.add_character(miner)
     world.add_resource("Iron Ore", (5, 5), durability=100)
-    stockpile = Stockpile("main_stockpile", 2, 2, 1, 1, allowed_resources=["Iron Ore"])
+    stockpile = Stockpile("main_stockpile", 8, 8, 1, 1, allowed_resources=["Iron Ore"])
     world.add_stockpile(stockpile)
 
     # Add a residential building for the character to rest
     hut_blueprint = STRUCTURE_BLUEPRINTS["wooden_hut"]
-    hut = Building(structure_type="wooden_hut", location=(1, 1), **hut_blueprint)
+    hut = Building(structure_type="wooden_hut", location=(0, 1), **hut_blueprint)
     hut.is_operational = True
     world.add_building(hut)
 
@@ -50,20 +50,20 @@ def test_miner_job(world):
 
 # Test for Smelter
 def test_smelter_job(world):
-    smelter = Character(name="Test Smelter", personality="test", traits=[], skills={}, job="Smelter", x=0, y=0, needs=_basic_needs())
+    smelter = Character(name="Test Smelter", personality="test", traits=[], skills={}, job="Smelter", x=2, y=2, needs=_basic_needs())
     world.add_character(smelter)
     blueprint = STRUCTURE_BLUEPRINTS["smelter_workshop"]
-    building = Building(structure_type="smelter_workshop", location=(6, 6), **blueprint)
+    building = Building(structure_type="smelter_workshop", location=(0, 5), **blueprint)
     building.is_operational = True
     world.add_building(building)
 
-    stockpile = Stockpile("main_stockpile", 2, 2, 1, 1, allowed_resources=["Iron Ore", "Iron Ingot"])
+    stockpile = Stockpile("main_stockpile", 5, 5, 1, 1, allowed_resources=["Iron Ore", "Iron Ingot"])
     stockpile.add_item("Iron Ore", 10)
     world.add_stockpile(stockpile)
 
     # Add a residential building for the character to rest
     hut_blueprint = STRUCTURE_BLUEPRINTS["wooden_hut"]
-    hut = Building(structure_type="wooden_hut", location=(1, 1), **hut_blueprint)
+    hut = Building(structure_type="wooden_hut", location=(0, 1), **hut_blueprint)
     hut.is_operational = True
     world.add_building(hut)
 
@@ -74,23 +74,23 @@ def test_smelter_job(world):
 
 # Test for Blacksmith
 def test_blacksmith_job(world):
-    blacksmith = Character(name="Test Blacksmith", personality="test", traits=[], skills={}, job="Blacksmith", x=0, y=0, needs=_basic_needs())
+    blacksmith = Character(name="Test Blacksmith", personality="test", traits=[], skills={}, job="Blacksmith", x=2, y=2, needs=_basic_needs())
     blacksmith.inventory["Hammer"] = 1
     blacksmith.equip_tool("Hammer")
     world.add_character(blacksmith)
     blueprint = STRUCTURE_BLUEPRINTS["blacksmith_workshop"]
-    building = Building(structure_type="blacksmith_workshop", location=(7, 7), **blueprint)
+    building = Building(structure_type="blacksmith_workshop", location=(0, 5), **blueprint)
     building.is_operational = True
     world.add_building(building)
 
-    stockpile = Stockpile("main_stockpile", 2, 2, 1, 1, allowed_resources=["Iron Ingot", "Wood", "Iron Axe", "Iron Pickaxe"])
+    stockpile = Stockpile("main_stockpile", 5, 5, 1, 1, allowed_resources=["Iron Ingot", "Wood", "Iron Axe", "Iron Pickaxe"])
     stockpile.add_item("Iron Ingot", 10)
     stockpile.add_item("Wood", 10)
     world.add_stockpile(stockpile)
 
     # Add a residential building for the character to rest
     hut_blueprint = STRUCTURE_BLUEPRINTS["wooden_hut"]
-    hut = Building(structure_type="wooden_hut", location=(1, 1), **hut_blueprint)
+    hut = Building(structure_type="wooden_hut", location=(0, 1), **hut_blueprint)
     hut.is_operational = True
     world.add_building(hut)
 
@@ -102,22 +102,22 @@ def test_blacksmith_job(world):
 
 # Test for Sawyer
 def test_sawyer_job(world):
-    sawyer = Character(name="Test Sawyer", personality="test", traits=[], skills={}, job="Sawyer", x=0, y=0, needs=_basic_needs())
+    sawyer = Character(name="Test Sawyer", personality="test", traits=[], skills={}, job="Sawyer", x=2, y=2, needs=_basic_needs())
     sawyer.inventory["Saw"] = 1
     sawyer.equip_tool("Saw")
     world.add_character(sawyer)
     blueprint = STRUCTURE_BLUEPRINTS["sawmill"]
-    building = Building(structure_type="sawmill", location=(8, 8), **blueprint)
+    building = Building(structure_type="sawmill", location=(0, 5), **blueprint)
     building.is_operational = True
     world.add_building(building)
 
-    stockpile = Stockpile("main_stockpile", 2, 2, 1, 1, allowed_resources=["Wood", "Lumber"])
+    stockpile = Stockpile("main_stockpile", 5, 5, 1, 1, allowed_resources=["Wood", "Lumber"])
     stockpile.add_item("Wood", 10)
     world.add_stockpile(stockpile)
 
     # Add a residential building for the character to rest
     hut_blueprint = STRUCTURE_BLUEPRINTS["wooden_hut"]
-    hut = Building(structure_type="wooden_hut", location=(1, 1), **hut_blueprint)
+    hut = Building(structure_type="wooden_hut", location=(0, 1), **hut_blueprint)
     hut.is_operational = True
     world.add_building(hut)
 
@@ -128,23 +128,23 @@ def test_sawyer_job(world):
 
 # Test for Carpenter
 def test_carpenter_job(world):
-    carpenter = Character(name="Test Carpenter", personality="test", traits=[], skills={}, job="Carpenter", x=0, y=0, needs=_basic_needs())
+    carpenter = Character(name="Test Carpenter", personality="test", traits=[], skills={}, job="Carpenter", x=2, y=2, needs=_basic_needs())
     carpenter.inventory["Hammer"] = 1
     carpenter.equip_tool("Hammer")
     world.add_character(carpenter)
     blueprint = STRUCTURE_BLUEPRINTS["carpenters_shop"]
-    building = Building(structure_type="carpenters_shop", location=(9, 9), **blueprint)
+    building = Building(structure_type="carpenters_shop", location=(0, 5), **blueprint)
     building.is_operational = True
     world.add_building(building)
 
-    stockpile = Stockpile("main_stockpile", 2, 2, 1, 1, allowed_resources=["Lumber", "Iron Ingot", "Furniture"])
+    stockpile = Stockpile("main_stockpile", 5, 5, 1, 1, allowed_resources=["Lumber", "Iron Ingot", "Furniture"])
     stockpile.add_item("Lumber", 10)
     stockpile.add_item("Iron Ingot", 10)
     world.add_stockpile(stockpile)
 
     # Add a residential building for the character to rest
     hut_blueprint = STRUCTURE_BLUEPRINTS["wooden_hut"]
-    hut = Building(structure_type="wooden_hut", location=(1, 1), **hut_blueprint)
+    hut = Building(structure_type="wooden_hut", location=(0, 1), **hut_blueprint)
     hut.is_operational = True
     world.add_building(hut)
 
@@ -156,26 +156,26 @@ def test_carpenter_job(world):
 def test_work_order_creation_and_assignment(world):
     from game.work_order import WorkOrder
     # Add a Carpenter to the world
-    carpenter = Character(name="Test Carpenter", personality="test", traits=[], skills={}, job="Carpenter", x=0, y=0, needs=_basic_needs())
+    carpenter = Character(name="Test Carpenter", personality="test", traits=[], skills={}, job="Carpenter", x=2, y=2, needs=_basic_needs())
     carpenter.inventory["Hammer"] = 1
     carpenter.equip_tool("Hammer")
     world.add_character(carpenter)
 
     # Add a Carpenter's shop
     blueprint = STRUCTURE_BLUEPRINTS["carpenters_shop"]
-    building = Building(structure_type="carpenters_shop", location=(9, 9), **blueprint)
+    building = Building(structure_type="carpenters_shop", location=(0, 5), **blueprint)
     building.is_operational = True
     world.add_building(building)
 
     # Add a stockpile with the necessary resources
-    stockpile = Stockpile("main_stockpile", 2, 2, 1, 1, allowed_resources=["Lumber", "Iron Ingot", "Furniture"])
+    stockpile = Stockpile("main_stockpile", 5, 5, 1, 1, allowed_resources=["Lumber", "Iron Ingot", "Furniture"])
     stockpile.add_item("Lumber", 10)
     stockpile.add_item("Iron Ingot", 10)
     world.add_stockpile(stockpile)
 
     # Add a residential building for the character to rest
     hut_blueprint = STRUCTURE_BLUEPRINTS["wooden_hut"]
-    hut = Building(structure_type="wooden_hut", location=(1, 1), **hut_blueprint)
+    hut = Building(structure_type="wooden_hut", location=(0, 1), **hut_blueprint)
     hut.is_operational = True
     world.add_building(hut)
 
@@ -193,26 +193,26 @@ def test_work_order_creation_and_assignment(world):
 def test_end_to_end_work_order_creation_and_completion(world):
     from game.work_order import WorkOrder
     # Add a Manager, Carpenter, and necessary buildings/resources
-    manager = Character(name="Test Manager", personality="test", traits=[], skills={}, job="Manager", x=0, y=0, needs=_basic_needs())
+    manager = Character(name="Test Manager", personality="test", traits=[], skills={}, job="Manager", x=2, y=2, needs=_basic_needs())
     world.add_character(manager)
-    carpenter = Character(name="Test Carpenter", personality="test", traits=[], skills={}, job="Carpenter", x=0, y=0, needs=_basic_needs())
+    carpenter = Character(name="Test Carpenter", personality="test", traits=[], skills={}, job="Carpenter", x=2, y=2, needs=_basic_needs())
     carpenter.inventory["Hammer"] = 1
     carpenter.equip_tool("Hammer")
     world.add_character(carpenter)
     manager.add_subordinate(carpenter.name)
     carpenter.set_supervisor(manager.name)
     blueprint = STRUCTURE_BLUEPRINTS["carpenters_shop"]
-    building = Building(structure_type="carpenters_shop", location=(9, 9), **blueprint)
+    building = Building(structure_type="carpenters_shop", location=(0, 5), **blueprint)
     building.is_operational = True
     world.add_building(building)
-    stockpile = Stockpile("main_stockpile", 2, 2, 1, 1, allowed_resources=["Lumber", "Iron Ingot", "Furniture"])
+    stockpile = Stockpile("main_stockpile", 5, 5, 1, 1, allowed_resources=["Lumber", "Iron Ingot", "Furniture"])
     stockpile.add_item("Lumber", 10)
     stockpile.add_item("Iron Ingot", 10)
     world.add_stockpile(stockpile)
 
     # Add a residential building for the character to rest
     hut_blueprint = STRUCTURE_BLUEPRINTS["wooden_hut"]
-    hut = Building(structure_type="wooden_hut", location=(1, 1), **hut_blueprint)
+    hut = Building(structure_type="wooden_hut", location=(0, 1), **hut_blueprint)
     hut.is_operational = True
     world.add_building(hut)
 

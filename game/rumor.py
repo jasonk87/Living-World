@@ -1,38 +1,44 @@
-from typing import Set
+# game/rumor.py
 import uuid
+from typing import Optional, Set
 
 class Rumor:
-    def __init__(self, subject_char_id: str, content_key: str, initial_strength: int,
-                 creation_day: int, is_positive: bool, original_source_char_id: str):
-        self.rumor_id = str(uuid.uuid4())
-        self.subject_char_id = subject_char_id
-        self.content_key = content_key
-        self.initial_strength = initial_strength
-        self.current_strength = float(initial_strength)
-        self.creation_day = creation_day
-        self.is_positive = is_positive
-        self.original_source_char_id = original_source_char_id
-        self.known_by_char_ids: Set[str] = {original_source_char_id}
-        self.last_spread_day = creation_day
+    def __init__(self, subject_char_id: str, content_key: str, initial_strength: float, creation_day: int, is_positive: bool, original_source_char_id: Optional[str] = None):
+        self.rumor_id: str = str(uuid.uuid4())
+        self.subject_char_id: str = subject_char_id
+        self.content_key: str = content_key
+        self.initial_strength: float = initial_strength
+        self.current_strength: float = initial_strength
+        self.creation_day: int = creation_day
+        self.last_spread_day: int = creation_day
+        self.is_positive: bool = is_positive
+        self.known_by_char_ids: Set[str] = set()
+        if original_source_char_id:
+            self.known_by_char_ids.add(original_source_char_id)
+        self.original_source_char_id: Optional[str] = original_source_char_id
 
-    def __str__(self):
-        sentiment = "Positive" if self.is_positive else "Negative"
-        return (f"Rumor(ID: {self.rumor_id[:4]}, Subject: {self.subject_char_id}, "
-                f"Content: {self.content_key}, Strength: {self.current_strength:.1f}, "
-                f"Sentiment: {sentiment}, Known by: {len(self.known_by_char_ids)})")
+    def decay(self, current_day: int, decay_rate: float):
+        days_since_spread = current_day - self.last_spread_day
+        if days_since_spread > 0:
+            self.current_strength -= decay_rate * days_since_spread
+            self.current_strength = max(0, self.current_strength)
 
-    def add_knower(self, character_id: str):
-        self.known_by_char_ids.add(character_id)
+    def reinforce(self, increase_amount: float, max_strength: float):
+        """Increases the rumor's strength, capping at a maximum."""
+        self.current_strength += increase_amount
+        self.current_strength = min(self.current_strength, max_strength)
 
-    def is_known_by(self, character_id: str) -> bool:
-        return character_id in self.known_by_char_ids
+    def is_known_by(self, char_id: str) -> bool:
+        return char_id in self.known_by_char_ids
 
-    def decay(self, decay_amount: float):
-        self.current_strength -= decay_amount
-        if self.current_strength < 0:
-            self.current_strength = 0
+    def add_knower(self, char_id: str):
+        self.known_by_char_ids.add(char_id)
 
-    def reinforce(self, reinforcement_amount: float, max_strength: int):
-        self.current_strength += reinforcement_amount
-        if self.current_strength > max_strength:
-            self.current_strength = float(max_strength)
+    def to_dict(self):
+        return {
+            "rumor_id": self.rumor_id,
+            "subject_char_id": self.subject_char_id,
+            "content_key": self.content_key,
+            "current_strength": self.current_strength,
+            "is_positive": self.is_positive,
+        }

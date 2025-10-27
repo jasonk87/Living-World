@@ -29,3 +29,6 @@ build/
 *.log
 reputation_ui.png
 game_server.log
+
+# Ignore Node.js dependencies
+node_modules/

@@ -17,6 +17,7 @@ class Health:
         self.sickness_severity: int = 0
         self.is_injured: bool = False
         self.injury_severity: int = 0
+        self.is_deceased: bool = False
 
         health_defaults = getattr(config, "HEALTH_PROFILE_DEFAULTS", {})
         base_vitality = float(health_defaults.get("base_vitality", 72))

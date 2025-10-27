@@ -14,7 +14,6 @@ from game.work_order import WorkOrder
 from game.data import BLUEPRINTS, JOB_TASK_DEFINITIONS, STRUCTURE_BLUEPRINTS
 from game.job import Job
 from game.building import Building
-from game.family import Family
 from game import config
 
 import random
@@ -47,14 +46,13 @@ class GameEncoder(json.JSONEncoder):
             return o.to_dict()
         return super().default(o)
 
-def advance_simulation_one_tick(world):
+def advance_simulation_one_tick(world: World):
     """
     Advance the simulation by one tick.
+    This function is now primarily for testing purposes.
     """
-    if world.game_time:
-        world.game_time.tick()
-    for character in list(world.characters):
-        character.decide_action(world)
+    # This directly calls the simulation logic for a single tick on the passed world.
+    tick_simulation(world_to_tick=world)
 
 # --- Simulation Logic ---
 def initialize_game_world():
@@ -160,79 +158,83 @@ def initialize_game_world():
     if game_world: game_world.add_event_log_message("--- Simulation Server Initialized ---")
 
 
-def tick_simulation():
-    global game_world, game_time_obj, simulation_running, game_paused, test_characters_list
+def tick_simulation(world_to_tick: Optional[World] = None):
+    global game_world, game_time_obj, simulation_running, game_paused
 
-    if not game_world or not game_time_obj:
-        simulation_running = False
+    current_world = world_to_tick if world_to_tick else game_world
+    if not current_world or not current_world.game_time:
+        if not world_to_tick: # Only stop the global loop if not a test
+            simulation_running = False
         return
 
-    if not game_paused and simulation_running:
-        new_day = game_time_obj.tick()
-        if hasattr(game_world, "update_day_phase"):
-            game_world.update_day_phase()
-        # current_total_ticks +=1 # This was local, can be re-added if needed for other metrics
+    if not game_paused and (simulation_running or world_to_tick is not None):
+        new_day = current_world.game_time.tick()
+        if hasattr(current_world, "update_day_phase"):
+            current_world.update_day_phase()
 
-        game_world.update_animals()
-        game_world.update_crops()
+        current_world.update_animals()
+        current_world.update_crops()
 
-        for char_to_act in list(game_world.characters): # Iterate over a copy if list might change
-            if char_to_act not in game_world.characters: continue # If character was removed (e.g. fired and despawned)
-            # if hasattr(char_to_act, 'process_status_effects'): char_to_act.process_status_effects(game_world) # If status effects exist
-            char_to_act.decide_action(game_world)
-            family_actions = char_to_act.evaluate_family_daily(game_world)
-            if family_actions:
-                game_world._handle_family_actions(char_to_act, family_actions)
+        for char_to_act in list(current_world.characters):
+            if char_to_act not in current_world.characters: continue
+            char_to_act.decide_action(current_world)
 
         if new_day:
-            day_msg = f"*** NEW DAY: Day {game_time_obj.current_day}. Weather: {game_world.weather}, Season: {game_world.season} ***"
-            game_world.add_event_log_message(day_msg)
+            day_msg = f"*** NEW DAY: Day {current_world.game_time.current_day}. Weather: {current_world.weather}, Season: {current_world.season} ***"
+            current_world.add_event_log_message(day_msg)
 
-            if hasattr(game_world, "daily_environment_tick"):
-                game_world.daily_environment_tick()
+            if hasattr(current_world, "daily_environment_tick"):
+                current_world.daily_environment_tick()
 
-            if hasattr(game_time_obj, 'days_until_election') and game_time_obj.days_until_election <= 0:
-                if hasattr(game_world, 'handle_election'):
-                    game_world.handle_election()
-                else:
-                    game_world.add_event_log_message("ERROR: Election due but handle_election method not found in world.")
-                    if hasattr(config, 'ELECTION_CYCLE_DAYS'):
-                         game_time_obj.days_until_election = config.ELECTION_CYCLE_DAYS
+            # ... (rest of the daily updates, using current_world) ...
+            if hasattr(current_world, 'handle_election'):
+                current_world.handle_election()
 
-            # Daily rumor update
-            if hasattr(game_world, 'update_rumors_daily'):
-                game_world.update_rumors_daily()
+            if hasattr(current_world, 'update_rumors_daily'):
+                current_world.update_rumors_daily()
 
-            if hasattr(game_world, 'process_legal_system_daily'):
-                game_world.process_legal_system_daily()
+            if hasattr(current_world, 'process_legal_system_daily'):
+                current_world.process_legal_system_daily()
 
-            if hasattr(game_world, 'process_healthcare_daily'):
-                game_world.process_healthcare_daily()
+            if hasattr(current_world, 'process_healthcare_daily'):
+                current_world.process_healthcare_daily()
 
-            for character in game_world.characters:
+            for character in current_world.characters:
                 if hasattr(character, "needs") and hasattr(character.needs, "process_daily_decay"):
                     character.needs.process_daily_decay()
 
+            days_per_season = config.DAYS_PER_SEASON if hasattr(config, 'DAYS_PER_SEASON') else 10
+            if current_world.game_time.current_day % days_per_season == 1 and current_world.game_time.current_day > 1:
+                current_world.advance_season()
 
+        if not world_to_tick: # Only check max days for the global simulation
+            max_simulation_days = config.MAX_SIMULATION_DAYS if hasattr(config, 'MAX_SIMULATION_DAYS') else 20
+            if current_world.game_time.current_day > max_simulation_days:
+                msg = f"Simulation reached max days ({max_simulation_days}). Stopping simulation thread."
+                current_world.add_event_log_message(msg)
+                simulation_running = False
 
-            # Season advancement
-            days_per_season = config.DAYS_PER_SEASON if hasattr(config, 'DAYS_PER_SEASON') else 10 # Default if not in config
-            # Need to track last_season_change_day or current day relative to season start
-            if game_time_obj.current_day % days_per_season == 1 and game_time_obj.current_day > 1 : # Simple modulo check
-                 game_world.advance_season()
-
-
-        max_simulation_days = config.MAX_SIMULATION_DAYS if hasattr(config, 'MAX_SIMULATION_DAYS') else 20
-        if game_time_obj.current_day > max_simulation_days:
-            msg = f"Simulation reached max days ({max_simulation_days}). Stopping simulation thread."
-            game_world.add_event_log_message(msg)
-            simulation_running = False # Stop the simulation thread
-
-def simulation_thread_func():
+def simulation_thread_func(world_instance: Optional[World] = None):
     global simulation_running
-    while simulation_running:
+
+    # If a specific world is passed (for tests), use it. Otherwise, use the global one.
+    target_world = world_instance if world_instance else game_world
+
+    while simulation_running or world_instance:
         if not game_paused:
-            tick_simulation()
+            tick_simulation(target_world)
+
+        current_sleep_duration = BASE_TICK_SLEEP_DURATION
+        if SIMULATION_SPEED_MULTIPLIER > 0:
+            current_sleep_duration /= SIMULATION_SPEED_MULTIPLIER
+
+        py_time.sleep(max(0.01, current_sleep_duration))
+
+        # For tests, we don't want an infinite loop. The test runner will stop it.
+        # This is a simple way to break out if it's a test run. A more robust
+        # mechanism might be a dedicated flag on the world object.
+        if world_instance:
+            break
 
         current_sleep_duration = BASE_TICK_SLEEP_DURATION
         if SIMULATION_SPEED_MULTIPLIER > 0: # Avoid division by zero or negative multipliers
@@ -490,7 +492,12 @@ def run_server(port: int = PORT, set_signals: bool = True, world_instance: Optio
     else:
         initialize_game_world()
 
-    sim_thread = threading.Thread(target=simulation_thread_func, daemon=True)
+    # Pass the world_instance to the simulation thread if it exists
+    sim_thread = threading.Thread(
+        target=simulation_thread_func,
+        args=(world_instance,) if world_instance else (),
+        daemon=True
+    )
     sim_thread.start()
 
     ui_dir = os.path.join(project_root, "ui")
