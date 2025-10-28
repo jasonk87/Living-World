@@ -49,7 +49,9 @@ class Character:
                  origin: Optional[str] = None,
                  citizenship: str = "Resident",
                  arrival_day: Optional[int] = None):
-        self.name = name; self.personality = personality; self.traits = traits;
+        self.name = name
+        self.personality = personality
+        self.traits = traits
         self.spouse_name = spouse_name
         self.money: int = money
         self.net_worth: int = money
@@ -131,10 +133,14 @@ class Character:
         self.max_inventory_items = max_inventory_items
         # self.hauling_info attribute is fully removed. Logic relies on current_goal.parameters.
         # self.counting_target_stockpile_name: Optional[str] = None # Attribute removed.
-        self.supervisor_name: Optional[str] = supervisor_name; self.subordinates_names: List[str] = []
-        self.managed_item_targets: Dict[str, int] = {}; self.order_cooldown: Dict[str, int] = {}
-        self.active_work_order_id: Optional[str] = None; self.crafting_progress: int = 0
-        self.materials_gathered_for_wo: bool = False; self.items_crafted_for_wo: bool = False
+        self.supervisor_name: Optional[str] = supervisor_name
+        self.subordinates_names: List[str] = []
+        self.managed_item_targets: Dict[str, int] = {}
+        self.order_cooldown: Dict[str, int] = {}
+        self.active_work_order_id: Optional[str] = None
+        self.crafting_progress: int = 0
+        self.materials_gathered_for_wo: bool = False
+        self.items_crafted_for_wo: bool = False
         self.leadership_oversight_score: float = 0.0
         self._last_oversight_evaluation_day: Optional[int] = None
         self._last_oversight_summary: Optional[Dict[str, Any]] = None
@@ -676,7 +682,7 @@ class Character:
         self.materials_gathered_for_build = False
         self.building_site_target = None
         self.current_building_project = None
-        self.resource_to_fetch = None # Ensure this is cleared too
+        self.resource_to_fetch = None
 
     def _process_builder_routine(self, world: 'World') -> bool:
         """Handle builder duty goals and active build orders."""
@@ -737,10 +743,12 @@ class Character:
         return True
 
     def _reset_crafting_state(self):
-        self.active_work_order_id = None; self.materials_gathered_for_wo = False
-        self.items_crafted_for_wo = False; self.resource_to_fetch = None
-        self.crafting_progress = 0; self.workshop_location = None
-        # self.hauling_info = None # Attribute removed
+        self.active_work_order_id = None
+        self.materials_gathered_for_wo = False
+        self.items_crafted_for_wo = False
+        self.resource_to_fetch = None
+        self.crafting_progress = 0
+        self.workshop_location = None
 
     def to_dict_detailed(self):
         """Converts the character object to a detailed dictionary for serialization."""
@@ -825,8 +833,9 @@ class Character:
         supervisor_info = f"  Supervisor: {self.supervisor_name if self.supervisor_name else 'None'}"
         subordinates_info = f"  Subordinates: {len(self.subordinates_names)}"
         performance_info = f"  Performance: {self.performance_rating} (Warnings: {self.warning_count}, Last Review: Day {self.last_performance_review_day if self.last_performance_review_day is not None else 'N/A'})"
-        equipped_tool_info = "None";
-        if self.equipped_tool: equipped_tool_info = f"{self.equipped_tool['name']} ({self.equipped_tool['durability']}/{self.equipped_tool['max_durability']})"
+        equipped_tool_info = "None"
+        if self.equipped_tool:
+            equipped_tool_info = f"{self.equipped_tool['name']} ({self.equipped_tool['durability']}/{self.equipped_tool['max_durability']})"
         tool_info_str = f"  Equipped Tool: {equipped_tool_info}"
         return f"{base_info}\n{supervisor_info}; {subordinates_info}\n{performance_info}\n{tool_info_str}"
 
@@ -839,11 +848,19 @@ class Character:
                 return tier_name
         # Fallback to the last tier name if something goes wrong or score is very low
         return config.REPUTATION_TIERS[-1][0] if config.REPUTATION_TIERS else "Unknown"
-    def set_supervisor(self, s: Optional[str]): self.supervisor_name=s
-    def add_subordinate(self, s: str): self.subordinates_names.append(s) if s not in self.subordinates_names else None
-    def remove_subordinate(self, s: str): self.subordinates_names.remove(s) if s in self.subordinates_names else None
-    def get_inventory_load(self) -> int: return sum(self.inventory.values())
-    def add_memory(self, e: str): self.memory.append(e); self.memory=self.memory[-20:]
+    def set_supervisor(self, s: Optional[str]):
+        self.supervisor_name = s
+    def add_subordinate(self, s: str):
+        if s not in self.subordinates_names:
+            self.subordinates_names.append(s)
+    def remove_subordinate(self, s: str):
+        if s in self.subordinates_names:
+            self.subordinates_names.remove(s)
+    def get_inventory_load(self) -> int:
+        return sum(self.inventory.values())
+    def add_memory(self, e: str):
+        self.memory.append(e)
+        self.memory = self.memory[-20:]
 
     def _summarize_recent_memory(self) -> Dict[str, Any]:
         lookback = getattr(config, "DECISION_MEMORY_LOOKBACK", 20)
@@ -2877,12 +2894,17 @@ class Character:
             self.current_goal = Goal(GoalType.FIND_SHELTER, assignee_id=self.name, originator_id=self.name, priority=2)
 
     def equip_tool(self, tool_item_name: str) -> bool:
-        if self.equipped_tool and self.equipped_tool["name"] == tool_item_name: return True
-        if self.equipped_tool: self.unequip_tool()
+        if self.equipped_tool and self.equipped_tool["name"] == tool_item_name:
+            return True
+        if self.equipped_tool:
+            self.unequip_tool()
         blueprint = BLUEPRINTS.get(tool_item_name)
-        if not blueprint or blueprint.get("type") != "Tool": return False
-        tool_type = blueprint.get("tool_type"); max_durability = blueprint.get("max_durability")
-        if not tool_type or max_durability is None: return False
+        if not blueprint or blueprint.get("type") != "Tool":
+            return False
+        tool_type = blueprint.get("tool_type")
+        max_durability = blueprint.get("max_durability")
+        if not tool_type or max_durability is None:
+            return False
         self.equipped_tool = {"name": tool_item_name, "durability": max_durability, "max_durability": max_durability, "tool_type": tool_type}
         self.add_memory(f"Equipped {tool_item_name}")
         # print(f"{self.name} equipped {tool_item_name} (Dur: {max_durability}).")
@@ -3079,44 +3101,73 @@ class Character:
         self.add_memory(f"Began hunting a {closest_animal.name}.")
         return True
 
-    def build(self, structure_type: str, world: 'World') -> bool: return False
+    def build(self, structure_type: str, world: 'World') -> bool:
+        return False
 
     def job_default_goal_type_str(self) -> str: # Returns a string representing the goal type or job title
         if not self.job:
             return "Idle"
         job_title = self.job.title
-        if job_title == "Woodcutter": return "Perform Woodcutter Duties"
-        if job_title == "Stonemason": return "Perform Stonemason Duties"
-        if job_title == "Farmer": return "Perform Farmer Duties"
-        if job_title == "Hunter": return "Perform Hunter Duties"
-        if job_title == "Fletcher": return "Perform Fletcher Duties"
-        if job_title == "Master Craftsman": return "Assess Production Needs"
-        if job_title == "Manager": return "Manage Subordinates"
-        if job_title == "Chancellor": return "Oversee Settlement"
-        if job_title == "Bookkeeper": return "Maintain Ledger"
-        if job_title == "Expedition Leader": return "Oversee Expedition"
-        if job_title == "Mayor": return "Oversee Settlement"
-        if job_title == "Chief Medical Officer": return "Oversee Medical Operations"
-        if job_title == "Medic": return "Provide Medical Care"
-        if job_title == "Sheriff": return "Maintain Peace in Settlement"
-        if job_title == "Marshal": return "Maintain Defenses"
-        if job_title == "Spymaster": return "Maintain Peace in Settlement"
-        if job_title == "Deputy": return "Patrol Area"
-        if job_title == "Scout": return "Patrol Area"
-        if job_title == "Militia Commander": return "Perform Militia Commander Duties"
-        if job_title == "Militia Soldier": return "Perform Militia Soldier Duties"
-        if job_title == "Reeve": return "Manage Estate"
-        if job_title == "Steward": return "Manage Estate"
-        if job_title == "Bailiff": return "Assist Reeve"
+        if job_title == "Woodcutter":
+            return "Perform Woodcutter Duties"
+        if job_title == "Stonemason":
+            return "Perform Stonemason Duties"
+        if job_title == "Farmer":
+            return "Perform Farmer Duties"
+        if job_title == "Hunter":
+            return "Perform Hunter Duties"
+        if job_title == "Fletcher":
+            return "Perform Fletcher Duties"
+        if job_title == "Master Craftsman":
+            return "Assess Production Needs"
+        if job_title == "Manager":
+            return "Manage Subordinates"
+        if job_title == "Chancellor":
+            return "Oversee Settlement"
+        if job_title == "Bookkeeper":
+            return "Maintain Ledger"
+        if job_title == "Expedition Leader":
+            return "Oversee Expedition"
+        if job_title == "Mayor":
+            return "Oversee Settlement"
+        if job_title == "Chief Medical Officer":
+            return "Oversee Medical Operations"
+        if job_title == "Medic":
+            return "Provide Medical Care"
+        if job_title == "Sheriff":
+            return "Maintain Peace in Settlement"
+        if job_title == "Marshal":
+            return "Maintain Defenses"
+        if job_title == "Spymaster":
+            return "Maintain Peace in Settlement"
+        if job_title == "Deputy":
+            return "Patrol Area"
+        if job_title == "Scout":
+            return "Patrol Area"
+        if job_title == "Militia Commander":
+            return "Perform Militia Commander Duties"
+        if job_title == "Militia Soldier":
+            return "Perform Militia Soldier Duties"
+        if job_title == "Reeve":
+            return "Manage Estate"
+        if job_title == "Steward":
+            return "Manage Estate"
+        if job_title == "Bailiff":
+            return "Assist Reeve"
         if self.rank in ["Noble Lord", "Baron"] and not self.subordinates_names:
             return "Oversee Domain"
         elif self.rank in ["Noble Lord", "Baron"]:
             return "Manage Subordinates"
-        if job_title == "Sawyer": return "Perform Sawyer Duties"
-        if job_title == "Carpenter": return "Perform Carpenter Duties"
-        if job_title == "Miner": return "Perform Miner Duties"
-        if job_title == "Smelter": return "Perform Smelter Duties"
-        if job_title == "Blacksmith": return "Perform Blacksmith Duties"
+        if job_title == "Sawyer":
+            return "Perform Sawyer Duties"
+        if job_title == "Carpenter":
+            return "Perform Carpenter Duties"
+        if job_title == "Miner":
+            return "Perform Miner Duties"
+        if job_title == "Smelter":
+            return "Perform Smelter Duties"
+        if job_title == "Blacksmith":
+            return "Perform Blacksmith Duties"
         return "Idle" # Corresponds to GoalType.IDLE
 
     def get_default_goal(self) -> Goal:
@@ -3214,12 +3265,16 @@ class Character:
             for sp in world.stockpiles:
                 for item, qty in sp.inventory.items():
                     if qty > 0 and item in BLUEPRINTS and BLUEPRINTS[item].get("tool_type") == self.tool_to_fetch_type:
-                        self.fetching_tool_info = {"name_to_fetch": item, "stockpile_name": sp.name}; stockpile_to_search, target_tool_name = sp, item; break
-                if self.fetching_tool_info: break
+                        self.fetching_tool_info = {"name_to_fetch": item, "stockpile_name": sp.name}
+                        stockpile_to_search, target_tool_name = sp, item
+                        break
+                if self.fetching_tool_info:
+                    break
             if not self.fetching_tool_info:
                 # print(f"{self.name} needs a {self.tool_to_fetch_type} but none are available!")
                 self.current_goal = self.goal_before_fetching_tool or self.get_default_goal()
-                self.tool_to_fetch_type = None; self.goal_before_fetching_tool = None
+                self.tool_to_fetch_type = None
+                self.goal_before_fetching_tool = None
                 return False
         if not stockpile_to_search or not target_tool_name:
             # print(f"DEBUG FETCH_TOOL: {self.name} could not find a tool in any stockpile.")
@@ -3250,11 +3305,15 @@ class Character:
                 self.inventory[target_tool_name] = self.inventory.get(target_tool_name, 0) + qr # Add to inventory
                 if self.equip_tool(target_tool_name):
                     self.current_goal = self.goal_before_fetching_tool or self.get_default_goal()
-                    self.tool_to_fetch_type = None; self.fetching_tool_info = None; self.goal_before_fetching_tool = None
+                    self.tool_to_fetch_type = None
+                    self.fetching_tool_info = None
+                    self.goal_before_fetching_tool = None
                     return False
                 else: # Failed to equip for some reason
                     self.current_goal = self.goal_before_fetching_tool or DEFAULT_IDLE_GOAL(self.name)
-                    self.tool_to_fetch_type = None; self.fetching_tool_info = None; self.goal_before_fetching_tool = None
+                    self.tool_to_fetch_type = None
+                    self.fetching_tool_info = None
+                    self.goal_before_fetching_tool = None
                     return False
             else: # Failed to remove from stockpile (e.g. suddenly empty)
                 self.fetching_tool_info = None # Force re-scan for tool
@@ -3436,18 +3495,31 @@ class Character:
             self._reset_crafting_state()
             self.current_goal = self.get_default_goal()
             return
-        item_name = order.details["item_name"]; item_qty_total = order.details["quantity"]; blueprint = BLUEPRINTS.get(item_name)
+        item_name = order.details["item_name"]
+        item_qty_total = order.details["quantity"]
+        blueprint = BLUEPRINTS.get(item_name)
         if not self.materials_gathered_for_wo:
             all_mats_one_unit = True
             for res, req_qty_pu in blueprint["required_resources"].items():
                 if self.inventory.get(res, 0) < req_qty_pu:
-                    all_mats_one_unit = False; self.resource_to_fetch = {"name": res, "quantity": req_qty_pu - self.inventory.get(res, 0), "for_wo_id": order.order_id}; break
-            if all_mats_one_unit: self.materials_gathered_for_wo = True; self.resource_to_fetch = None
-            else: self._execute_fetch_resource_for_wo(world, blueprint); return
-        if self.resource_to_fetch: self._execute_fetch_resource_for_wo(world, blueprint); return
+                    all_mats_one_unit = False
+                    self.resource_to_fetch = {"name": res, "quantity": req_qty_pu - self.inventory.get(res, 0), "for_wo_id": order.order_id}
+                    break
+            if all_mats_one_unit:
+                self.materials_gathered_for_wo = True
+                self.resource_to_fetch = None
+            else:
+                self._execute_fetch_resource_for_wo(world, blueprint)
+                return
+        if self.resource_to_fetch:
+            self._execute_fetch_resource_for_wo(world, blueprint)
+            return
         if self.materials_gathered_for_wo and not self.items_crafted_for_wo:
-            if not self.workshop_location: self.workshop_location = (self.x, self.y)
-            if (self.x, self.y) != self.workshop_location: self.move_towards(self.workshop_location[0], self.workshop_location[1], world); return
+            if not self.workshop_location:
+                self.workshop_location = (self.x, self.y)
+            if (self.x, self.y) != self.workshop_location:
+                self.move_towards(self.workshop_location[0], self.workshop_location[1], world)
+                return
 
             craft_time_per_unit = blueprint.get("craft_time_per_unit", 5)
 
@@ -3561,9 +3633,12 @@ class Character:
                 return
 
     def _execute_fetch_resource_for_wo(self, world:'World', blueprint:Dict):
-        if not self.resource_to_fetch: return
+        if not self.resource_to_fetch:
+            return
         res_name = self.resource_to_fetch["name"]
-        if self.inventory.get(res_name, 0) >= blueprint["required_resources"][res_name]: self.resource_to_fetch = None; return
+        if self.inventory.get(res_name, 0) >= blueprint["required_resources"][res_name]:
+            self.resource_to_fetch = None
+            return
         target_sp_name = self.resource_to_fetch.get("target_stockpile_name")
         sp_to_fetch = world.get_stockpile_by_name(target_sp_name) if target_sp_name else None
         if not sp_to_fetch or sp_to_fetch.inventory.get(res_name, 0) == 0:
@@ -3571,25 +3646,30 @@ class Character:
             if not suitable_sps:
                 # print(f"{self.name} needs {res_name}, but none in stockpiles. Waiting.")
                 return
-            sp_to_fetch = suitable_sps[0]; self.resource_to_fetch["target_stockpile_name"] = sp_to_fetch.name
+            sp_to_fetch = suitable_sps[0]
+            self.resource_to_fetch["target_stockpile_name"] = sp_to_fetch.name
         spot = (sp_to_fetch.rect[0], sp_to_fetch.rect[1])
         if (self.x, self.y) == spot:
             max_can_carry = self.max_inventory_items - self.get_inventory_load()
             needed_for_this_res = blueprint["required_resources"][res_name] - self.inventory.get(res_name,0)
             qty_to_take = min(needed_for_this_res, sp_to_fetch.inventory.get(res_name,0), max_can_carry )
-            if qty_to_take <= 0 : self.resource_to_fetch = None; return
+            if qty_to_take <= 0:
+                self.resource_to_fetch = None
+                return
             s, qty_taken = sp_to_fetch.remove_item(res_name, qty_to_take)
             if s and qty_taken > 0:
                 self.inventory[res_name] = self.inventory.get(res_name, 0) + qty_taken
                 self.add_memory(f"Fetched {qty_taken} {res_name} from {sp_to_fetch.name} for WO.")
-                if self.inventory.get(res_name, 0) >= blueprint["required_resources"][res_name]: self.resource_to_fetch = None
-        else: self.move_towards(spot[0], spot[1], world)
+                if self.inventory.get(res_name, 0) >= blueprint["required_resources"][res_name]:
+                    self.resource_to_fetch = None
+        else:
+            self.move_towards(spot[0], spot[1], world)
 
     def _execute_assess_production_needs(self, world: 'World'):
         if not self.job or self.job.title != "Master Craftsman":
             self.current_goal = self.get_default_goal()
             return
-        item_processed_this_tick = False;
+        item_processed_this_tick = False
         if not self.managed_item_targets:
             self.current_goal = self.get_default_goal()
             return
@@ -3599,16 +3679,19 @@ class Character:
             return
         for i in range(len(target_item_names)):
             current_idx = (self._mc_item_check_idx + i) % len(target_item_names)
-            item_name = target_item_names[current_idx]; target_qty = self.managed_item_targets[item_name]
+            item_name = target_item_names[current_idx]
+            target_qty = self.managed_item_targets[item_name]
             last_ordered_day = self.order_cooldown.get(item_name, -ORDER_SPAM_PREVENTION_DAYS - 1)
-            if world.game_time.current_day - last_ordered_day < ORDER_SPAM_PREVENTION_DAYS: continue
-            pending_or_approved_count = 0; stock_from_ledger = world.economy.ledger.get_total_resource_count(item_name)
+            if world.game_time.current_day - last_ordered_day < ORDER_SPAM_PREVENTION_DAYS:
+                continue
+            pending_or_approved_count = 0
+            stock_from_ledger = world.economy.ledger.get_total_resource_count(item_name)
             for wo in world.work_orders:
                 if wo.details.get("item_name") == item_name and wo.status in ["Pending", "Approved", "InProgress"]:
                     pending_or_approved_count += wo.details.get("quantity", 1)
             effective_available = stock_from_ledger + pending_or_approved_count
             if effective_available < target_qty:
-                blueprint = BLUEPRINTS.get(item_name);
+                blueprint = BLUEPRINTS.get(item_name)
                 if not blueprint:
                     # print(f"Error: MC {self.name} - No blueprint for {item_name}.")
                     continue
@@ -3616,11 +3699,14 @@ class Character:
                 total_req_res_for_order = {res: qty * qty_to_order for res, qty in blueprint["required_resources"].items()}
                 order_details = {"item_name": item_name, "quantity": qty_to_order, "required_resources": total_req_res_for_order}
                 new_order = WorkOrder(order_type="CraftItem", details=order_details, creation_day=world.game_time.current_day, priority=2)
-                world.add_work_order(new_order); self.order_cooldown[item_name] = world.game_time.current_day
+                world.add_work_order(new_order)
+                self.order_cooldown[item_name] = world.game_time.current_day
                 self.add_memory(f"Generated WO for {qty_to_order} {item_name}.")
                 # print(f"{self.name} (MC) generated WO for {qty_to_order} {item_name}(s).")
                 self._receive_payment(JOB_SALARIES.get("Assess Production Needs", 10), f"creating WO for {item_name}", world)
-                item_processed_this_tick = True; self._mc_item_check_idx = (current_idx + 1) % len(target_item_names); break
+                item_processed_this_tick = True
+                self._mc_item_check_idx = (current_idx + 1) % len(target_item_names)
+                break
         if not item_processed_this_tick:
             self.current_goal = self.get_default_goal()
             self._mc_item_check_idx = 0
@@ -3739,18 +3825,27 @@ class Character:
         # It's called if the character is a Manager AND is in "Manage Subordinates" goal.
         # This allows a manager to still do their primary job of managing WOs.
         pending_orders = world.get_pending_work_orders()
-        if not pending_orders: return # No orders to manage, main function will continue to subordinate mgmt
+        if not pending_orders:
+            return # No orders to manage, main function will continue to subordinate mgmt
 
-        order_to_process = pending_orders[0]; can_approve = True; missing_notes = []; stale_concerns = False
+        order_to_process = pending_orders[0]
+        can_approve = True
+        missing_notes = []
+        stale_concerns = False
         req_res = order_to_process.details.get("required_resources", {})
         if req_res:
             for resource, req_qty in req_res.items():
                 avail = world.economy.ledger.get_total_resource_count(resource)
                 for sp_name_key in world.economy.ledger.records.get(resource, {}).keys():
                     last_update = world.economy.ledger.get_stockpile_last_update_day(sp_name_key)
-                    if last_update is not None and world.game_time.current_day - last_update > config.STALE_THRESHOLD_DAYS: stale_concerns = True; break
-                if stale_concerns: self.add_memory(f"Stale data for WO {order_to_process.order_id}, res {resource}");
-                if avail < req_qty: can_approve = False; missing_notes.append(f"{resource} (need {req_qty}, has {avail})")
+                    if last_update is not None and world.game_time.current_day - last_update > config.STALE_THRESHOLD_DAYS:
+                        stale_concerns = True
+                        break
+                if stale_concerns:
+                    self.add_memory(f"Stale data for WO {order_to_process.order_id}, res {resource}")
+                if avail < req_qty:
+                    can_approve = False
+                    missing_notes.append(f"{resource} (need {req_qty}, has {avail})")
         if stale_concerns and not can_approve:
             # print(f"{self.name} (Manager) notes stale data for {order_to_process.order_id}, and resources confirmed insufficient.")
             pass
@@ -3777,15 +3872,21 @@ class Character:
         if not self.job or self.job.title != "Bookkeeper":
             self.current_goal = self.get_default_goal()
             return
-        stockpiles_to_check=world.stockpiles; target_sp=None; min_day=float('inf')
+        stockpiles_to_check = world.stockpiles
+        target_sp = None
+        min_day = float('inf')
         if not stockpiles_to_check:
             self.current_goal = self.get_default_goal()
             return
         for sp_obj in stockpiles_to_check:
-            day=world.economy.ledger.get_stockpile_last_update_day(sp_obj.name)
-            if day is None:target_sp=sp_obj;break
-            if day<world.game_time.current_day and day<min_day:min_day=day;target_sp=sp_obj
-        if target_sp is None :
+            day = world.economy.ledger.get_stockpile_last_update_day(sp_obj.name)
+            if day is None:
+                target_sp = sp_obj
+                break
+            if day < world.game_time.current_day and day < min_day:
+                min_day = day
+                target_sp = sp_obj
+        if target_sp is None:
             self.current_goal = self.get_default_goal()
             return
         # self.counting_target_stockpile_name=target_sp.name # Removed
@@ -3806,8 +3907,8 @@ class Character:
         if not stockpile_obj:
             self.current_goal = create_goal_from_job("Maintain Ledger", self.name) or self.get_default_goal()
             return
-        spot=stockpile_obj.deposit_tiles[0] if stockpile_obj.deposit_tiles else (stockpile_obj.rect[0],stockpile_obj.rect[1])
-        if(self.x,self.y)==spot:
+        spot = stockpile_obj.deposit_tiles[0] if stockpile_obj.deposit_tiles else (stockpile_obj.rect[0],stockpile_obj.rect[1])
+        if (self.x,self.y) == spot:
             actual_inventory = stockpile_obj.inventory.copy()
             recorded_inventory = actual_inventory.copy()
 
@@ -3830,7 +3931,8 @@ class Character:
             self._receive_payment(JOB_SALARIES.get("Maintain Ledger", 4), f"counting {target_stockpile_name}", world)
             self.current_goal = create_goal_from_job("Maintain Ledger", self.name) or self.get_default_goal()
             return
-        else:self.move_towards(spot[0],spot[1],world)
+        else:
+            self.move_towards(spot[0],spot[1],world)
 
     def _execute_perform_woodcutter_duties(self, world: 'World'):
         if not self.job or self.job.title != "Woodcutter":
